@@ -1,4 +1,7 @@
 export const PROTOCOL_VERSION = 1 as const;
+export const HTML_CONFIG_VERSION = 1 as const;
+export const HTML_BRIDGE_VERSION = 1 as const;
+export const MAX_HTML_CONFIG_BYTES = 512_000;
 
 export type Vector3 = { x: number; y: number; z: number };
 export type Quaternion = { x: number; y: number; z: number; w: number };
@@ -28,9 +31,18 @@ export type ConfigMessage = {
 };
 
 export type ActionMessage = { type: 'action'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId: string; action: string; value?: string | number | boolean; sentAt: number };
+export type HtmlConfigMessage = {
+  type: 'html_config'; version: typeof PROTOCOL_VERSION; sessionId: string;
+  htmlVersion: typeof HTML_CONFIG_VERSION; bridgeVersion: typeof HTML_BRIDGE_VERSION;
+  html: string; title?: string;
+};
+export type HtmlBridgeAction = {
+  type: 'action'; version: typeof HTML_BRIDGE_VERSION; controlId: string; action: string;
+  value?: string | number | boolean; sentAt: number;
+};
 export type StatusMessage = { type: 'status'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId?: string; message: string; values?: Record<string, string | number | boolean> };
 export type CameraFrameMessage = { type: 'camera_frame'; version: typeof PROTOCOL_VERSION; sessionId: string; cameraId: string; dataUrl: string; capturedAt: number };
-export type MarionetteMessage = PosePacket | ConfigMessage | ActionMessage | StatusMessage | CameraFrameMessage;
+export type MarionetteMessage = PosePacket | ConfigMessage | HtmlConfigMessage | ActionMessage | StatusMessage | CameraFrameMessage;
 
 export function isFiniteVector(v: Vector3): boolean { return [v.x, v.y, v.z].every(Number.isFinite); }
 export function isFiniteQuaternion(q: Quaternion): boolean { return [q.x, q.y, q.z, q.w].every(Number.isFinite); }
@@ -47,6 +59,39 @@ export function validatePose(packet: unknown): packet is PosePacket {
     && !!p.position && isFiniteVector(p.position) && !!p.rotation && isFiniteQuaternion(p.rotation)
     && Array.isArray(p.covariance) && p.covariance.length > 0 && p.covariance.every(Number.isFinite)
     && (p.source === 'arkit') && typeof p.trackingState === 'string' && typeof p.calibrationVersion === 'string' && typeof p.heartbeat === 'boolean';
+}
+
+function isPrimitive(value: unknown): value is string | number | boolean { return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean'; }
+function isBoundedString(value: unknown, maxLength: number): value is string { return typeof value === 'string' && value.length > 0 && value.length <= maxLength; }
+
+export function validateAction(message: unknown): message is ActionMessage {
+  if (!message || typeof message !== 'object') return false;
+  const action = message as Partial<ActionMessage>;
+  return action.type === 'action' && action.version === PROTOCOL_VERSION
+    && isBoundedString(action.sessionId, 128) && isBoundedString(action.controlId, 128)
+    && isBoundedString(action.action, 256) && (action.value === undefined || isPrimitive(action.value))
+    && typeof action.sentAt === 'number' && Number.isFinite(action.sentAt);
+}
+
+export function validateHtmlConfig(message: unknown): message is HtmlConfigMessage {
+  if (!message || typeof message !== 'object') return false;
+  const config = message as Partial<HtmlConfigMessage>;
+  let withinLimit = false;
+  try { withinLimit = typeof config.html === 'string' && encodeURIComponent(config.html).replace(/%[0-9A-F]{2}/g, 'x').length <= MAX_HTML_CONFIG_BYTES; } catch { withinLimit = false; }
+  return config.type === 'html_config' && config.version === PROTOCOL_VERSION
+    && isBoundedString(config.sessionId, 128)
+    && config.htmlVersion === HTML_CONFIG_VERSION && config.bridgeVersion === HTML_BRIDGE_VERSION
+    && typeof config.html === 'string' && config.html.trim().length > 0 && config.html.includes('<') && config.html.includes('>') && withinLimit
+    && (config.title === undefined || isBoundedString(config.title, 128));
+}
+
+export function validateHtmlBridgeAction(message: unknown): message is HtmlBridgeAction {
+  if (!message || typeof message !== 'object') return false;
+  const action = message as Partial<HtmlBridgeAction>;
+  return action.type === 'action' && action.version === HTML_BRIDGE_VERSION
+    && isBoundedString(action.controlId, 128) && isBoundedString(action.action, 256)
+    && (action.value === undefined || isPrimitive(action.value))
+    && typeof action.sentAt === 'number' && Number.isFinite(action.sentAt);
 }
 
 export function poseFromTransform(values: number[], sessionId: string, seq: number, monotonicTs: number, trackingState: TrackingState = 'normal'): PosePacket {
