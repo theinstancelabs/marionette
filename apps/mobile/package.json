@@ -1,0 +1,31 @@
+{
+  "name": "@marionette/mobile",
+  "version": "0.1.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@marionette/protocol": "file:../../packages/protocol",
+    "expo": "~58.0.19",
+    "expo-camera": "~16.0.18",
+    "expo-modules-core": "~2.2.3",
+    "expo-sensors": "~14.0.2",
+    "expo-status-bar": "~2.0.1",
+    "react": "19.3.0",
+    "react-native": "0.88.0",
+    "@marionette/arkit": "file:../../modules/arkit"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "eslint": "^8.57.0",
+    "eslint-config-expo": "~58.0.4",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "private": true
+}

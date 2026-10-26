@@ -1,0 +1,9 @@
+node_modules
+.DS_Store
+dist
+.expo
+apps/mobile/ios/Pods
+apps/mobile/ios/build
+apps/mobile/.expo
+apps/mobile/.gradle
+coverage
