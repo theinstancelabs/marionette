@@ -3,6 +3,7 @@ export const PROTOCOL_VERSION = 1 as const;
 export type Vector3 = { x: number; y: number; z: number };
 export type Quaternion = { x: number; y: number; z: number; w: number };
 export type TrackingState = 'initializing' | 'normal' | 'limited' | 'relocalizing' | 'unavailable';
+export function metersToMillimeters(v: Vector3): Vector3 { return { x: v.x * 1000, y: v.y * 1000, z: v.z * 1000 }; }
 
 export type PosePacket = {
   type: 'pose'; version: typeof PROTOCOL_VERSION; sessionId: string; seq: number;
