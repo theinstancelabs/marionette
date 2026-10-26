@@ -51,6 +51,32 @@ The iOS permission string and ARKit module are registered by `app.plugin.js` and
 
 The current gateway is diagnostic-only. It does not emit CAN frames, robot commands, IK targets, or motor authority. A production adapter should sit behind the action handler and preserve the report's watchdog, clutch, covariance, stale-frame, lease, workspace, velocity, and E-stop gates.
 
+## Trusted HTML controls
+
+The gateway sends a `html_config` message beside the declarative `config` message. The iPhone renders the supplied document in `react-native-webview`, while keeping the native declarative controls below it as a fallback. HTML is trusted developer content: the gateway must be kept on a private network, and the document is not sanitized. The protocol validates the message schema, bridge version, and a 512 KB UTF-8 size limit.
+
+The sample document is sent by default and exercises buttons, a select, a slider, pose/status text, and a camera image. To load a different trusted document for the diagnostic loop, provide a raw HTML file or string before starting the backend:
+
+```sh
+MARIONETTE_HTML_FILE=./config/operator.html npm run dev:backend
+# or
+MARIONETTE_HTML='<!doctype html><button>Developer UI</button>' npm run dev:backend
+```
+
+The same document is available as JSON at `GET /api/html-config`. A document can use the small versioned bridge after the app injects it:
+
+```js
+Marionette.sendAction('deadman', 'teleop.toggle', true);
+Marionette.sendAction('scale', 'teleop.translationScale', 1.5);
+
+const unsubscribe = Marionette.on('pose', pose => renderPose(pose));
+Marionette.on('status', status => renderStatus(status.message));
+Marionette.on('config', config => renderConfig(config));
+Marionette.on('camera_frame', frame => { camera.src = frame.dataUrl; });
+```
+
+`Marionette.version` is currently `1`. `sendAction` accepts only a control id, action name, and optional string/number/boolean value. The event names are limited to `pose`, `status`, `config`, and `camera_frame`; the app ignores other bridge messages. The backend converts accepted bridge actions into the existing version 1 WebSocket `action` message, so existing routing and safety gates remain in one place. Use the native controls when an HTML document is unavailable or fails to load.
+
 ## Checks
 
 ```sh

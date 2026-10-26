@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "main": "index.ts",
   "dependencies": {
+    "@marionette/arkit": "file:../../modules/arkit",
     "@marionette/protocol": "file:../../packages/protocol",
     "expo": "~58.0.19",
     "expo-camera": "~16.0.18",
@@ -11,7 +12,7 @@
     "expo-status-bar": "~2.0.1",
     "react": "19.3.0",
     "react-native": "0.88.0",
-    "@marionette/arkit": "file:../../modules/arkit"
+    "react-native-webview": "14.0.1"
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
