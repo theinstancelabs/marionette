@@ -24,11 +24,12 @@ Everything is on one screen, with no modes. On a 390 × 844 iPhone nothing needs
 - **Top:** the phone's name and tracking, **More**, and the **Stop** button. While Stop is on, **Stop is on** and **Reset Stop** take the place of the name and tracking.
 - **Headline:** one line that says what Axol is doing for this phone, a note, and tags: the calibration state (tap it to calibrate), **Sim**, the lift height, Jelly's battery and the base.
 - **Cameras:** the camera pane with the view picker under it: **Head**, **Both wrists**, **Left wrist**, **Right wrist** and **All three**. With several panes, a tap stacks them full width.
+- **Frame:** the frame the arm moves in. **Axol** moves it in Axol's own directions: push the phone forward and the gripper goes the way Axol faces. **Head**, **Left wrist** and **Right wrist** move it in that camera's view: forward goes where the camera looks, and left and up are the image's left and up. The camera's direction is read when you press the pad, so a wrist camera turning with the gripper doesn't change it mid-move. A change applies at once, even while you hold the pad, and never moves the arm by itself. A camera Axol doesn't have can't be picked.
 - **Left column, the arm:**
   - **Left arm** or **Right arm**.
-  - The **Hold to move** pad. While you hold it, slide your thumb down to close the gripper or up to open it. A 200 px slide is the full range. The gauge on the pad shows the grip.
+  - The **Hold to move** pad. While you hold it, slide your thumb down to close the gripper or up to open it. A 133 px slide is the full range. The gauge on the pad shows the grip.
   - **Open gripper** and **Close gripper**.
-  - The **Motion scale** slider. It is off while you hold the pad.
+  - The **Motion scale** slider. It scales turns as well as moves: at 0.5×, turning the phone 90° turns the gripper 45°. It is off while you hold the pad.
 - **Right column, the base:**
   - The drive stick. It goes where you touch it and returns to the middle when you let go.
   - **Turn left** and **Turn right**, then **Raise lift** and **Lower lift**.
@@ -49,7 +50,8 @@ All controls are declared, so the gateway keeps each phone's values and tracks h
 | `estop` | toggle | `safety.estop` | Stop. **Reset Stop** sets it to `false`. |
 | `arm` | select | `arm.select` | `left`, `right` |
 | `cameras` | select | `camera.view` | `head`, `wrists`, `left`, `right`, `all` |
-| `scale` | slider, live | `teleop.translationScale` | 0.25 to 3, step 0.05, default 1 |
+| `frame` | select | `teleop.frame` | `axol` (default), `head`, `left`, `right` |
+| `scale` | slider, live | `teleop.translationScale` | 0.25 to 3, step 0.05, default 1. Scales the arm's moves and turns. |
 | `grip` | slider, live | `gripper.set` | 0 (open) to 1 (closed), step 0.01, default 0 |
 | `drive` | stick, live | `base.drive` | `{x, y}`: x forward (up the stick), y left, at most 1 together |
 | `turn-left`, `turn-right` | hold buttons | `base.turnLeft`, `base.turnRight` | like the deadman |
@@ -98,5 +100,6 @@ Feedback never shows as a toast. Other statuses, such as the gateway's calibrati
 | `stopBy` | string | "Stopped by Phone 2" |
 | `resetting` | `"left"`, `"right"` or `""` | "Returning the left arm to rest" while that arm moves back to rest |
 | `streams` | string, like `"head,left,right"` | A pane for a stream Axol doesn't have says so |
+| `frames` | string, like `"axol,head,left,right"` | The frames Axol can move the arm in. The others are off in **Frame**. |
 
 Until the first feedback arrives, the lift and drive controls all show, and the grip starts from this phone's last value.

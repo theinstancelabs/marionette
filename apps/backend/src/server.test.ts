@@ -229,7 +229,7 @@ describe('the Axol screen',()=>{
   it('declares the controls, streams and views of the Axol contract', async()=>{ process.env.MARIONETTE_HTML_FILE=fileURLToPath(new URL('../../../consumers/axol/axol.html', import.meta.url));
     try { await start(); const viewer=await connect(); const config=viewer.configOf(); const byId=(id: string)=>config.controls.find((c: any)=>c.id===id);
       expect(config.controls.map((c: any)=>[c.id,c.type,c.action])).toEqual([['deadman','button','teleop.deadman'],['estop','toggle','safety.estop'],['arm','select','arm.select'],['cameras','select','camera.view'],
-        ['scale','slider','teleop.translationScale'],['grip','slider','gripper.set'],['drive','joystick','base.drive'],['turn-left','button','base.turnLeft'],['turn-right','button','base.turnRight'],['lift-up','button','lift.up'],['lift-down','button','lift.down'],['speed-limit','slider','base.speedLimit'],
+        ['frame','select','teleop.frame'],['scale','slider','teleop.translationScale'],['grip','slider','gripper.set'],['drive','joystick','base.drive'],['turn-left','button','base.turnLeft'],['turn-right','button','base.turnRight'],['lift-up','button','lift.up'],['lift-down','button','lift.down'],['speed-limit','slider','base.speedLimit'],
         ['reset-left','button','arm.resetLeft'],['reset-right','button','arm.resetRight'],
         ...defaultConfig().controls.filter(c=>c.action.startsWith('calibration.')).map(c=>[c.id,c.type,c.action])]);
       for (const id of ['deadman','turn-left','turn-right','lift-up','lift-down']) expect(byId(id).hold).toBe(true);
@@ -237,6 +237,7 @@ describe('the Axol screen',()=>{
       expect([byId('lift-up').label,byId('lift-down').label]).toEqual(['Raise lift','Lower lift']); expect(byId('estop').value).toBe(false);
       expect(byId('arm')).toMatchObject({ value:'left', options:[{ value:'left' },{ value:'right' }] });
       expect(byId('cameras').value).toBe('head'); expect(byId('cameras').options.map((o: any)=>[o.value,o.label])).toEqual([['head','Head'],['wrists','Both wrists'],['left','Left wrist'],['right','Right wrist'],['all','All three']]);
+      expect(byId('frame').value).toBe('axol'); expect(byId('frame').options.map((o: any)=>[o.value,o.label])).toEqual([['axol','Axol'],['head','Head'],['left','Left wrist'],['right','Right wrist']]);
       expect(byId('scale')).toMatchObject({ value:1, min:0.25, max:3, step:0.05, unit:'×' }); expect(byId('grip')).toMatchObject({ label:'Gripper', value:0, min:0, max:1, step:0.01 });
       expect(byId('drive')).toMatchObject({ label:'Drive', value:{ x:0, y:0 } }); expect(byId('speed-limit')).toMatchObject({ label:'Speed limit', value:50, min:0, max:100, step:1, unit:'%' });
       expect(config.controls.some((c: any)=>c.action==='base.command'||c.action==='base.speed')).toBe(false);
