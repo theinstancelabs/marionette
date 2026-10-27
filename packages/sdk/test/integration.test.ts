@@ -142,6 +142,8 @@ describe('SimPhone and the tracker against the real gateway', () => {
     const gateway = await gatewayFor({ holdTimeoutMs: 500, streamTimeoutMs: 300 }); const link = await robotOn(gateway); const tracker = link.tracker!;
     const phone = await phoneOn(gateway); const now = () => tracker.now();
     const p = () => tracker.get('phone-1')!;
+    // The robot hears about the phone on its own connection, a moment after the phone has its config.
+    await waitFor(() => tracker.get('phone-1')?.connected);
     phone.press('teleop.deadman'); await waitFor(() => p().hold('teleop.deadman').down);
     await sleep(450); expect(p().holding('teleop.deadman', now())).toBe(true); expect(p().presses('teleop.deadman')).toBe(1);
     // The renewals stop: the gateway ends the hold, and renewals that come back never restart it.
