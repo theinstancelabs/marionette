@@ -235,3 +235,20 @@ Design (same shape as holds: Marionette relays and tracks liveness, the consumer
 - **Checks:** mobile typecheck and lint, gateway 28, viewer 70, protocol 22.
 - **Not done:** the upload. It needs the app record in App Store Connect and the user's go-ahead. Apple's server-side checks (privacy manifest, purpose strings) only run on upload.
 - **Follow-up (user):** the bundle ID is `com.instancelabs.marionette`, not `io.`. Rebuilt as build `20261027.0905` (App Store profile for the `com.` ID, checked as above). The phone now has only the `com.` app; the `io.` and the old `com.anonymous` apps are uninstalled. The `io.instancelabs.marionette` App ID Xcode registered stays in the developer portal, unused.
+
+# Round 8: robots talk back, SDKs, pairing, reconnect, WebRTC video, screen kit
+
+Spec: [round8-spec.md](round8-spec.md). Brainstorm items 1, 2, 3, 4, 5, 6 (WebRTC) and 10, plus a single-file gateway, shaped by Axol's notes. Axol's bridge moves onto the SDK too (user's choice). Branch `feat/robot-platform`, local commits only. No robot access: everything is tested in sim.
+
+## Plan
+- [x] Branch: commit round 7, merge `origin/feat/axol-consumer` (baseline: gateway 33, viewer 70, protocol 22).
+- [ ] Protocol additions (spec §1), written first as the contract.
+- [ ] Wave 1, parallel worktrees: gateway (§2), screen kit (§3), phone app (§4).
+- [ ] Merge wave 1; run everything together.
+- [ ] Wave 2, parallel worktrees: Python SDK (§5), TypeScript SDK (§6), viewer (§7).
+- [ ] Merge wave 2; conformance fixtures pass in both SDKs.
+- [ ] Wave 3: Axol port in its own worktree (§8).
+- [ ] Sim verification (§9.1–9.5).
+- [ ] Reviews (Opus 5.5 xhigh), fix large realistic findings, at most two rounds.
+- [ ] Docs: README, INTEGRATION, SDK and kit docs.
+- [ ] Report: ready for a real-robot test (no deploy until the user says so).
