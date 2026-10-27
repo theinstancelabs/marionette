@@ -194,6 +194,10 @@ class VideoPublisher:
             self.publish_error = str(message.get("message"))
             _logger.warning("marionette: video: %s", self.publish_error)
             return
+        if kind == "error" and viewer is None and isinstance(message.get("to"), str) and isinstance(peer, str):
+            # The gateway refused something we sent for this connection (the viewer has gone, say).
+            asyncio.ensure_future(self._close_peer((message["to"], peer), notify=False))
+            return
         if not isinstance(viewer, str) or not isinstance(peer, str):
             return
         key = (viewer, peer)
@@ -293,12 +297,15 @@ class VideoPublisher:
             self._rtc("unpublish", streams=self.streams)
 
     def close(self, timeout: float = 5.0) -> None:
-        """:meth:`aclose` from any other thread (it runs on the client's loop)."""
+        """:meth:`aclose` from any other thread (it runs on the client's loop; on that loop it is only scheduled)."""
         loop = self.client.loop
         if loop is None or loop.is_closed() or not loop.is_running():
             self._closed = True
             for off in self._off:
                 off()
+            return
+        if threading.get_ident() == self.client._loop_thread:
+            asyncio.ensure_future(self.aclose())
             return
         try:
             self.client.submit(self.aclose()).result(timeout)

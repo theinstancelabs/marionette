@@ -49,6 +49,21 @@ def test_start_on_a_free_port_and_restart_on_the_same_one() -> None:
         os.kill(pid, 0)
 
 
+def test_a_screen_given_as_html() -> None:
+    with Gateway(html="<html><body id='given'>Given</body></html>") as gateway:
+        config = gateway.get("/api/html-config")
+        assert "id='given'" in config["html"] and config["source"] == {"kind": "file"}
+
+
+def test_without_node_on_path_the_gateway_extra_runs_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    executable = pytest.importorskip("nodejs_wheel.executable")
+    monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.delenv("MARIONETTE_NODE", raising=False)
+    assert runner.find_node().startswith(executable.ROOT_DIR)
+    with Gateway() as gateway:
+        assert gateway.health()["ok"]
+
+
 def test_a_port_in_use_fails_with_the_gateways_words() -> None:
     with Gateway() as first:
         with pytest.raises(RuntimeError, match="didn't start"):
