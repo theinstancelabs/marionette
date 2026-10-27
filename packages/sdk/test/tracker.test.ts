@@ -126,6 +126,27 @@ describe('PhoneTracker', () => {
     tracker.apply(messages.input('phone-1', 'arm.pick', 'y')); expect(phone().value('arm.pick')).toBe('y');
   });
 
+  it('lets a desk mirror change values neither by its inputs nor by the configs the gateway republishes, unless allowed', () => {
+    for (const mirror of ['stop-only', 'deny', 'allow'] as const) {
+      const { tracker, phone } = setup({ mirror });
+      // The gateway applies a mirror's changes and republishes the phone's config.
+      tracker.apply(messages.input('phone-1', 'arm.select', 'right', { source: 'mirror' }));
+      tracker.apply(messages.input('phone-1', 'teleop.translationScale', 4, { source: 'mirror' }));
+      tracker.apply(messages.input('phone-1', 'lift.toggle', false, { source: 'mirror' }));
+      tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'right', sensitivity: 4, lift: false } }));
+      const expected = mirror === 'allow' ? { 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false } : { 'arm.select': 'left', 'teleop.translationScale': 1, 'lift.toggle': true };
+      expect(phone().values, mirror).toMatchObject(expected);
+      // A mirror's drag the gateway ends: its value isn't taken either.
+      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'mirror', live: true }));
+      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'gateway', reason: 'samples stopped' }));
+      expect(phone().value('base.speedLimit'), mirror).toBe(mirror === 'allow' ? 90 : 50);
+      // The phone's own changes always count, and a lost gateway seeds the values afresh.
+      tracker.apply(messages.input('phone-1', 'arm.select', 'right')); expect(phone().value('arm.select')).toBe('right');
+      tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'left', sensitivity: 2 } }));
+      expect(phone().values, mirror).toMatchObject({ 'arm.select': 'left', 'teleop.translationScale': 2 });
+    }
+  });
+
   it('forgets phones that leave a complete roster, keeping one with Stop on', () => {
     const tracker = new PhoneTracker(); const roster = ['phone-1', 'phone-2', 'phone-3'].map(id => messages.phone(id));
     for (const phone of roster) tracker.apply(messages.config({ sessionId: 'gw', phones: roster, phone }));
