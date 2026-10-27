@@ -842,12 +842,14 @@
       ${note ? `<text x="20" y="220" fill="#6b6f73" style="font-size:15px">${note}</text>` : ''}
     </svg>`;
   }
-  const CALIBRATION_ACTIONS = new Set([ACTIONS.start, ACTIONS.capture, ACTIONS.cancel, ACTIONS.check, ACTIONS.origin, ACTIONS.clear]);
+  const CALIBRATION_KEYS = ['start', 'capture', 'cancel', 'check', 'origin', 'clear'];
 
   function calibration(o) {
     o = o || {};
     const copy = merge(CALIBRATION_COPY, o.copy);
     const A = merge(ACTIONS, o.actions);
+    // The actions whose replies are calibration's, with any the screen renamed.
+    const mine = new Set(CALIBRATION_KEYS.map(name => A[name]));
     const cal = () => (last.config ? last.config.calibration : { status: 'uncalibrated', epoch: 0 });
     const ctl = name => control(A[name]);
     // shown: the sheet on screen (intro, capture, captured, validate, validated); reply: the gateway's last answer.
@@ -1038,9 +1040,9 @@
     // A run started elsewhere waits for the operator to let go.
     on('touch', () => { if (!sh.open && runMode()) render(); });
     /** Whether a status message is a reply to calibration (the sheet shows it, or a toast when no sheet is open). */
-    const handles = m => { const from = m && m.controlId && byId(m.controlId); return !!from && CALIBRATION_ACTIONS.has(from.action); };
+    const handles = m => { const from = m && m.controlId && byId(m.controlId); return !!from && mine.has(from.action); };
     on('status', m => {
-      const from = m && m.controlId && byId(m.controlId); if (!from || !CALIBRATION_ACTIONS.has(from.action)) return;
+      const from = m && m.controlId && byId(m.controlId); if (!from || !mine.has(from.action)) return;
       // Every gateway reply says whether it did what was asked; a refusal is shown where the operator is looking.
       const refused = !!(m.values && m.values.accepted === false);
       if (from.action === A.capture || from.action === A.check) { reply = refused ? { text: m.message, bad: true } : undefined; render(); return; }

@@ -98,6 +98,16 @@ describe('calibration', () => {
     cal.open(); p.receive('status', reply('No pose yet', false)); expect(sheet().querySelector('.mk-reply.mk-bad')!.textContent).toBe('No pose yet');
   });
 
+  it('handles the replies of the actions a screen renamed', () => {
+    p = page(); p.connect(); const base = p.config();
+    p.receive('config', { ...base, controls: base.controls.map(c => (c.id === 'capture-origin' ? { ...c, action: 'rover.origin' } : c)) });
+    const cal = p.K.calibration({ actions: { origin: 'rover.origin' } });
+    const reply = { type: 'status', version: 1, sessionId: 'g', controlId: 'capture-origin', message: 'Origin set', values: { accepted: true } };
+    expect(cal.handles(reply)).toBe(true); expect(cal.available()).toBe(true);
+    p.receive('status', reply); expect(p.document.querySelector('.mk-toast')!.textContent).toBe('Origin set');
+    cal.open(); expect(buttons()).toContain('Set origin here');
+  });
+
   it('builds a Calibration row that opens the sheet, and takes the screen’s own copy', () => {
     p = page({ body: '<div id="rows"></div>' }); p.connect(); p.config({}, { calibration: { status: 'captured', epoch: 2, reference: reference(2, 'quick') as never, check: { results: [], passed: true } } });
     const cal = p.K.calibration({ copy: { introDone: 'Set', validate: 'Validate calibration', steps: { flat: { title: 'Face Axol' } } } });
