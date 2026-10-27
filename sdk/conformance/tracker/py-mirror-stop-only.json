@@ -184,7 +184,7 @@
    }
   },
   {
-   "note": "a mirror can't hold, drag, press or set",
+   "note": "a mirror's input can't hold, drag, press or set",
    "expect": {
     "phones": {
      "phone-1": {

@@ -1,0 +1,704 @@
+{
+ "name": "A new screen's values reach the tracker (Python)",
+ "description": "When the robot changes the screen, the gateway sends each phone the new defaults (keeping what that phone set); the tracker follows each phone's config.",
+ "options": {
+  "mirror": "stop-only",
+  "stop_action": "safety.estop"
+ },
+ "steps": [
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lights",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.5,
+      "min": 0,
+      "max": 1,
+      "step": 0.1
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "manual",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lights",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.5,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "live": false
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "manual",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "lights",
+    "action": "robot.lights",
+    "value": true,
+    "source": "phone",
+    "sentAt": 1793100000004.5,
+    "receivedAt": 1793100000007.5,
+    "latencyMs": 2.5
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lights",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": true
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.5,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "live": false
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "manual",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "note": "the first screen",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "values": {
+       "robot.lights": true,
+       "teleop.speed": 0.5,
+       "robot.mode": "manual"
+      }
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lights",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "step": 0.1
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "auto",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lights",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": true
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "live": false
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "auto",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "note": "a new screen's defaults reach the tracker; a value the phone set stays as its config says",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "values": {
+       "robot.lights": true,
+       "teleop.speed": 0.3,
+       "robot.mode": "auto"
+      }
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lamp",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "step": 0.1
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "auto",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lamp",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "live": false
+     },
+     {
+      "id": "mode",
+      "type": "select",
+      "label": "Mode",
+      "action": "robot.mode",
+      "value": "auto",
+      "options": [
+       {
+        "label": "Manual",
+        "value": "manual"
+       },
+       {
+        "label": "Auto",
+        "value": "auto"
+       }
+      ]
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "note": "a control under a new id starts from its default, as the gateway sends it",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "values": {
+       "robot.lights": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lamp",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "step": 0.1
+     },
+     {
+      "id": "mode",
+      "type": "toggle",
+      "label": "Auto",
+      "action": "robot.mode",
+      "value": true
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "lamp",
+      "type": "toggle",
+      "label": "Lights",
+      "action": "robot.lights",
+      "value": false
+     },
+     {
+      "id": "speed",
+      "type": "slider",
+      "label": "Speed",
+      "action": "teleop.speed",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "live": false
+     },
+     {
+      "id": "mode",
+      "type": "toggle",
+      "label": "Auto",
+      "action": "robot.mode",
+      "value": true
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "note": "a control of another kind takes its new value",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "values": {
+       "robot.mode": true
+      }
+     }
+    }
+   }
+  }
+ ]
+}

@@ -87,9 +87,10 @@ describe('PhoneTracker', () => {
     tracker.apply(messages.input('phone-1', 'safety.estop', false, { source: 'mirror' })); tracker.apply(messages.config({ phone: 'phone-1', values: { estop: false } }));
     expect(phone().stop).toBe(true);
     tracker.apply(messages.input('phone-1', 'safety.estop', false)); expect(phone().stop).toBe(false);
-    // After a lost gateway the next config says what is true again.
-    tracker.apply(messages.input('phone-1', 'safety.estop', true)); tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { estop: false } }));
-    expect(phone().stop).toBe(false);
+    // Not after a lost gateway either: a mirror may have turned it off meanwhile.
+    tracker.apply(messages.input('phone-1', 'safety.estop', true)); tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { estop: false, arm: 'right' } }));
+    expect(phone().stop).toBe(true); expect(phone().value('arm.select')).toBe('right');
+    tracker.apply(messages.input('phone-1', 'safety.estop', false)); expect(phone().stop).toBe(false);
     const allow = new PhoneTracker({ mirror: 'allow' }); allow.apply(messages.config({ phone: 'phone-1', values: { estop: true } })); allow.apply(messages.config({ phone: 'phone-1', values: { estop: false } }));
     expect(allow.get('phone-1')!.stop).toBe(false);
     // Offline with Stop on: the desktop clears it, and the gateway's republished configs don't bring it back until the phone reconnects.
@@ -126,24 +127,35 @@ describe('PhoneTracker', () => {
     tracker.apply(messages.input('phone-1', 'arm.pick', 'y')); expect(phone().value('arm.pick')).toBe('y');
   });
 
-  it('lets a desk mirror change values neither by its inputs nor by the configs the gateway republishes, unless allowed', () => {
+  it('follows the settings in every config, whoever set them, but never a desk mirror\'s motion unless allowed', () => {
     for (const mirror of ['stop-only', 'deny', 'allow'] as const) {
       const { tracker, phone } = setup({ mirror });
-      // The gateway applies a mirror's changes and republishes the phone's config.
+      // The gateway applies a mirror's changes and republishes the phone's config. Its input counts only under allow...
       tracker.apply(messages.input('phone-1', 'arm.select', 'right', { source: 'mirror' }));
       tracker.apply(messages.input('phone-1', 'teleop.translationScale', 4, { source: 'mirror' }));
       tracker.apply(messages.input('phone-1', 'lift.toggle', false, { source: 'mirror' }));
+      const changed = { 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false };
+      expect(phone().values, mirror).toMatchObject(mirror === 'allow' ? changed : { 'arm.select': 'left', 'teleop.translationScale': 1, 'lift.toggle': true });
+      // ...but the config that follows always does: the robot uses what the phone's screen shows.
       tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'right', sensitivity: 4, lift: false } }));
-      const expected = mirror === 'allow' ? { 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false } : { 'arm.select': 'left', 'teleop.translationScale': 1, 'lift.toggle': true };
-      expect(phone().values, mirror).toMatchObject(expected);
-      // A mirror's drag the gateway ends: its value isn't taken either.
-      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'mirror', live: true }));
-      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'gateway', reason: 'samples stopped' }));
-      expect(phone().value('base.speedLimit'), mirror).toBe(mirror === 'allow' ? 90 : 50);
-      // The phone's own changes always count, and a lost gateway seeds the values afresh.
-      tracker.apply(messages.input('phone-1', 'arm.select', 'right')); expect(phone().value('arm.select')).toBe('right');
-      tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'left', sensitivity: 2 } }));
-      expect(phone().values, mirror).toMatchObject({ 'arm.select': 'left', 'teleop.translationScale': 2 });
+      expect(phone().values, mirror).toMatchObject(changed);
+      // A mirror's drag and hold: motion, so nothing unless allowed. A slider it drags shows the config's value, a stick rests.
+      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'mirror', live: true })); tracker.apply(messages.input('phone-1', 'base.drive', { x: 0.7, y: 0 }, { source: 'mirror', live: true }));
+      tracker.apply(messages.input('phone-1', 'teleop.deadman', true, { source: 'mirror' }));
+      tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'right', sensitivity: 4, lift: false, 'speed-limit': 90, drive: { x: 0.7, y: 0 } }, held: ['deadman'], live: ['speed-limit', 'drive'] }));
+      const allowed = mirror === 'allow';
+      expect(phone().drag('base.speedLimit'), mirror).toMatchObject({ live: allowed, value: 90 });
+      expect(phone().stick('base.drive', tracker.now()), mirror).toEqual(allowed ? { x: 0.7, y: 0 } : { x: 0, y: 0 }); expect(phone().drag('base.drive')!.live, mirror).toBe(allowed);
+      expect(phone().hold('teleop.deadman').down, mirror).toBe(allowed);
+      // The gateway ends the drags: a slider's value then follows the config, never the gateway's input itself.
+      tracker.apply(messages.input('phone-1', 'base.speedLimit', 95, { source: 'gateway', reason: 'samples stopped' }));
+      expect(phone().value('base.speedLimit'), mirror).toBe(90); expect(phone().drag('base.speedLimit')!.dropped, mirror).toBe(allowed);
+      tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'right', sensitivity: 4, lift: false, 'speed-limit': 95 } }));
+      expect(phone().value('base.speedLimit'), mirror).toBe(95);
+      // The phone's own changes always count at once, and a lost gateway's reconnect brings the values back.
+      tracker.apply(messages.input('phone-1', 'arm.select', 'left')); expect(phone().value('arm.select')).toBe('left');
+      tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'right', sensitivity: 2 } }));
+      expect(phone().values, mirror).toMatchObject({ 'arm.select': 'right', 'teleop.translationScale': 2 });
     }
   });
 

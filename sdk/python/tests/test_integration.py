@@ -349,7 +349,8 @@ MIRRORED = """<!doctype html><html><body>
 
 def test_a_desk_mirror_moves_nothing_but_stop_unless_mirrors_may_act() -> None:
     """The gateway applies a desk mirror's changes and republishes the phone's config, and ends the mirror's drags when
-    it goes quiet: under stop-only none of that reaches the phone's record (the review's two reproductions)."""
+    it goes quiet. Under stop-only the settings follow the config, as the phone's screen does, but nothing the mirror
+    did is motion: no live drag, no update to act on, no stick, and no Stop off."""
     with Gateway(html=MIRRORED) as gateway:
         trackers = {"stop-only": PhoneTracker(mirror="stop-only"), "allow": PhoneTracker(mirror="allow")}
         clients = [GatewayClient(gateway.url) for _ in trackers]
@@ -387,21 +388,31 @@ def test_a_desk_mirror_moves_nothing_but_stop_unless_mirrors_may_act() -> None:
                     ended = lambda: {m["action"] for m in seen if m["type"] == "input" and m.get("source") == "gateway"}  # noqa: E731
                     wait_until(lambda: ended() >= {"gripper.set", "base.drive"}, 3, "the gateway's ends")
                     wait_until(lambda: allowed().value("arm.select") == "right" and allowed().value("gripper.set") == 0.9, 2, "the mirror's changes, allowed")
-                    # The gateway republished the mirror's changes in the phone's config...
+                    # The gateway republished the mirror's changes in the phone's config, so the phone shows them...
                     mine = [m for m in seen if m["type"] == "config" and m.get("phone", {}).get("id") == pid]
                     assert any(c["action"] == "arm.select" and c.get("value") == "right" for m in mine for c in m["controls"])
                     assert any(c["action"] == "gripper.set" and c.get("value") == 0.9 for m in mine for c in m["controls"])
-                    # ...and none of it counts under stop-only.
+                    wait_until(lambda: phone.value("arm.select") == "right" and phone.value("gripper.set") == 0.9, 2, "the phone's screen")
+                    # ...and under stop-only the settings follow, but none of it is motion.
+                    wait_until(lambda: guarded().value("arm.select") == "right" and guarded().value("gripper.set") == 0.9, 2, "the settings, guarded")
                     record = guarded()
-                    assert record.value("arm.select") == "left" and record.value("gripper.set") == 0 and record.stick("base.drive") == (0.0, 0.0)
+                    assert record.stick("base.drive") == (0.0, 0.0) and record.value("base.drive") == {"x": 0, "y": 0}
                     grip = record.drag("gripper.set")
-                    assert (grip.value, grip.live, grip.dropped, grip.updates) == (0, False, False, 0)
-                    assert allowed().drag("gripper.set").updates == 4  # two samples, the let-go and the gateway's end
-                    # The phone's own changes count, and a mirror's Stop on does too.
-                    phone.set("arm.select", "right")
-                    wait_until(lambda: guarded().value("arm.select") == "right", 2, "the phone's own change")
+                    assert (grip.value, grip.live, grip.dropped, grip.updates) == (0.9, False, False, 0)
+                    assert allowed().drag("gripper.set").updates == 3  # two samples and the let-go; the gateway's end isn't one
+                    # The phone's own changes count, and a mirror's Stop on does too, but not its Stop off.
+                    phone.set("arm.select", "left")
+                    wait_until(lambda: guarded().value("arm.select") == "left", 2, "the phone's own change")
                     act(mirror, "estop", "safety.estop", True)
                     wait_until(trackers["stop-only"].any_stop, 2, "the mirror's Stop")
+                    wait_until(trackers["allow"].any_stop, 2, "the mirror's Stop, allowed")
+                    act(mirror, "estop", "safety.estop", False)
+                    wait_until(lambda: not trackers["allow"].any_stop() and phone.value("safety.estop") is False, 2, "the mirror's Stop off, allowed")
+                    time.sleep(0.2)
+                    assert trackers["stop-only"].any_stop()
+                    phone.set("safety.estop", True)
+                    phone.set("safety.estop", False)
+                    wait_until(lambda: not trackers["stop-only"].any_stop(), 2, "the phone's own Stop off")
         finally:
             for client in clients:
                 client.stop()
