@@ -103,21 +103,25 @@ export default function App() {
   const robotStates=useRef(new Map<string, RobotStateMessage>()); const gatewaySession=useRef<string | undefined>(undefined);
   // ARKit events carry the generation passed to start(); anything else is a frame queued from an earlier run.
   const generation=useRef(0); const arkitActive=useRef(false);
+  // Held buttons whose press reached the gateway; they are repeated while held.
   const held=useRef(new Map<string, string>());
   // Sliders and sticks being dragged: their latest sample is repeated while the finger rests.
   const dragging=useRef(new Map<string, { action: string; value?: ControlValue; at: number }>());
-  // Drags the connection dropped under. The page lives on, so their later samples are swallowed until the finger
-  // lifts: a drag never starts streaming again by itself after a reconnect.
+  // Drags the connection dropped under, or touched while there was no connection. The page lives on, so their later
+  // samples are swallowed until the finger lifts: nothing touched without a gateway acts once it is back.
   const cutDrags=useRef(new Set<string>());
   const htmlRef = useRef<React.ComponentRef<typeof WebView>>(null);
   const send=(payload: MarionetteMessage)=>{ if(socket.current?.readyState!==WebSocket.OPEN)return false; socket.current.send(JSON.stringify(payload)); return true; };
+  /** Whether the page's actions can go out: the socket is open and the gateway has accepted the phone on it. */
+  const linked=()=>accepted.current&&socket.current?.readyState===WebSocket.OPEN;
   const sendAction=(controlId:string,actionName:string,value?:ControlValue,flags:{renew?:true;live?:true}={})=>send({type:'action',version:PROTOCOL_VERSION,sessionId:session.current,controlId,action:actionName,value,...flags,sentAt:Date.now()});
   const inject=(type:HtmlBridgeEvent,payload:unknown)=>htmlRef.current?.injectJavaScript(`window.Marionette&&window.Marionette._receive(${JSON.stringify({type,payload})});true;`);
   const toHtml=(type:HtmlBridgeEvent,payload:unknown)=>{ latest.current.set(type,payload); inject(type,payload); };
   const localStatus=(message:string)=>toHtml('status',{type:'status',version:PROTOCOL_VERSION,sessionId:session.current,message} satisfies StatusMessage);
   const setTracking=(tracking:TrackingEvent)=>{ const previous=latest.current.get('tracking') as TrackingEvent|undefined; if(previous&&previous.state===tracking.state&&previous.source===tracking.source&&previous.reason===tracking.reason&&previous.message===tracking.message)return; toHtml('tracking',tracking); };
   const emitPose=(raw:PosePacket)=>{ raw.sentAt=Date.now(); send(raw); const now=Date.now(); if(now-lastUiAt.current<UI_INTERVAL_MS)return; lastUiAt.current=now; toHtml('pose',operatorPose(raw,configRef.current?.calibration.reference)); };
-  const pressHold=(controlId:string,actionName:string)=>{ held.current.set(controlId,actionName); if(!sendAction(controlId,actionName,true))localStatus('Not connected; the hold was not sent'); };
+  // A press that didn't go out is not held, so its repeats never start it once the gateway is back.
+  const pressHold=(controlId:string,actionName:string)=>{ if(linked()&&sendAction(controlId,actionName,true))held.current.set(controlId,actionName); else localStatus('Not connected; the hold was not sent'); };
   const releaseHold=(controlId:string)=>{ const actionName=held.current.get(controlId); if(actionName===undefined)return; held.current.delete(controlId); sendAction(controlId,actionName,false); };
   // A drag the screen can no longer finish (the app leaves, the screen reloads) ends where the control rests: a stick at zero.
   const endDrag=(controlId:string)=>{ const drag=dragging.current.get(controlId); if(!drag)return; dragging.current.delete(controlId); const control=configRef.current?.controls.find(c=>c.id===controlId&&c.action===drag.action); sendAction(controlId,drag.action,streamEndValue(control,drag.value)); };
@@ -146,7 +150,7 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   /** Closes every socket and timer of the connection. */
-  const closeConnection=()=>{ attempt.current++; clearTimeout(attemptTimer.current); clearTimeout(retryTimer.current); for(const ws of racing.current)ws.close(); racing.current.clear(); const previous=socket.current; socket.current=undefined; previous?.close(); };
+  const closeConnection=()=>{ attempt.current++; clearTimeout(attemptTimer.current); clearTimeout(retryTimer.current); for(const ws of racing.current)ws.close(); racing.current.clear(); const previous=socket.current; socket.current=undefined; previous?.close(); accepted.current=false; };
   /** Leaves the gateway and returns to the connect page, with a reason unless the operator chose to leave. */
   const disconnect=(reason?:string)=>{ releaseAll(); closeConnection(); stopTracking(); target.current=undefined; established.current=false; cutDrags.current.clear();
     configRef.current=undefined; htmlConfigRef.current=undefined; latest.current.clear(); robotStates.current.clear(); gatewaySession.current=undefined;
@@ -233,13 +237,16 @@ export default function App() {
       if(!send({type:'rtc',version:PROTOCOL_VERSION,kind,streams,stream,peer,to,sdp,candidate,message:message.message})&&kind==='request')inject('rtc',{type:'rtc',version:PROTOCOL_VERSION,kind:'error',stream,peer,message:'Not connected to the gateway'} satisfies RtcMessage); return; }
     if(!validateHtmlBridgeAction(message))return;
     // A live sample of a value being dragged; the final sample (no `live`) closes the drag. A dropped sample is not worth a notice.
-    if(message.live){ if(cutDrags.current.has(message.controlId))return; dragging.current.set(message.controlId,{action:message.action,value:message.value,at:Date.now()}); sendAction(message.controlId,message.action,message.value,{live:true}); return; }
+    // A drag that starts with no gateway to hear it is cut at once, so it can't start streaming when the gateway is back.
+    if(message.live){ if(cutDrags.current.has(message.controlId))return; if(!linked()){ cutDrags.current.add(message.controlId); return; }
+      dragging.current.set(message.controlId,{action:message.action,value:message.value,at:Date.now()}); sendAction(message.controlId,message.action,message.value,{live:true}); return; }
     if(cutDrags.current.delete(message.controlId))return;
     dragging.current.delete(message.controlId);
     if(message.value===false&&held.current.has(message.controlId)){ releaseHold(message.controlId); return; }
     const control=configRef.current?.controls.find(c=>c.id===message.controlId&&c.action===message.action);
     if(control?.type==='button'&&control.hold&&typeof message.value==='boolean'){ if(message.value)pressHold(control.id,control.action); else releaseHold(control.id); return; }
-    if(!sendAction(message.controlId,message.action,message.value))localStatus('Not connected; action not sent'); } catch { /* Ignore messages outside the documented bridge. */ } };
+    if(linked()&&sendAction(message.controlId,message.action,message.value))return;
+    localStatus('Not connected; action not sent'); } catch { /* Ignore messages outside the documented bridge. */ } };
   const replayToHtml=()=>{ setHtmlLoaded(true); for(const [type,payload] of latest.current)inject(type,payload); for(const state of robotStates.current.values())inject('robot_state',state); };
   // Timers, app state and links are subscribed once too, for the same reason.
   useEffect(()=>{ const renew=setInterval(()=>{ for(const [controlId,actionName] of held.current)sendAction(controlId,actionName,true,{renew:true}); },HOLD_RENEW_MS);
