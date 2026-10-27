@@ -214,7 +214,7 @@ describe('feedback to phones',()=>{
     for (const c of [viewer,consumer,a,b,mirror,early]) c.ws.close(); });
   it('ignores statuses from phones and mirrors, malformed ones, and ones naming an unknown phone', async()=>{ await start(); const viewer=await connect(); const consumer=await connect(); const a=await phone('a'); const b=await phone('b'); const mirror=await mirrorOf('phone-1');
     a.ws.send(feedback('phone-2')); a.ws.send(feedback()); mirror.ws.send(feedback('phone-2')); mirror.ws.send(feedback());
-    for (const bad of [{ values:{ nested:{ x:1 } } }, { values:{ empty:null } }, { values:'engaged' }, { version:2 }, { message:undefined }, { message:3 }, { controlId:'' }, { phoneId:'x'.repeat(65) }]) consumer.ws.send(feedback('phone-1', undefined, bad));
+    for (const bad of [{ values:'engaged' }, { values:[1, 2] }, { values:{ big:'x'.repeat(20_000) } }, { version:2 }, { message:undefined }, { message:3 }, { controlId:'' }, { phoneId:'x'.repeat(65) }]) consumer.ws.send(feedback('phone-1', undefined, bad));
     consumer.ws.send(feedback('phone-9'));
     // One good status last: a socket's messages are handled in order, so once it arrives the others have had their chance.
     consumer.ws.send(feedback('phone-1', { state:'idle' })); await waitFor(()=>relayed(a).length>=1); await sleep(30);

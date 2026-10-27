@@ -216,12 +216,18 @@ export function describeCheckResult(result: CalibrationCheckResult): string {
 
 /** `synthetic` is generated test motion (the simulator); a consumer should never drive a robot from it. */
 export type PoseSource = 'arkit' | 'device-motion' | 'synthetic';
-/** `phoneId` is stamped by the gateway on every pose it forwards; phones never send it. */
+/**
+ * `phoneId` is stamped by the gateway on every pose it forwards; phones never send it.
+ * `sentAt` is the phone's wall clock (ms) when it sent the pose. On forwarded poses the gateway adds
+ * `receivedAt` (its own wall clock, ms) and `latencyMs`, its estimate of the time from the phone sending
+ * the pose to the gateway receiving it, from the clock offset its pings measure (absent until known).
+ */
 export type PosePacket = {
   type: 'pose'; version: typeof PROTOCOL_VERSION; sessionId: string; seq: number;
   monotonicTs: number; position: Vector3; rotation: Quaternion;
   covariance: number[]; source: PoseSource; trackingState: TrackingState;
   calibrationVersion: string; heartbeat: boolean; phoneId?: string;
+  sentAt?: number; receivedAt?: number; latencyMs?: number;
 };
 
 /**
@@ -266,7 +272,11 @@ export function isStickValue(value: unknown): value is StickValue {
 /** A stick value a control can hold: both axes within -1..1 and the push no longer than 1. */
 export const isStickInRange = (value: unknown): value is StickValue => isStickValue(value) && Math.abs(value.x) <= 1 && Math.abs(value.y) <= 1 && Math.hypot(value.x, value.y) <= 1 + 1e-6;
 
-export type CameraStream = { id: string; label: string; url: string; status: 'live' | 'offline' };
+/**
+ * `transport` and `publisher` are set by the gateway: `webrtc` while a robot (`publisher`, its id) publishes
+ * the stream over WebRTC, so a viewer asks that robot for video; otherwise frames arrive as `camera_frame`.
+ */
+export type CameraStream = { id: string; label: string; url: string; status: 'live' | 'offline'; transport?: 'jpeg' | 'webrtc'; publisher?: string };
 /** A named set of camera streams shown together, chosen per phone with the `camera.view` control. */
 export type CameraView = { id: string; label: string; streams: string[] };
 /**
@@ -275,6 +285,16 @@ export type CameraView = { id: string; label: string; streams: string[] };
  * keeps its id, name and color.
  */
 export type PhoneInfo = { id: string; name: string; color: string; connected: boolean; sessionId?: string };
+/**
+ * A robot that has connected to the gateway (`role: 'robot'`). `id` is the robot's own stable id; it stays in
+ * the roster, offline, after it disconnects. `screen` marks the robot whose screen the phones are showing, and
+ * `streams` the camera streams it publishes over WebRTC.
+ */
+export type RobotInfo = { id: string; name: string; connected: boolean; screen?: boolean; streams?: string[] };
+/** A robot id: lower-case letters, digits and dashes, starting with a letter or digit. */
+export const ROBOT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** WebSocket close codes the gateway uses. */
+export const CLOSE_CODES = { replaced: 4001, pairingRequired: 4401, robotIdInUse: 4409 } as const;
 
 /**
  * Optional validation of a finished calibration. `step` is the move the gateway
@@ -298,6 +318,12 @@ export type ConfigMessage = {
   controls: UiControl[]; cameraStreams: CameraStream[]; cameraViews: CameraView[];
   calibration: CalibrationState;
   phone?: PhoneInfo; phones: PhoneInfo[];
+  /** Robots that have connected (newer gateways). */
+  robots?: RobotInfo[];
+  /** Stable across gateway restarts (unlike `sessionId`), so a phone can remember a gateway's pairing code. */
+  gatewayId?: string;
+  /** Whether clients off this computer need the pairing code. */
+  auth?: boolean;
 };
 
 /**
@@ -314,7 +340,12 @@ export type HtmlConfigMessage = {
   type: 'html_config'; version: typeof PROTOCOL_VERSION; sessionId: string;
   htmlVersion: typeof HTML_CONFIG_VERSION; bridgeVersion: typeof HTML_BRIDGE_VERSION;
   html: string; title?: string;
+  /** From `<meta name="marionette-orientation" content="portrait|landscape|any">`: the app locks to it while the screen shows. */
+  orientation?: ScreenOrientation;
+  /** Where the screen came from: the built-in default, a file or string the gateway was started with, or a robot. */
+  source?: { kind: 'default' | 'file' | 'robot'; robotId?: string };
 };
+export type ScreenOrientation = 'portrait' | 'landscape' | 'any';
 export type HtmlBridgeAction = {
   type: 'action'; version: typeof HTML_BRIDGE_VERSION; controlId: string; action: string;
   value?: ControlValue; live?: true; sentAt: number;
@@ -324,7 +355,7 @@ export type HtmlBridgeAction = {
  * phones only receive their own and gateway-wide ones. The gateway relays a console's status to the phone it
  * names and that phone's `/screen` mirrors, or to every phone and mirror without `phoneId`, never to consoles.
  */
-export type StatusMessage = { type: 'status'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId?: string; message: string; values?: Record<string, string | number | boolean>; phoneId?: string };
+export type StatusMessage = { type: 'status'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId?: string; message: string; values?: Record<string, JsonValue>; phoneId?: string };
 export type CameraFrameMessage = { type: 'camera_frame'; version: typeof PROTOCOL_VERSION; sessionId: string; cameraId: string; dataUrl: string; capturedAt: number };
 /**
  * First message a client may send. The app sends `{ role: 'phone', deviceId }` so a
@@ -333,7 +364,20 @@ export type CameraFrameMessage = { type: 'camera_frame'; version: typeof PROTOCO
  * that follows no one sees every phone. A console that sends `cameras: false` gets no
  * camera frames (a ROS bridge, say), and simulated streams are not rendered for it.
  */
-export type HelloMessage = { type: 'hello'; version: typeof PROTOCOL_VERSION; role: 'phone' | 'console'; deviceId?: string; follow?: string; cameras?: boolean };
+export type HelloMessage = {
+  type: 'hello'; version: typeof PROTOCOL_VERSION; role: ClientRole; deviceId?: string; follow?: string; cameras?: boolean;
+  /** The gateway's pairing code, needed off the gateway's own computer when pairing is on. */
+  token?: string;
+  /** A phone's current pose session: reconnecting inside the same ARKit session keeps its calibration. */
+  sessionId?: string;
+  /** A robot's stable id (`ROBOT_ID_PATTERN`) and display name. */
+  robotId?: string; name?: string;
+};
+/**
+ * `phone`: an iPhone running the app. `console`: anything that watches (the viewer, a ROS 2 bridge, a consumer).
+ * `robot`: a console that also talks back: its own screen, robot state, notices, camera frames and WebRTC video.
+ */
+export type ClientRole = 'phone' | 'console' | 'robot';
 /**
  * The button stream. Every action a phone sends is forwarded to consoles exactly as
  * received, tagged with the phone, including the repeats of a held button or a resting
@@ -347,8 +391,55 @@ export type InputMessage = {
   type: 'input'; version: typeof PROTOCOL_VERSION; phoneId: string; sessionId?: string;
   controlId: string; action: string; value?: ControlValue; renew?: true; live?: true;
   source: 'phone' | 'mirror' | 'gateway'; reason?: string; sentAt?: number; receivedAt: number;
+  /** The gateway's estimate of the time from the phone sending it to the gateway receiving it (see `PosePacket`). */
+  latencyMs?: number;
 };
-export type MarionetteMessage = PosePacket | ConfigMessage | HtmlConfigMessage | ActionMessage | StatusMessage | CameraFrameMessage | HelloMessage | InputMessage;
+
+/** Any JSON value, as robot state and status values carry it. */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export const MAX_ROBOT_STATE_BYTES = 65_536;
+export const MAX_STATUS_VALUES_BYTES = 16_384;
+/**
+ * A robot's state, for the phone screens and consoles. Without `phoneId` it is for every phone; with it, for
+ * that phone only. The gateway keeps the latest of each, so a phone or console that connects later starts from
+ * it, fills in `robotId` and `receivedAt`, and passes it on unchanged. `everyMs` is how often the robot re-sends
+ * it: a screen calls the robot unresponsive after `staleAfterMs(everyMs)` without one.
+ */
+export type RobotStateMessage = {
+  type: 'robot_state'; version: typeof PROTOCOL_VERSION; robotId?: string; phoneId?: string;
+  state: { [key: string]: JsonValue }; everyMs?: number; sentAt?: number; receivedAt?: number;
+};
+export const staleAfterMs = (everyMs?: number): number => Math.max(1500, 3 * (everyMs ?? 0));
+/** A robot's own phone screen. It replaces the screen the phones show; the gateway answers with a `status` (`controlId: 'screen'`). */
+export type ScreenMessage = { type: 'screen'; version: typeof PROTOCOL_VERSION; html: string; title?: string };
+/**
+ * Clock and link measurement, in either direction: whoever receives a `ping` answers with a `pong` that echoes
+ * `id` and `sentAt` and adds `at`, its own wall clock. Times are wall-clock milliseconds (fractions allowed).
+ * The gateway pings phones and robots every second; its pings to a phone carry `rttMs`, the round trip it last
+ * measured to that phone.
+ */
+export type PingMessage = { type: 'ping'; version: typeof PROTOCOL_VERSION; id: number; sentAt: number; rttMs?: number };
+export type PongMessage = { type: 'pong'; version: typeof PROTOCOL_VERSION; id: number; sentAt: number; at: number };
+export const RTC_KINDS = ['publish', 'unpublish', 'request', 'offer', 'answer', 'candidate', 'close', 'error'] as const;
+export type RtcKind = typeof RTC_KINDS[number];
+export type RtcCandidate = { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null };
+/**
+ * WebRTC signaling through the gateway; the video itself goes straight from the robot to the viewer.
+ * - A robot sends `publish { streams }` for the declared camera streams it serves over WebRTC (`unpublish` stops).
+ * - A viewer (a phone screen, a mirror, the desktop viewer) sends `request { stream, peer }`, `peer` being its own
+ *   name for the connection. The gateway passes it to the publisher with `from`, the viewer's client id, or answers
+ *   `error` when nobody publishes the stream.
+ * - The publisher answers with `offer { to, peer, sdp }`, the viewer with `answer { to, peer, sdp }`; either may send
+ *   `candidate` and `close`. The gateway checks both ends belong to one request and stamps `from`.
+ * - When either end goes away, the gateway sends the other a `close` for each of their connections.
+ */
+export type RtcMessage = {
+  type: 'rtc'; version: typeof PROTOCOL_VERSION; kind: RtcKind;
+  streams?: string[]; stream?: string; peer?: string; to?: string; from?: string;
+  sdp?: string; candidate?: RtcCandidate; message?: string;
+};
+export type MarionetteMessage = PosePacket | ConfigMessage | HtmlConfigMessage | ActionMessage | StatusMessage | CameraFrameMessage | HelloMessage | InputMessage
+  | RobotStateMessage | ScreenMessage | PingMessage | PongMessage | RtcMessage;
 
 export function isFiniteVector(v: Vector3): boolean { return [v.x, v.y, v.z].every(Number.isFinite); }
 export function isFiniteQuaternion(q: Quaternion): boolean { return [q.x, q.y, q.z, q.w].every(Number.isFinite); }
@@ -371,14 +462,16 @@ export function validatePose(packet: unknown): packet is PosePacket {
     && !!p.position && isFiniteVector(p.position) && !!p.rotation && isUnitQuaternion(p.rotation)
     && Array.isArray(p.covariance) && p.covariance.length === 6 && p.covariance.every(value => Number.isFinite(value) && value >= 0 && value <= 1e6)
     && (p.source === 'arkit' || p.source === 'device-motion' || p.source === 'synthetic') && trackingStates.includes(p.trackingState as TrackingState) && isBoundedString(p.calibrationVersion, 128) && typeof p.heartbeat === 'boolean'
-    && (p.phoneId === undefined || isBoundedString(p.phoneId, 64));
+    && (p.phoneId === undefined || isBoundedString(p.phoneId, 64))
+    && [p.sentAt, p.receivedAt, p.latencyMs].every(value => value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0));
 }
 
 /** Rebuilds a validated pose from its known fields so extra client data is never rebroadcast. */
 export function sanitizePose(p: PosePacket): PosePacket {
   return { type: 'pose', version: PROTOCOL_VERSION, sessionId: p.sessionId, seq: p.seq, monotonicTs: p.monotonicTs,
     position: { x: p.position.x, y: p.position.y, z: p.position.z }, rotation: normalizeQuaternion(p.rotation),
-    covariance: p.covariance.slice(0, 6), source: p.source, trackingState: p.trackingState, calibrationVersion: p.calibrationVersion, heartbeat: p.heartbeat };
+    covariance: p.covariance.slice(0, 6), source: p.source, trackingState: p.trackingState, calibrationVersion: p.calibrationVersion, heartbeat: p.heartbeat,
+    ...(p.sentAt !== undefined ? { sentAt: p.sentAt } : {}) };
 }
 
 function isControl(value: unknown): value is UiControl {
@@ -411,13 +504,21 @@ export function sanitizeConfig(message: unknown): ConfigMessage | undefined {
     cameraViews: Array.isArray(c.cameraViews) ? c.cameraViews.filter(isCameraView) : [],
     calibration: { ...c.calibration, epoch: Number.isFinite(c.calibration.epoch) ? c.calibration.epoch : 0, step: CALIBRATION_STEPS.includes(c.calibration.step as CalibrationStep) ? c.calibration.step : undefined, check: isCalibrationCheck(c.calibration.check) ? c.calibration.check : undefined,
       anchor: isVector(c.calibration.anchor) ? c.calibration.anchor : undefined },
-    phones: Array.isArray(c.phones) ? c.phones.filter(isPhoneInfo) : [] } as ConfigMessage;
+    phones: Array.isArray(c.phones) ? c.phones.filter(isPhoneInfo) : [],
+    ...(c.robots !== undefined ? { robots: Array.isArray(c.robots) ? c.robots.filter(isRobotInfo) : [] } : {}),
+    gatewayId: isBoundedString(c.gatewayId, 64) ? c.gatewayId : undefined, auth: typeof c.auth === 'boolean' ? c.auth : undefined } as ConfigMessage;
 }
 
 export function isPhoneInfo(value: unknown): value is PhoneInfo {
   if (!value || typeof value !== 'object') return false;
   const p = value as Partial<PhoneInfo>;
   return isBoundedString(p.id, 64) && isBoundedString(p.name, 64) && isBoundedString(p.color, 32) && typeof p.connected === 'boolean' && (p.sessionId === undefined || isBoundedString(p.sessionId, 128));
+}
+export function isRobotInfo(value: unknown): value is RobotInfo {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as Partial<RobotInfo>;
+  return typeof r.id === 'string' && ROBOT_ID_PATTERN.test(r.id) && isBoundedString(r.name, 64) && typeof r.connected === 'boolean'
+    && (r.screen === undefined || typeof r.screen === 'boolean') && (r.streams === undefined || (Array.isArray(r.streams) && r.streams.every(id => isBoundedString(id, 128))));
 }
 function isCameraView(value: unknown): value is CameraView {
   if (!value || typeof value !== 'object') return false;
@@ -447,7 +548,62 @@ export function validateStatus(message: unknown): message is StatusMessage {
   const status = message as Partial<StatusMessage>;
   return status.type === 'status' && status.version === PROTOCOL_VERSION && typeof status.message === 'string'
     && (status.controlId === undefined || isBoundedString(status.controlId, 128)) && (status.phoneId === undefined || isBoundedString(status.phoneId, 64))
-    && (status.values === undefined || (!!status.values && typeof status.values === 'object' && Object.values(status.values).every(isPrimitive)));
+    && (status.values === undefined || (isJsonObject(status.values) && utf8Length(JSON.stringify(status.values)) <= MAX_STATUS_VALUES_BYTES));
+}
+/** Whether a value is plain JSON: null, booleans, finite numbers, strings, arrays and plain objects, at most 16 deep. */
+export function isJsonValue(value: unknown, depth = 0): value is JsonValue {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (depth >= 16 || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.every(item => isJsonValue(item, depth + 1));
+  const prototype = Object.getPrototypeOf(value);
+  return (prototype === Object.prototype || prototype === null) && Object.values(value).every(item => isJsonValue(item, depth + 1));
+}
+export function isJsonObject(value: unknown): value is { [key: string]: JsonValue } { return !!value && typeof value === 'object' && !Array.isArray(value) && isJsonValue(value); }
+/** UTF-8 byte length without TextEncoder (the app's JavaScript engine may lack it). */
+export function utf8Length(text: string): number { try { return encodeURIComponent(text).replace(/%[0-9A-F]{2}/g, 'x').length; } catch { return Infinity; } }
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const optionalBounded = (value: unknown, maxLength: number) => value === undefined || isBoundedString(value, maxLength);
+
+export function validateRobotState(message: unknown): message is RobotStateMessage {
+  if (!message || typeof message !== 'object') return false;
+  const m = message as Partial<RobotStateMessage>;
+  return m.type === 'robot_state' && m.version === PROTOCOL_VERSION && (m.robotId === undefined || (typeof m.robotId === 'string' && ROBOT_ID_PATTERN.test(m.robotId)))
+    && optionalBounded(m.phoneId, 64) && isJsonObject(m.state) && utf8Length(JSON.stringify(m.state)) <= MAX_ROBOT_STATE_BYTES
+    && (m.everyMs === undefined || (isFiniteNumber(m.everyMs) && m.everyMs >= 10 && m.everyMs <= 60_000))
+    && (m.sentAt === undefined || isFiniteNumber(m.sentAt)) && (m.receivedAt === undefined || isFiniteNumber(m.receivedAt));
+}
+export function validateScreen(message: unknown): message is ScreenMessage {
+  if (!message || typeof message !== 'object') return false;
+  const m = message as Partial<ScreenMessage>;
+  return m.type === 'screen' && m.version === PROTOCOL_VERSION && typeof m.html === 'string' && m.html.trim().length > 0 && utf8Length(m.html) <= MAX_HTML_CONFIG_BYTES && optionalBounded(m.title, 128);
+}
+export function validatePing(message: unknown): message is PingMessage {
+  if (!message || typeof message !== 'object') return false;
+  const m = message as Partial<PingMessage>;
+  return m.type === 'ping' && m.version === PROTOCOL_VERSION && Number.isSafeInteger(m.id) && (m.id as number) >= 0 && isFiniteNumber(m.sentAt)
+    && (m.rttMs === undefined || (isFiniteNumber(m.rttMs) && m.rttMs >= 0));
+}
+export function validatePong(message: unknown): message is PongMessage {
+  if (!message || typeof message !== 'object') return false;
+  const m = message as Partial<PongMessage>;
+  return m.type === 'pong' && m.version === PROTOCOL_VERSION && Number.isSafeInteger(m.id) && (m.id as number) >= 0 && isFiniteNumber(m.sentAt) && isFiniteNumber(m.at);
+}
+const PEER_PATTERN = /^[\w.-]{1,64}$/;
+function isRtcBody(m: Partial<RtcMessage>): boolean {
+  return RTC_KINDS.includes(m.kind as RtcKind)
+    && (m.streams === undefined || (Array.isArray(m.streams) && m.streams.length <= 32 && m.streams.every(id => isBoundedString(id, 128))))
+    && optionalBounded(m.stream, 128) && (m.peer === undefined || (typeof m.peer === 'string' && PEER_PATTERN.test(m.peer)))
+    && optionalBounded(m.to, 32) && optionalBounded(m.from, 32) && (m.sdp === undefined || (typeof m.sdp === 'string' && m.sdp.length <= 65_536))
+    && (m.candidate === undefined || (!!m.candidate && typeof m.candidate === 'object' && typeof m.candidate.candidate === 'string' && m.candidate.candidate.length <= 2048
+      && (m.candidate.sdpMid === undefined || m.candidate.sdpMid === null || isBoundedString(m.candidate.sdpMid, 64))
+      && (m.candidate.sdpMLineIndex === undefined || m.candidate.sdpMLineIndex === null || (Number.isInteger(m.candidate.sdpMLineIndex) && m.candidate.sdpMLineIndex >= 0 && m.candidate.sdpMLineIndex <= 64))))
+    && (m.message === undefined || (typeof m.message === 'string' && m.message.length <= 512));
+}
+export function validateRtc(message: unknown): message is RtcMessage {
+  if (!message || typeof message !== 'object') return false;
+  const m = message as Partial<RtcMessage>;
+  return m.type === 'rtc' && m.version === PROTOCOL_VERSION && isRtcBody(m);
 }
 
 function isPrimitive(value: unknown): value is string | number | boolean { return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean'; }
@@ -468,9 +624,10 @@ export function validateAction(message: unknown): message is ActionMessage {
 export function validateHello(message: unknown): message is HelloMessage {
   if (!message || typeof message !== 'object') return false;
   const hello = message as Partial<HelloMessage>;
-  return hello.type === 'hello' && hello.version === PROTOCOL_VERSION && (hello.role === 'phone' || hello.role === 'console')
+  return hello.type === 'hello' && hello.version === PROTOCOL_VERSION && (hello.role === 'phone' || hello.role === 'console' || hello.role === 'robot')
     && (hello.deviceId === undefined || isBoundedString(hello.deviceId, 128)) && (hello.follow === undefined || (typeof hello.follow === 'string' && hello.follow.length <= 64))
-    && (hello.cameras === undefined || typeof hello.cameras === 'boolean');
+    && (hello.cameras === undefined || typeof hello.cameras === 'boolean') && optionalBounded(hello.token, 64) && optionalBounded(hello.sessionId, 128)
+    && (hello.role === 'robot' ? typeof hello.robotId === 'string' && ROBOT_ID_PATTERN.test(hello.robotId) : hello.robotId === undefined) && optionalBounded(hello.name, 64);
 }
 
 export function validateInput(message: unknown): message is InputMessage {
@@ -480,7 +637,8 @@ export function validateInput(message: unknown): message is InputMessage {
     && isBoundedString(input.controlId, 128) && isBoundedString(input.action, 256) && (input.value === undefined || isControlValue(input.value))
     && (input.source === 'phone' || input.source === 'mirror' || input.source === 'gateway') && typeof input.receivedAt === 'number' && Number.isFinite(input.receivedAt)
     && (input.renew === undefined || input.renew === true) && (input.live === undefined || input.live === true) && (input.sessionId === undefined || isBoundedString(input.sessionId, 128))
-    && (input.reason === undefined || isBoundedString(input.reason, 256)) && (input.sentAt === undefined || (typeof input.sentAt === 'number' && Number.isFinite(input.sentAt)));
+    && (input.reason === undefined || isBoundedString(input.reason, 256)) && (input.sentAt === undefined || (typeof input.sentAt === 'number' && Number.isFinite(input.sentAt)))
+    && (input.latencyMs === undefined || (isFiniteNumber(input.latencyMs) && input.latencyMs >= 0));
 }
 
 export function validateHtmlConfig(message: unknown): message is HtmlConfigMessage {
@@ -492,7 +650,9 @@ export function validateHtmlConfig(message: unknown): message is HtmlConfigMessa
     && isBoundedString(config.sessionId, 128)
     && config.htmlVersion === HTML_CONFIG_VERSION && config.bridgeVersion === HTML_BRIDGE_VERSION
     && typeof config.html === 'string' && config.html.trim().length > 0 && config.html.includes('<') && config.html.includes('>') && withinLimit
-    && (config.title === undefined || isBoundedString(config.title, 128));
+    && (config.title === undefined || isBoundedString(config.title, 128))
+    && (config.orientation === undefined || ['portrait', 'landscape', 'any'].includes(config.orientation))
+    && (config.source === undefined || (!!config.source && typeof config.source === 'object' && ['default', 'file', 'robot'].includes(config.source.kind) && optionalBounded(config.source.robotId, 64)));
 }
 
 export function validateHtmlBridgeAction(message: unknown): message is HtmlBridgeAction {
@@ -505,12 +665,31 @@ export function validateHtmlBridgeAction(message: unknown): message is HtmlBridg
 }
 
 /** Message types the HTML bridge delivers to `Marionette.on`; the last of each is replayed to late subscribers. */
-export const HTML_BRIDGE_EVENTS = ['pose', 'status', 'config', 'camera_frame', 'tracking', 'connection'] as const;
+export const HTML_BRIDGE_EVENTS = ['pose', 'status', 'config', 'camera_frame', 'tracking', 'connection', 'robot_state', 'robots', 'link', 'rtc'] as const;
 export type HtmlBridgeEvent = typeof HTML_BRIDGE_EVENTS[number];
 /** Payload of the `tracking` bridge event: the phone's own view of ARKit, including why it is degraded. */
 export type TrackingEvent = { state: TrackingState; source: PoseSource; reason?: string; message?: string };
 /** Payload of the `connection` bridge event. `gateway` is the address shown to the operator. */
-export type ConnectionEvent = { state: 'connected' | 'disconnected'; gateway: string; reason?: string };
+export type ConnectionEvent = { state: 'connected' | 'disconnected' | 'reconnecting'; gateway: string; reason?: string };
+/** Payload of the `link` bridge event: the round trip to the gateway and what it means for driving. */
+export type LinkEvent = { rttMs?: number; quality: 'good' | 'fair' | 'poor' | 'unknown' };
+export const linkQuality = (rttMs?: number): LinkEvent['quality'] => rttMs === undefined || !Number.isFinite(rttMs) ? 'unknown' : rttMs < 60 ? 'good' : rttMs < 150 ? 'fair' : 'poor';
+/**
+ * Payload of the `robots` bridge event, which the bridge builds from `config.robots` and every `robot_state`:
+ * each robot's latest state for every phone (`state`) and for this phone (`phoneState`), and `receivedAt`, the
+ * page's `Date.now()` when either last arrived.
+ */
+export type RobotView = { id: string; name: string; connected: boolean; state?: { [key: string]: JsonValue }; phoneState?: { [key: string]: JsonValue }; everyMs?: number; receivedAt?: number };
+/** What a host (the app, the desktop mirror) supports, as `Marionette.features` lists it. */
+export const HTML_BRIDGE_FEATURES = ['live', 'robot_state', 'link', 'rtc', 'reconnect', 'orientation'] as const;
+export type HtmlBridgeFeature = typeof HTML_BRIDGE_FEATURES[number];
+/** WebRTC signaling a page sends through `Marionette.rtc(…)`; the host forwards it to the gateway as an `rtc` message. */
+export type HtmlBridgeRtc = Omit<RtcMessage, 'version' | 'from'> & { version: typeof HTML_BRIDGE_VERSION };
+export function validateHtmlBridgeRtc(message: unknown): message is HtmlBridgeRtc {
+  if (!message || typeof message !== 'object') return false;
+  const m = message as Partial<RtcMessage>;
+  return m.type === 'rtc' && m.version === HTML_BRIDGE_VERSION && m.from === undefined && isRtcBody(m);
+}
 /** Sent by `Marionette.disconnect()`: the host closes the gateway connection. */
 export type HtmlBridgeDisconnect = { type: 'disconnect'; version: typeof HTML_BRIDGE_VERSION };
 export function isHtmlBridgeDisconnect(message: unknown): message is HtmlBridgeDisconnect {
@@ -531,9 +710,14 @@ export function isHtmlBridgeDisconnect(message: unknown): message is HtmlBridgeD
  * if left out) and closes the stream. The host repeats the latest sample while
  * the stream is open.
  */
-export function htmlBridgeScript(post: string): string {
+export function htmlBridgeScript(post: string, features: readonly HtmlBridgeFeature[] = []): string {
   return `(function(){if(window.Marionette){window.dispatchEvent(new Event('marionette-ready'));return;}
-var deliver=(${post});var types=${JSON.stringify(HTML_BRIDGE_EVENTS)};var listeners={};var last={};
+var deliver=(${post});var types=${JSON.stringify(HTML_BRIDGE_EVENTS)};var listeners={};var last={};var robots={};var phoneId=null;
+var emit=function(type,payload){last[type]=payload;(listeners[type]||[]).slice().forEach(function(callback){try{callback(payload);}catch(e){}});};
+var robotView=function(){var out={};for(var id in robots){var r=robots[id];out[id]={id:r.id,name:r.name,connected:r.connected,state:r.state,phoneState:r.phoneState,everyMs:r.everyMs,receivedAt:r.receivedAt};}return out;};
+var robot=function(id){return robots[id]||(robots[id]={id:id,name:id,connected:true});};
+var fold=function(type,p){if(type==='config'&&p){phoneId=p.phone?p.phone.id:null;if(Array.isArray(p.robots)){p.robots.forEach(function(info){if(!info||typeof info.id!=='string')return;var r=robot(info.id);r.name=info.name||info.id;r.connected=!!info.connected;});emit('robots',robotView());}}
+else if(type==='robot_state'&&p&&typeof p.robotId==='string'&&p.state&&typeof p.state==='object'){if(p.phoneId&&p.phoneId!==phoneId)return false;var r=robot(p.robotId);if(p.phoneId)r.phoneState=p.state;else r.state=p.state;if(typeof p.everyMs==='number')r.everyMs=p.everyMs;r.receivedAt=Date.now();emit('robots',robotView());}return true;};
 var primitive=function(v){var t=typeof v;return t==='string'||t==='boolean'||(t==='number'&&isFinite(v));};
 var clean=function(v){if(primitive(v))return v;if(v&&typeof v==='object'&&typeof v.x==='number'&&typeof v.y==='number'&&isFinite(v.x)&&isFinite(v.y))return{x:v.x,y:v.y};return undefined;};
 var same=function(a,b){return a===b||(!!a&&!!b&&typeof a==='object'&&typeof b==='object'&&a.x===b.x&&a.y===b.y);};
@@ -546,8 +730,10 @@ end:function(value){if(!open)return;var v=value===undefined?(pending===undefined
 isOpen:function(){return open;}};},
 on:function(type,callback){if(types.indexOf(type)<0||typeof callback!=='function')return function(){};(listeners[type]||(listeners[type]=[])).push(callback);if(Object.prototype.hasOwnProperty.call(last,type)){try{callback(last[type]);}catch(e){}}return function(){listeners[type]=(listeners[type]||[]).filter(function(item){return item!==callback;});};},
 latest:function(type){return last[type];},
+features:${JSON.stringify(features)},
+rtc:function(message){if(!message||typeof message!=='object'||typeof message.kind!=='string')return;var m={type:'rtc',version:${HTML_BRIDGE_VERSION},kind:message.kind};['streams','stream','peer','to','sdp','candidate','message'].forEach(function(key){if(message[key]!==undefined)m[key]=message[key];});deliver(m);},
 disconnect:function(){deliver({type:'disconnect',version:${HTML_BRIDGE_VERSION}});},
-_receive:function(message){if(!message||types.indexOf(message.type)<0)return;last[message.type]=message.payload;(listeners[message.type]||[]).slice().forEach(function(callback){try{callback(message.payload);}catch(e){}});}};
+_receive:function(message){if(!message||types.indexOf(message.type)<0||message.type==='robots')return;if(fold(message.type,message.payload)===false)return;emit(message.type,message.payload);}};
 window.Marionette=M;window.dispatchEvent(new Event('marionette-ready'));})();true;`;
 }
 
@@ -563,6 +749,34 @@ export function gatewayUrl(input: string): string | undefined {
   const [, scheme = 'ws', host, port = String(DEFAULT_GATEWAY_PORT), path] = match;
   if (Number(port) < 1 || Number(port) > 65535) return undefined;
   return `${/^(wss|https)$/i.test(scheme) ? 'wss' : 'ws'}://${host.toLowerCase()}:${Number(port)}${!path || path === '/' ? '/ws' : path}`;
+}
+/** Crockford base32 without I, L, O and U, so a pairing code is easy to read aloud and type. */
+export const PAIRING_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+/** A pairing code as typed: case, spaces and dashes don't matter, and O, I and L read as 0, 1 and 1. */
+export function normalizePairingCode(code: string): string { return code.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1'); }
+/** `K7Q2M9XD` → `K7Q2-M9XD`. */
+export function formatPairingCode(code: string): string { const c = normalizePairingCode(code); return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c; }
+/**
+ * What a gateway's pairing QR code holds: every address it can be reached at, its port, the pairing code (absent
+ * when pairing is off), its stable id and its name. As a link: `marionette://pair?v=1&host=a,b&port=8787&code=…&id=…&name=…`.
+ */
+export type PairingLink = { hosts: string[]; port: number; code?: string; gatewayId?: string; name?: string };
+const HOST_PATTERN = /^(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)$/i;
+export function pairingLink(link: PairingLink): string {
+  const query = [['v', '1'], ['host', link.hosts.join(',')], ['port', String(link.port)], ...(link.code ? [['code', normalizePairingCode(link.code)]] : []),
+    ...(link.gatewayId ? [['id', link.gatewayId]] : []), ...(link.name ? [['name', link.name]] : [])];
+  return `marionette://pair?${query.map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%2C/gi, ',')}`).join('&')}`;
+}
+/** Reads a pairing link (parsed by hand: the app's JavaScript engine has no full URL support). Undefined if it isn't one. */
+export function parsePairingLink(text: string): PairingLink | undefined {
+  const match = /^marionette:\/\/pair\/?\?(.*)$/i.exec(text.trim()); if (!match) return undefined;
+  const params: Record<string, string> = {};
+  for (const part of match[1].split('&')) { const at = part.indexOf('='); if (at <= 0) continue; try { params[part.slice(0, at)] = decodeURIComponent(part.slice(at + 1).replace(/\+/g, ' ')); } catch { return undefined; } }
+  const hosts = (params.host ?? '').split(',').map(host => host.trim()).filter(host => HOST_PATTERN.test(host)).slice(0, 8);
+  const port = params.port === undefined ? DEFAULT_GATEWAY_PORT : Number(params.port);
+  if (!hosts.length || !Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+  const code = params.code ? normalizePairingCode(params.code) : undefined;
+  return { hosts, port, ...(code && code.length <= 64 ? { code } : {}), ...(params.id && params.id.length <= 64 ? { gatewayId: params.id } : {}), ...(params.name ? { name: params.name.slice(0, 64) } : {}) };
 }
 /**
  * A gateway URL the way an operator would type it: no ws://, no /ws, no
