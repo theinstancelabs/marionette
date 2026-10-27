@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLOSE_CODES, HTML_BRIDGE_VERSION, PROTOCOL_VERSION, formatPairingCode, htmlBridgeScript, isJsonValue, linkQuality, normalizePairingCode, pairingLink, parsePairingLink, sanitizeConfig, sanitizePose, defaultConfig,
+import { CLOSE_CODES, HTML_BRIDGE_VERSION, PROTOCOL_VERSION, buildQuickReference, formatPairingCode, operatorPose, rawPoseFor, htmlBridgeScript, isJsonValue, linkQuality, normalizePairingCode, pairingLink, parsePairingLink, sanitizeConfig, sanitizePose, defaultConfig,
   staleAfterMs, validateHello, validateHtmlBridgeRtc, validateHtmlConfig, validatePing, validatePong, validatePose, validateRobotState, validateRtc, validateScreen, validateStatus, type RobotView } from './index';
 
 const pose = { type: 'pose', version: 1, sessionId: 's', seq: 1, monotonicTs: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, covariance: [0, 0, 0, 0, 0, 0], source: 'arkit', trackingState: 'normal', calibrationVersion: 'v', heartbeat: true };
@@ -66,6 +66,18 @@ describe('round 8 protocol additions', () => {
     expect(normalizePairingCode('oil')).toBe('011');
     expect(formatPairingCode('k7q2m9xd')).toBe('K7Q2-M9XD');
     expect(CLOSE_CODES.pairingRequired).toBe(4401);
+  });
+
+  it('inverts operatorPose, so a simulated phone can stream the raw pose for an operator-frame target', () => {
+    const target = { position: { x: 0.3, y: -0.12, z: 0.05 }, rotation: { x: 0.1, y: -0.2, z: 0.3, w: 0.927 } };
+    const norm = Math.hypot(0.1, 0.2, 0.3, 0.927); target.rotation = { x: 0.1 / norm, y: -0.2 / norm, z: 0.3 / norm, w: 0.927 / norm };
+    const yaw = 0.7; const reference = buildQuickReference({ position: { x: 0.4, y: 1.1, z: -0.2 }, rotation: { x: -Math.SQRT1_2 * Math.cos(yaw), y: Math.SQRT1_2 * Math.sin(yaw), z: Math.SQRT1_2 * Math.sin(yaw), w: Math.SQRT1_2 * Math.cos(yaw) }, seq: 3, sessionId: 's' }, 2);
+    for (const ref of [undefined, reference]) {
+      const raw = rawPoseFor(target, ref); const back = operatorPose({ ...pose, ...raw } as never, ref);
+      for (const axis of ['x', 'y', 'z'] as const) expect(back.position[axis]).toBeCloseTo(target.position[axis], 9);
+      const dot = back.rotation.x * target.rotation.x + back.rotation.y * target.rotation.y + back.rotation.z * target.rotation.z + back.rotation.w * target.rotation.w;
+      expect(Math.abs(dot)).toBeCloseTo(1, 9);
+    }
   });
 
   it('rates the link from the round trip', () => {
