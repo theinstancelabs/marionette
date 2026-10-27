@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Sim arm</title>
+<!--
+  The phone screen of the Python SDK's example robot (sim_robot.py), built on the screen kit (docs/SCREEN-KIT.md).
+  The robot sends it when it connects (and again whenever this file is saved). The block below declares the
+  controls and the two camera streams the robot serves over WebRTC.
+-->
+<script type="application/json" id="marionette-config">
+{
+  "controls": [
+    { "id": "deadman", "type": "button", "label": "Hold to move", "action": "teleop.deadman", "tone": "accent", "hold": true },
+    { "id": "estop", "type": "toggle", "label": "Stop", "action": "safety.estop", "value": false },
+    { "id": "scale", "type": "slider", "label": "Motion scale", "action": "teleop.translationScale", "value": 1, "min": 0.1, "max": 3, "step": 0.1, "unit": "×" },
+    { "id": "cameras", "type": "select", "label": "Cameras", "action": "camera.view", "value": "both", "options": [{ "label": "Both", "value": "both" }, { "label": "Front", "value": "front" }, { "label": "Top", "value": "top" }] },
+    { "id": "home", "type": "button", "label": "Send the gripper home", "action": "arm.home" },
+    { "id": "calibration-start", "type": "button", "label": "Start calibration", "action": "calibration.start", "tone": "accent" },
+    { "id": "calibration", "type": "button", "label": "Capture calibration step", "action": "calibration.capture", "tone": "accent" },
+    { "id": "capture-origin", "type": "button", "label": "Set origin here", "action": "calibration.captureOrigin", "tone": "accent" },
+    { "id": "calibration-cancel", "type": "button", "label": "Cancel calibration", "action": "calibration.cancel" },
+    { "id": "reset-origin", "type": "button", "label": "Reset calibration", "action": "calibration.reset" },
+    { "id": "calibration-check", "type": "button", "label": "Validate calibration", "action": "calibration.check" }
+  ],
+  "cameraStreams": [
+    { "id": "sim-front", "label": "Front", "url": "webrtc://sim-arm/front", "status": "live" },
+    { "id": "sim-top", "label": "Top", "url": "webrtc://sim-arm/top", "status": "live" }
+  ],
+  "cameraViews": [
+    { "id": "both", "label": "Both", "streams": ["sim-front", "sim-top"] },
+    { "id": "front", "label": "Front", "streams": ["sim-front"] },
+    { "id": "top", "label": "Top", "streams": ["sim-top"] }
+  ]
+}
+</script>
+<link rel="stylesheet" href="marionette-kit.css">
+<script src="marionette-kit.js"></script>
+<style>
+main{padding:0 16px calc(24px + env(safe-area-inset-bottom))}
+h1{font-size:28px;margin:10px 0 0;letter-spacing:-.01em}
+.note{margin:2px 0 10px;color:var(--ink2);min-height:1.3em}
+.cams{margin:0 0 12px}
+.robot{font:13px/1.4 var(--mono);color:var(--ink2);margin:0 0 12px}
+.robot[data-state=stale],.robot[data-state=offline]{color:var(--red)}
+.pad{width:100%;height:132px;border-radius:22px;border:2.5px solid var(--blue);background:#fff;color:var(--blue);font:600 20px var(--sans);touch-action:none;-webkit-user-select:none;user-select:none}
+.pad[data-state=pending]{background:var(--blue-wash)}
+.pad[data-state=held]{background:var(--blue);color:#fff}
+.pad[data-state=dropped]{border-color:var(--red);color:var(--red)}
+.pad[aria-disabled=true]{opacity:.45}
+.scale{display:flex;align-items:center;gap:10px;margin:14px 0 6px}
+.scale input{flex:1}
+#rows{margin-top:10px}
+</style>
+</head>
+<body>
+<header id="strip"></header>
+<div id="stop-banner" hidden></div>
+<main>
+  <h1 id="title">Connecting…</h1>
+  <p class="note" id="note"></p>
+  <figure class="cams" id="cams"></figure>
+  <p class="robot" id="robot"></p>
+  <button class="pad" id="pad">Hold to move</button>
+  <div class="scale"><span>Motion scale</span><output class="mk-val" id="scale-value"></output></div>
+  <div id="scale"></div>
+  <div id="rows"></div>
+</main>
+<script>
+(() => {
+  const K = window.MarionetteKit, $ = id => document.getElementById(id);
+  K.strip($('strip'));
+  const stop = K.stop({ banner: $('stop-banner') });
+  const calibration = K.calibration({ copy: { introBody: 'Stand facing the way the arm faces, then make four short moves with the phone.' } });
+  K.cameras($('cams'));
+  K.hold($('pad'), { action: 'teleop.deadman', onState: state => K.setText($('pad'), { pending: 'Holding…', held: 'Moving', dropped: 'Hold dropped' }[state] || 'Hold to move') });
+  $('scale').append(K.slider(null, { action: 'teleop.translationScale', out: $('scale-value') }).el);
+  // Calibration, the camera view and Home as rows, rebuilt when the layout changes.
+  let rowParts = K.group(), rowsKey;
+  K.on('config', () => {
+    const listed = ['camera.view', 'arm.home'].map(action => K.control(action)).filter(Boolean);
+    const key = JSON.stringify(listed.map(c => [c.id, c.type, c.label, c.options]));
+    if (key === rowsKey) return;
+    rowsKey = key; rowParts.dispose(); rowParts = K.group();
+    $('rows').replaceChildren(calibration.row({ group: rowParts }), ...listed.map(c => K.controlRow(c, { group: rowParts })));
+  });
+
+  let arm;
+  const mm = metres => Math.round(metres * 1000);
+  K.robot('sim-arm', robot => { arm = robot; render(); });
+  function render() {
+    const conn = K.latest('connection'), config = K.config(), pad = K.holdState(K.control('teleop.deadman'));
+    const s = arm ? arm.values : {};
+    const [title, note] = !conn || conn.state !== 'connected' ? ['Connecting…', '']
+      : stop.isOn() ? ['Stopped', 'reset Stop when it’s safe']
+      : !arm || arm.offline ? ['Sim arm is offline', 'start examples/sim_robot.py']
+      : arm.stale ? ['No answer from the arm', 'is sim_robot.py still running?']
+      : config && config.calibration.status === 'capturing' ? ['Calibrating', 'finish or cancel it in the sheet']
+      : pad === 'dropped' ? ['Hold dropped', 'let go and press again']
+      : s.engaged && pad === 'held' ? ['Moving', 'release to stop']
+      : s.stop ? ['Stopped', 'by ' + s.stop]
+      : s.reason ? ['Not moving', s.reason]
+      : s.driver ? [s.driver + ' is moving', 'wait for them to let go']
+      : ['Ready', 'hold the pad and move the phone'];
+    K.setText($('title'), title); K.setText($('note'), note);
+    $('pad').setAttribute('aria-disabled', String(!arm || arm.offline || stop.isOn()));
+    const line = $('robot');
+    line.dataset.state = !arm ? 'none' : arm.offline ? 'offline' : arm.stale ? 'stale' : 'live';
+    const g = s.gripper;
+    K.setText(line, !arm ? 'No robot yet' : arm.offline ? 'Sim arm · offline (last ' + (g ? g.position.map(mm).join(', ') + ' mm)' : 'state unknown)')
+      : (arm.stale ? 'Sim arm · not answering · ' : 'Sim arm · ') + (g ? 'gripper ' + g.position.map(mm).join(', ') + ' mm, yaw ' + Math.round(g.yawDeg) + '°' : 'starting'));
+  }
+  for (const type of ['config', 'connection', 'touch']) K.on(type, render);
+  K.on('status', m => { if (!calibration.handles(m) && m.message && m.message !== 'Connected to Marionette gateway') K.toast(m.message); });
+})();
+</script>
+</body>
+</html>
