@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { createServer } from './server.js';
-import { PROTOCOL_VERSION, defaultConfig, matrixToQuaternion, nominalCovariance, type ActionMessage, type PosePacket, type Vector3 } from '@marionette/protocol';
+import { PROTOCOL_VERSION, defaultConfig, matrixToQuaternion, nominalCovariance, type ActionMessage, type ControlValue, type PosePacket, type Vector3 } from '@marionette/protocol';
 
 let gateway: ReturnType<typeof createServer> | undefined; let port: number;
 afterEach(async()=>{ if(gateway) await gateway.close(); gateway=undefined; });
@@ -32,6 +32,9 @@ const NOMINAL = [.0025,.0025,.0025,.01,.01,.01];
 const pose = (sessionId: string, seq: number, overrides: Partial<PosePacket> = {}): PosePacket => ({ type:'pose', version:1, sessionId, seq, monotonicTs:seq+1, position:{x:0,y:0,z:0}, rotation:FLAT, covariance:NOMINAL, source:'arkit', trackingState:'normal', calibrationVersion:'arkit-v1', heartbeat:true, ...overrides });
 const sendPose = (client: Client, p: PosePacket) => client.ws.send(JSON.stringify(p));
 const act = (client: Client, controlId: string, action: string, value?: string | number | boolean, renew?: true) => client.ws.send(JSON.stringify({type:'action',version:PROTOCOL_VERSION,sessionId:client.session||'console',controlId,action,value,renew,sentAt:Date.now()} satisfies ActionMessage));
+/** One sample of a value being dragged; `final` is the value when the operator lets go. */
+const drag = (client: Client, controlId: string, action: string, value: ControlValue, how: { renew?: true; final?: true } = {}) => client.ws.send(JSON.stringify({type:'action',version:PROTOCOL_VERSION,sessionId:client.session||'console',controlId,action,value,renew:how.renew,live:how.final?undefined:true,sentAt:Date.now()} satisfies ActionMessage));
+const live = (config: any, id: string) => config?.controls.find((c: any)=>c.id===id)?.live;
 
 describe('gateway handshake and layout',()=>{
   it('tells a console the layout and roster, sends the screen, and streams every camera', async()=>{ await start(); const viewer=await connect();
@@ -119,6 +122,43 @@ describe('several phones',()=>{
     await waitFor(()=>viewer.of('input','phone-1').some(m=>m.source==='gateway'), 500); expect(viewer.of('input','phone-1').at(-1)).toMatchObject({ controlId:'grip', action:'gripper.hold', value:false, source:'gateway', reason:'renewals stopped' }); expect(held(viewer.configOf('phone-1'),'grip')).toBe(false);
     act(a,'deadman','teleop.deadman',true); await waitFor(()=>held(viewer.configOf('phone-1'),'deadman')===true); a.ws.close();
     await waitFor(()=>viewer.of('input','phone-1').some(m=>m.reason==='phone disconnected')); expect(held(viewer.configOf('phone-1'),'deadman')).toBe(false); viewer.ws.close(); });
+  it('streams a dragged value live: every sample is relayed, and the config is republished only when the drag starts and ends', async()=>{ await start(); const viewer=await connect(); const a=await phone('a');
+    const configs=()=>viewer.messages.filter(m=>m.type==='config'&&m.phone?.id==='phone-1').length; const before=configs();
+    expect(live(viewer.configOf('phone-1'),'speed-limit')).toBe(false); expect(live(viewer.configOf('phone-1'),'drive')).toBe(false); expect(viewer.configOf().controls.find((c: any)=>c.id==='drive').live).toBeUndefined();
+    drag(a,'speed-limit','base.speedLimit',51); await waitFor(()=>live(viewer.configOf('phone-1'),'speed-limit')===true); expect(value(viewer.configOf('phone-1'),'speed-limit')).toBe(51);
+    for (const v of [55,61,70]) drag(a,'speed-limit','base.speedLimit',v); drag(a,'speed-limit','base.speedLimit',70,{renew:true});
+    drag(a,'drive','base.drive',{x:0.5,y:-0.25}); drag(a,'drive','base.drive',{x:0.6,y:-0.3}); drag(a,'drive','base.drive',{x:0,y:0},{final:true}); drag(a,'speed-limit','base.speedLimit',72,{final:true});
+    await waitFor(()=>live(viewer.configOf('phone-1'),'speed-limit')===false&&viewer.of('input','phone-1').length===9);
+    expect(viewer.of('input','phone-1').map(m=>[m.controlId,m.value,m.live,m.renew])).toEqual([['speed-limit',51,true,undefined],['speed-limit',55,true,undefined],['speed-limit',61,true,undefined],['speed-limit',70,true,undefined],['speed-limit',70,true,true],['drive',{x:0.5,y:-0.25},true,undefined],['drive',{x:0.6,y:-0.3},true,undefined],['drive',{x:0,y:0},undefined,undefined],['speed-limit',72,undefined,undefined]]);
+    // Start and end of the slider drag, and of the stick's: four configs for nine samples.
+    expect(configs()-before).toBe(4); expect(value(viewer.configOf('phone-1'),'speed-limit')).toBe(72); expect(value(viewer.configOf('phone-1'),'drive')).toEqual({x:0,y:0}); expect(live(viewer.configOf('phone-1'),'drive')).toBe(false);
+    expect(viewer.of('input').some(m=>m.source==='gateway')).toBe(false); expect(a.statuses().some(m=>m.values?.accepted===false)).toBe(false);
+    // The phone's own value drives its screen; /api/state shows it as well.
+    expect(value((await phoneState('phone-1')).config,'speed-limit')).toBe(72); viewer.ws.close(); a.ws.close(); });
+  it('ends a stream whose samples stop: a stick goes back to rest, a slider keeps its value, and the touch stays dropped until let go', async()=>{ await start({streamTimeoutMs:80}); const viewer=await connect(); const a=await phone('a');
+    drag(a,'drive','base.drive',{x:0.8,y:0}); await waitFor(()=>live(viewer.configOf('phone-1'),'drive')===true); drag(a,'drive','base.drive',{x:0.8,y:0},{renew:true}); await sleep(40); drag(a,'drive','base.drive',{x:0.8,y:0},{renew:true});
+    await sleep(40); expect(live(viewer.configOf('phone-1'),'drive')).toBe(true);
+    await waitFor(()=>viewer.of('input','phone-1').some(m=>m.source==='gateway'), 500);
+    expect(viewer.of('input','phone-1').at(-1)).toMatchObject({ controlId:'drive', action:'base.drive', value:{x:0,y:0}, source:'gateway', reason:'samples stopped' });
+    await waitFor(()=>live(viewer.configOf('phone-1'),'drive')===false); expect(value(viewer.configOf('phone-1'),'drive')).toEqual({x:0,y:0});
+    // Still touching as far as the phone knows: its samples are relayed, but the gateway keeps it dropped until the operator lets go.
+    drag(a,'drive','base.drive',{x:0.7,y:0.1}); drag(a,'drive','base.drive',{x:0.7,y:0.1},{renew:true}); await sleep(30); expect(live(viewer.configOf('phone-1'),'drive')).toBe(false); expect(value(viewer.configOf('phone-1'),'drive')).toEqual({x:0,y:0});
+    expect(viewer.of('input','phone-1').at(-1)).toMatchObject({ value:{x:0.7,y:0.1}, live:true, renew:true, source:'phone' });
+    drag(a,'drive','base.drive',{x:0,y:0},{final:true}); drag(a,'drive','base.drive',{x:0.2,y:0}); await waitFor(()=>live(viewer.configOf('phone-1'),'drive')===true); expect(value(viewer.configOf('phone-1'),'drive')).toEqual({x:0.2,y:0});
+    drag(a,'drive','base.drive',{x:0,y:0},{final:true}); await waitFor(()=>live(viewer.configOf('phone-1'),'drive')===false);
+    drag(a,'speed-limit','base.speedLimit',80); await waitFor(()=>viewer.of('input','phone-1').filter(m=>m.source==='gateway').length===2, 500);
+    expect(viewer.of('input','phone-1').at(-1)).toMatchObject({ controlId:'speed-limit', value:80, source:'gateway', reason:'samples stopped' }); await waitFor(()=>live(viewer.configOf('phone-1'),'speed-limit')===false); expect(value(viewer.configOf('phone-1'),'speed-limit')).toBe(80);
+    viewer.ws.close(); a.ws.close(); });
+  it('never starts a stream from a repeat, keeps only stick values in range, and ends a phone\'s streams when it leaves', async()=>{ await start(); const viewer=await connect(); const a=await phone('a');
+    drag(a,'drive','base.drive',{x:0.5,y:0},{renew:true}); await sleep(30); expect(live(viewer.configOf('phone-1'),'drive')).toBe(false);
+    // Too far (|v| > 1), a missing axis, an extra axis: relayed as received, never kept. Only the final sample gets a reply.
+    drag(a,'drive','base.drive',{x:0.9,y:0.9}); drag(a,'drive','base.drive',{x:0.9,y:0.9},{final:true}); a.ws.send(JSON.stringify({type:'action',version:1,sessionId:a.session,controlId:'drive',action:'base.drive',value:{x:0.1},live:true,sentAt:Date.now()})); a.ws.send(JSON.stringify({type:'action',version:1,sessionId:a.session,controlId:'drive',action:'base.drive',value:{x:0.1,y:0,z:0},live:true,sentAt:Date.now()}));
+    await waitFor(()=>a.statuses('drive').length===1); expect(a.statuses('drive')[0].values.accepted).toBe(false); expect(value(viewer.configOf('phone-1'),'drive')).toEqual({x:0,y:0}); expect(viewer.of('input','phone-1').filter(m=>m.controlId==='drive')).toHaveLength(3);
+    // A slider sample off its step is refused the same way.
+    drag(a,'speed-limit','base.speedLimit',50.5); await sleep(30); expect(live(viewer.configOf('phone-1'),'speed-limit')).toBe(false);
+    drag(a,'drive','base.drive',{x:-1,y:0}); await waitFor(()=>live(viewer.configOf('phone-1'),'drive')===true); a.ws.close();
+    await waitFor(()=>viewer.of('input','phone-1').some(m=>m.reason==='phone disconnected'));
+    expect(viewer.of('input','phone-1').find(m=>m.reason==='phone disconnected')).toMatchObject({ controlId:'drive', value:{x:0,y:0}, source:'gateway' }); expect(live(viewer.configOf('phone-1'),'drive')).toBe(false); expect(value(viewer.configOf('phone-1'),'drive')).toEqual({x:0,y:0}); viewer.ws.close(); });
   it('treats an app that never says hello as a phone, and drops it from the roster when it leaves', async()=>{ await start(); const viewer=await connect(); const old=await open(); sendPose(old,pose('legacy',0)); await waitFor(()=>viewer.of('pose','phone-1').length>0);
     expect(viewer.configOf().phones.map((p: any)=>p.id)).toEqual(['phone-1']); old.ws.close(); await waitFor(()=>viewer.configOf().phones.length===0); viewer.ws.close(); });
   it('rejects out-of-order poses per phone, and a new session clears only that phone\'s calibration', async()=>{ await start(); const viewer=await connect(); const a=await phone('a'); const b=await phone('b');

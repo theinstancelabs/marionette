@@ -7,20 +7,25 @@ Per phone (named from the gateway roster, so "Phone 1" becomes `phone_1`):
   /marionette/<phone>/pose      geometry_msgs/PoseStamped, frame "<phone>/operator"
                                 (REP-103: +X forward, +Y left, +Z up, metres), only
                                 while the phone's stream is live
-  /marionette/<phone>/buttons   std_msgs/String, one JSON object per button event,
-                                exactly as the gateway relayed it (repeats included)
+  /marionette/<phone>/buttons   std_msgs/String, one JSON object per input event,
+                                exactly as the gateway relayed it (repeats included):
+                                presses, values, and every live sample of a slider or
+                                stick being dragged (`"live": true`; a stick's value
+                                is {"x", "y"}, x forward and y left, each -1..1)
   /marionette/<phone>/tracking  std_msgs/String (latched), the ARKit tracking state on
                                 change ("normal", "limited", ..., "unavailable" when the
                                 stream stops or the bridge loses the gateway)
   /marionette/<phone>/state     std_msgs/String (latched), the phone's current control
-                                values, which hold buttons it holds, and its calibration,
+                                values, which hold buttons it holds, which sliders and
+                                sticks are being dragged (`live`), and its calibration,
                                 on change; this is how a consumer that starts late learns
                                 that Stop is already on
 and /marionette/phones          std_msgs/String (latched), the roster as JSON.
 
 When the bridge loses the gateway it says so instead of leaving the last values
 standing: tracking goes "unavailable", every phone is marked disconnected, and each
-hold the gateway had reported gets a release on `buttons` with `"source": "bridge"`.
+hold the gateway had reported gets a release on `buttons` with `"source": "bridge"`,
+as does each drag (a stick back at rest, a slider at its last value).
 """
 from __future__ import annotations
 
@@ -30,6 +35,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 GATEWAY_LOST = "gateway connection lost"
+
+
+def rest(value: Any) -> Any:
+    """Where a dragged control settles when its drag is cut off: a stick at zero, a slider where it was."""
+    return {axis: 0 for axis in value} if isinstance(value, dict) else value
+
+
+def let_go(control: dict[str, Any]) -> dict[str, Any]:
+    """A /state control entry once nothing holds or drags it."""
+    if control.get("live"):
+        return {**control, "live": False, "value": rest(control["value"])}
+    return {**control, "held": False} if "held" in control else control
 
 
 def slug(name: str) -> str:
@@ -83,7 +100,9 @@ class Topics:
             for control in state["controls"]:
                 if control.get("held"):
                     out.append(Publish(self.phone_topic(phone, "buttons"), "string", {"phone": phone, "control": control["control"], "action": control["action"], "value": False, "source": "bridge", "reason": GATEWAY_LOST}))
-            lost = {**state, "connected": False, "reason": GATEWAY_LOST, "controls": [{**control, "held": False} if "held" in control else control for control in state["controls"]]}
+                if control.get("live"):
+                    out.append(Publish(self.phone_topic(phone, "buttons"), "string", {"phone": phone, "control": control["control"], "action": control["action"], "value": rest(control["value"]), "source": "bridge", "reason": GATEWAY_LOST}))
+            lost = {**state, "connected": False, "reason": GATEWAY_LOST, "controls": [let_go(control) for control in state["controls"]]}
             if lost != state:
                 self.states[phone] = lost
                 out.append(Publish(self.phone_topic(phone, "state"), "string", lost, True))
@@ -115,7 +134,10 @@ class Topics:
             if not isinstance(control, dict) or not isinstance(control.get("id"), str):
                 continue
             if "value" in control:
-                controls.append({"control": control["id"], "action": control.get("action"), "value": control["value"]})
+                entry = {"control": control["id"], "action": control.get("action"), "value": control["value"]}
+                if "live" in control:
+                    entry["live"] = bool(control["live"])
+                controls.append(entry)
             elif control.get("hold"):
                 controls.append({"control": control["id"], "action": control.get("action"), "held": bool(control.get("held"))})
         calibration = message.get("calibration") if isinstance(message.get("calibration"), dict) else {}
@@ -149,7 +171,7 @@ class Topics:
     def _button(self, message: dict[str, Any]) -> Publish:
         phone = message["phoneId"]
         event = {"phone": phone, "control": message.get("controlId"), "action": message.get("action"), "source": message.get("source"), "received_at_ms": message.get("receivedAt")}
-        for key, name in (("value", "value"), ("renew", "repeat"), ("reason", "reason"), ("sentAt", "sent_at_ms")):
+        for key, name in (("value", "value"), ("live", "live"), ("renew", "repeat"), ("reason", "reason"), ("sentAt", "sent_at_ms")):
             if key in message:
                 event[name] = message[key]
         return Publish(self.phone_topic(phone, "buttons"), "string", event)

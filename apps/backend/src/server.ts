@@ -5,7 +5,7 @@ import { deflateSync } from 'node:zlib';
 import express from 'express';
 import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
-import { CALIBRATION_STEPS, CHECK_MOVES, CHECK_MOVE_TEXT, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, describeCheckResult, guidedCaptureError, htmlBridgeScript, operatorPose, phoneColor, sanitizeConfig, sanitizePose, validateAction, validateCameraFrame, validateHello, validateHtmlConfig, validatePose, type ActionMessage, type CalibrationCheck, type CalibrationState, type CameraFrameMessage, type CameraStream, type CheckMove, type ConfigMessage, type GuidedSamples, type GuidedStep, type HelloMessage, type HtmlConfigMessage, type InputMessage, type MarionetteMessage, type PhoneInfo, type PosePacket, type PoseReference, type StatusMessage, type UiControl, PROTOCOL_VERSION, HTML_BRIDGE_VERSION, HTML_CONFIG_VERSION } from '@marionette/protocol';
+import { CALIBRATION_STEPS, CHECK_MOVES, CHECK_MOVE_TEXT, STREAM_RENEW_MS, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, describeCheckResult, guidedCaptureError, htmlBridgeScript, isLiveControl, isStickInRange, operatorPose, phoneColor, sameValue, sanitizeConfig, sanitizePose, streamEndValue, validateAction, validateCameraFrame, validateHello, validateHtmlConfig, validatePose, type ActionMessage, type CalibrationCheck, type CalibrationState, type CameraFrameMessage, type CameraStream, type CheckMove, type ConfigMessage, type ControlValue, type GuidedSamples, type GuidedStep, type HelloMessage, type HtmlConfigMessage, type InputMessage, type LiveControl, type MarionetteMessage, type PhoneInfo, type PosePacket, type PoseReference, type StatusMessage, type UiControl, PROTOCOL_VERSION, HTML_BRIDGE_VERSION, HTML_CONFIG_VERSION } from '@marionette/protocol';
 import { createDiagnosticsLog, deltaMm, frameSummary, mm, noDiagnostics, rawAxes, type DiagnosticsLog } from './diagnostics.js';
 
 /**
@@ -16,11 +16,14 @@ import { createDiagnosticsLog, deltaMm, frameSummary, mm, noDiagnostics, rawAxes
  * arbitrating between phones belong to the consumer.
  */
 type Layout = Pick<ConfigMessage, 'controls' | 'cameraStreams' | 'cameraViews'>;
-type Hold = { action: string; holders: Map<WebSocket, number> };
+/** A hold button, or a slider or stick being dragged: who is touching it, and when each last said so. */
+type Touch = { action: string; holders: Map<WebSocket, number> };
 export type Phone = {
   info: PhoneInfo; deviceId?: string; socket?: WebSocket;
   raw?: PosePacket; pose?: PosePacket; lastPoseAt?: number; stale: boolean; poseCount: number;
-  values: Map<string, string | number | boolean>; holds: Map<string, Hold>;
+  values: Map<string, ControlValue>; holds: Map<string, Touch>; streams: Map<string, Touch>;
+  // Clients whose stream on a control the gateway ended for silence; their samples count again once they let go.
+  dropped: Map<string, Set<WebSocket>>;
   calibration: CalibrationState; reference?: PoseReference; samples: GuidedSamples;
   // The calibration live when guided capture started, and the validation result from before a run, restored on cancel.
   beforeCalibration?: CalibrationState; beforeCheck?: CalibrationCheck;
@@ -70,22 +73,24 @@ const layoutFor = (html: string): Layout => parseLayout(html).layout;
  * acts as that phone; its presses reach consumers marked `source: 'mirror'`.
  */
 // `follow` is a phone id; `<` is escaped too, so nothing in it can close the inline script.
-const previewBridge = (follow: string) => `(function(){var ws,config,held={},seenHtml=false,tracking='',stopped=false,follow=${JSON.stringify(follow).replace(/</g, '\\u003c')};
+const previewBridge = (follow: string) => `(function(){var ws,config,held={},dragging={},seenHtml=false,tracking='',stopped=false,follow=${JSON.stringify(follow).replace(/</g, '\\u003c')};
 function receive(type,payload){window.Marionette._receive({type:type,payload:payload});}
 function streams(){if(!config)return[];var c=config.controls.find(function(x){return x.action==='camera.view';});var views=config.cameraViews||[];var v=views.find(function(x){return c&&x.id===c.value;})||views[0];return v?v.streams:[];}
 function post(m){if(m.type==='disconnect'){stopped=true;if(ws)ws.close();return;}
-if(!config||!ws||ws.readyState!==1){if(!m.renew)receive('status',{type:'status',version:1,sessionId:'preview',message:'Not connected to the gateway; that was not sent'});return;}
+if(!config||!ws||ws.readyState!==1){if(!m.renew&&!m.live)receive('status',{type:'status',version:1,sessionId:'preview',message:'Not connected to the gateway; that was not sent'});return;}
 var c=config.controls.find(function(x){return x.id===m.controlId&&x.action===m.action;});if(c&&c.hold&&typeof m.value==='boolean'&&!m.renew){if(m.value)held[m.controlId]=m.action;else delete held[m.controlId];}
+if(!m.renew){if(m.live)dragging[m.controlId]={action:m.action,value:m.value,at:Date.now()};else delete dragging[m.controlId];}else if(dragging[m.controlId])dragging[m.controlId].at=Date.now();
 m.version=1;m.sessionId=config.sessionId;ws.send(JSON.stringify(m));}
 ${htmlBridgeScript('function(m){post(m);}')}
 setInterval(function(){for(var id in held)post({type:'action',controlId:id,action:held[id],value:true,renew:true,sentAt:Date.now()});},200);
+setInterval(function(){var now=Date.now();for(var id in dragging){var s=dragging[id];if(now-s.at>=${STREAM_RENEW_MS})post({type:'action',controlId:id,action:s.action,value:s.value,live:true,renew:true,sentAt:now});}},${Math.round(STREAM_RENEW_MS / 2)});
 function open(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
 ws.onopen=function(){ws.send(JSON.stringify({type:'hello',version:1,role:'console',follow:follow}));receive('connection',{state:'connected',gateway:location.host});};
 ws.onmessage=function(e){var m;try{m=JSON.parse(e.data);}catch(x){return;}if(m.type==='html_config'){if(seenHtml)location.reload();seenHtml=true;return;}
-if(m.type==='config'){if(config&&config.phone&&(!m.phone||m.phone.id!==config.phone.id)){held={};tracking='';}config=m;}
+if(m.type==='config'){if(config&&config.phone&&(!m.phone||m.phone.id!==config.phone.id)){held={};dragging={};tracking='';}config=m;}
 if(m.type==='pose'&&tracking!==m.trackingState+m.source){tracking=m.trackingState+m.source;receive('tracking',{state:m.trackingState,source:m.source});}
 if(m.type==='camera_frame'&&streams().indexOf(m.cameraId)<0)return;var mine=config&&config.phone&&config.phone.id;if((m.type==='pose'||m.type==='status')&&m.phoneId&&m.phoneId!==mine)return;if(m.type!=='input')receive(m.type,m);};
-ws.onclose=function(){held={};tracking='';receive('connection',{state:'disconnected',gateway:location.host,reason:stopped?'disconnected; reload the page to connect again':'lost the gateway, retrying'});if(!stopped)setTimeout(open,1000);};}
+ws.onclose=function(){held={};dragging={};tracking='';receive('connection',{state:'disconnected',gateway:location.host,reason:stopped?'disconnected; reload the page to connect again':'lost the gateway, retrying'});if(!stopped)setTimeout(open,1000);};}
 open();})();`;
 function screenPreview(html: string, follow: string): string { const script = `<script>${previewBridge(follow)}</script>`; return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, tag => tag + script) : script + html; }
 
@@ -137,6 +142,7 @@ function validValue(control: UiControl, value: unknown): boolean {
   if (control.type === 'toggle') return typeof value === 'boolean';
   if (control.type === 'select') return typeof value === 'string' && control.options.some(option => option.value === value);
   if (control.type === 'slider') return typeof value === 'number' && Number.isFinite(value) && value >= control.min && value <= control.max && Math.abs((value - control.min) / control.step - Math.round((value - control.min) / control.step)) < 1e-6;
+  if (control.type === 'joystick') return isStickInRange(value);
   return control.hold ? typeof value === 'boolean' : true;
 }
 function validCalibrationValue(action: ActionMessage): boolean {
@@ -159,10 +165,12 @@ function originAllowed(origin: string | undefined, host: string | undefined): bo
   try { const { hostname } = new URL(origin); return ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || (!!host && hostname === new URL(`http://${host}`).hostname); } catch { return false; }
 }
 
-export function createServer(port = Number(process.env.PORT) || 8787, options: { watchdogMs?: number; holdTimeoutMs?: number; heartbeatMs?: number; diagnostics?: DiagnosticsLog } = {}) {
+export function createServer(port = Number(process.env.PORT) || 8787, options: { watchdogMs?: number; holdTimeoutMs?: number; streamTimeoutMs?: number; heartbeatMs?: number; diagnostics?: DiagnosticsLog } = {}) {
   const watchdogMs = options.watchdogMs ?? (Number(process.env.MARIONETTE_WATCHDOG_MS) || 1500);
   // The phone repeats a held press every 200 ms; after three missed repeats the button is no longer known to be held.
   const holdTimeoutMs = options.holdTimeoutMs ?? (Number(process.env.MARIONETTE_HOLD_TIMEOUT_MS) || 600);
+  // A value being dragged is repeated every 50 ms while the finger rests; after 400 ms of silence the stream is over.
+  const streamTimeoutMs = options.streamTimeoutMs ?? (Number(process.env.MARIONETTE_STREAM_TIMEOUT_MS) || 400);
   const heartbeatMs = options.heartbeatMs ?? 5000;
   const diagnostics = options.diagnostics ?? noDiagnostics; const log = diagnostics.write;
   const sessionId = state.sessionId;
@@ -182,7 +190,8 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
   const phoneControls = (phone: Phone): UiControl[] => state.layout.controls.map(control => {
     if (control.type === 'button') return control.hold ? { ...control, held: phone.holds.has(control.id) } : { ...control };
     const value = phone.values.get(control.id);
-    return value === undefined ? structuredClone(control) : { ...structuredClone(control), value } as UiControl;
+    const own = (value === undefined ? structuredClone(control) : { ...structuredClone(control), value: structuredClone(value) }) as UiControl;
+    return isLiveControl(own) ? { ...own, live: phone.streams.has(control.id) } : own;
   });
   const phoneConfig = (phone: Phone): ConfigMessage => ({ ...gatewayConfig(), phone: { ...phone.info }, calibration: structuredClone(phone.calibration), controls: phoneControls(phone) });
   // Runs for every frame and client, so it reads the phone's value directly instead of building its config.
@@ -215,7 +224,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
     publishPhone(phone);
   };
   const dropHolder = (phone: Phone, socket: WebSocket, reason: string) => { for (const [controlId, hold] of phone.holds) if (hold.holders.delete(socket) && !hold.holders.size) endHold(phone, controlId, reason); };
-  const dropSocketHolds = (socket: WebSocket, reason: string) => { for (const phone of phones.values()) dropHolder(phone, socket, reason); };
+  const dropSocketHolds = (socket: WebSocket, reason: string) => { for (const phone of phones.values()) { dropHolder(phone, socket, reason); dropStreamHolder(phone, socket, reason); } };
   const handleHold = (phone: Phone, socket: WebSocket, control: UiControl, action: ActionMessage) => {
     const hold = phone.holds.get(control.id);
     if (action.value === false) { if (hold?.holders.delete(socket) && !hold.holders.size) endHold(phone, control.id); return; }
@@ -227,6 +236,49 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
     publishPhone(phone);
   };
 
+  /* ---------- Streams: a slider or stick being dragged; the gateway only tracks whether its samples keep coming ---------- */
+  /** A stream that ends without its final sample settles on the stick's rest (a slider keeps its last value), and consumers are told why. */
+  const endStream = (phone: Phone, controlId: string, reason?: string) => {
+    const stream = phone.streams.get(controlId); if (!stream) return;
+    phone.streams.delete(controlId);
+    if (reason) {
+      const control = state.layout.controls.find(candidate => candidate.id === controlId);
+      const value = streamEndValue(control, phone.values.get(controlId));
+      if (value !== undefined) phone.values.set(controlId, value);
+      input(phone, { controlId, action: stream.action, value, source: 'gateway', reason, sessionId: phone.info.sessionId });
+    }
+    log({ kind: 'stream', phone: phone.info.id, control: controlId, live: false, reason, msg: `${phone.info.name}: ${controlId} let go${reason ? ` (${reason})` : ''}` });
+    publishPhone(phone);
+  };
+  const dropStreamHolder = (phone: Phone, socket: WebSocket, reason: string) => {
+    for (const [controlId, stream] of phone.streams) if (stream.holders.delete(socket) && !stream.holders.size) endStream(phone, controlId, reason);
+    for (const [controlId, sockets] of phone.dropped) if (sockets.delete(socket) && !sockets.size) phone.dropped.delete(controlId);
+  };
+  /**
+   * Live samples start or extend a stream; the final sample (no `live`) ends it. Only the start and
+   * the end republish the phone's config: consumers follow the samples themselves in the input stream.
+   */
+  const handleStream = (phone: Phone, socket: WebSocket, control: LiveControl, action: ActionMessage) => {
+    const stream = phone.streams.get(control.id); const dropped = phone.dropped.get(control.id);
+    const value = action.value as ControlValue;
+    if (!action.live) {
+      // Letting go: the final value stands, and a touch the gateway had dropped counts again from the next one.
+      if (dropped?.delete(socket) && !dropped.size) phone.dropped.delete(control.id);
+      const changed = !sameValue(phone.values.get(control.id) ?? control.value, value);
+      phone.values.set(control.id, value);
+      if (stream?.holders.delete(socket) && !stream.holders.size) endStream(phone, control.id);
+      else if (changed) publishPhone(phone);
+      return;
+    }
+    // A repeat never starts a stream, and a touch the gateway dropped stays dropped until the operator lets go.
+    if (dropped?.has(socket) || (action.renew && !stream?.holders.has(socket))) return;
+    phone.values.set(control.id, value);
+    if (stream) { stream.holders.set(socket, monotonicMilliseconds()); return; }
+    phone.streams.set(control.id, { action: control.action, holders: new Map([[socket, monotonicMilliseconds()]]) });
+    log({ kind: 'stream', phone: phone.info.id, control: control.id, live: true, msg: `${phone.info.name}: ${control.id} live` });
+    publishPhone(phone);
+  };
+
   /* ---------- Phones ---------- */
   /** Mirrors follow the phone they asked for, or the first connected phone; re-resolved whenever the roster changes. */
   const resolveMirrors = () => {
@@ -235,7 +287,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
       const current = client.phoneId ? phones.get(client.phoneId) : undefined;
       const next = client.follow ? phones.get(client.follow) : current?.info.connected ? current : [...phones.values()].find(phone => phone.info.connected);
       if (next?.info.id === client.phoneId && client.shown) continue;
-      if (current && current !== next) dropHolder(current, socket, 'mirror moved to another phone');
+      if (current && current !== next) { dropHolder(current, socket, 'mirror moved to another phone'); dropStreamHolder(current, socket, 'mirror moved to another phone'); }
       // Until its phone appears, a mirror shows the gateway's layout.
       client.phoneId = next?.info.id; client.shown = true;
       send(socket, next ? phoneConfig(next) : gatewayConfig());
@@ -250,7 +302,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
   /** The lowest free number names the phone and picks its color, so a returning setup gets the same colors. */
   const addPhone = (deviceId?: string): Phone => {
     let n = 1; while (phones.has(`phone-${n}`)) n++;
-    const phone: Phone = { info: { id: `phone-${n}`, name: `Phone ${n}`, color: phoneColor(n - 1), connected: true }, deviceId, stale: true, poseCount: 0, values: new Map(), holds: new Map(), calibration: { status: 'uncalibrated', epoch: 0 }, samples: {} };
+    const phone: Phone = { info: { id: `phone-${n}`, name: `Phone ${n}`, color: phoneColor(n - 1), connected: true }, deviceId, stale: true, poseCount: 0, values: new Map(), holds: new Map(), streams: new Map(), dropped: new Map(), calibration: { status: 'uncalibrated', epoch: 0 }, samples: {} };
     phones.set(phone.info.id, phone); log({ kind: 'phone', phone: phone.info.id, device: deviceId, msg: `${phone.info.name} joined${deviceId ? '' : ' (no hello: an older app)'}` });
     return phone;
   };
@@ -280,6 +332,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
   const disconnectPhone = (phone: Phone, reason: string) => {
     publishUnavailablePose(phone, reason); clearCalibration(phone, reason);
     for (const controlId of [...phone.holds.keys()]) endHold(phone, controlId, reason);
+    for (const controlId of [...phone.streams.keys()]) endStream(phone, controlId, reason);
     phone.socket = undefined; phone.info.connected = false; phone.info.sessionId = undefined; phone.raw = undefined; phone.stale = true; phone.lastPoseAt = undefined;
     // An older app without a hello can never be recognised again, so it leaves the roster instead of lingering.
     if (!phone.deviceId) { phones.delete(phone.info.id); log({ kind: 'phone', phone: phone.info.id, msg: `${phone.info.name} left` }); }
@@ -387,16 +440,18 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
     const phone = client.role === 'phone' ? phones.get(client.phoneId!) : followed(client);
     if (!phone) { send(socket, status(client.role === 'mirror' ? 'No phone to act as yet; connect a phone first' : 'Consoles only watch; send controls from a phone or a mirror of one (/screen)', undefined, action.controlId, { accepted: false })); return; }
     // Every action is relayed exactly as received, before anything else, whatever the gateway makes of it.
-    input(phone, { controlId: action.controlId, action: action.action, value: action.value, renew: action.renew, source: client.role === 'phone' ? 'phone' : 'mirror', sessionId: action.sessionId, sentAt: action.sentAt });
+    input(phone, { controlId: action.controlId, action: action.action, value: action.value, renew: action.renew, live: action.live, source: client.role === 'phone' ? 'phone' : 'mirror', sessionId: action.sessionId, sentAt: action.sentAt });
     if (CALIBRATION_ACTIONS.has(action.action)) {
       if (!validCalibrationValue(action)) { reply(phone, action.controlId, refuse('Action rejected by gateway validation')); return; }
       reply(phone, action.controlId, calibrate(phone, action)); publishPhone(phone); return;
     }
     const control = state.layout.controls.find(candidate => candidate.id === action.controlId && candidate.action === action.action);
     if (!control) return;
-    if (!validValue(control, action.value)) { if (!action.renew) reply(phone, action.controlId, refuse('Action rejected by gateway validation')); return; }
+    // A refused live sample is not answered: the drag would bury the operator in replies. Its final value is.
+    if (!validValue(control, action.value)) { if (!action.renew && !action.live) reply(phone, action.controlId, refuse('Action rejected by gateway validation')); return; }
     if (control.type === 'button' && control.hold) { handleHold(phone, socket, control, action); return; }
-    if (control.type === 'button' || phone.values.get(control.id) === action.value) return;
+    if (isLiveControl(control)) { handleStream(phone, socket, control, action); return; }
+    if (control.type === 'button' || sameValue(phone.values.get(control.id), action.value)) return;
     phone.values.set(control.id, action.value!); publishPhone(phone);
   };
   const handlePose = (socket: WebSocket, client: Client, message: PosePacket) => {
@@ -473,6 +528,8 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
   const fitLayout = (phone: Phone) => {
     for (const [id, value] of phone.values) { const control = state.layout.controls.find(candidate => candidate.id === id); if (control && !validValue(control, value)) phone.values.delete(id); }
     for (const [id, hold] of [...phone.holds]) if (!state.layout.controls.some(control => control.type === 'button' && control.hold && control.id === id && control.action === hold.action)) endHold(phone, id, 'screen changed');
+    for (const [id, stream] of [...phone.streams]) if (!state.layout.controls.some(control => isLiveControl(control) && control.id === id && control.action === stream.action)) endStream(phone, id, 'screen changed');
+    phone.dropped.clear();
   };
   const reloadHtml = () => {
     try {
@@ -492,9 +549,13 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
     const now = monotonicMilliseconds();
     for (const phone of phones.values()) {
       for (const [controlId, hold] of phone.holds) { for (const [holder, renewedAt] of hold.holders) if (now - renewedAt > holdTimeoutMs) hold.holders.delete(holder); if (!hold.holders.size) endHold(phone, controlId, 'renewals stopped'); }
+      for (const [controlId, stream] of phone.streams) {
+        for (const [holder, renewedAt] of stream.holders) if (now - renewedAt > streamTimeoutMs) { stream.holders.delete(holder); const dropped = phone.dropped.get(controlId) ?? new Set(); dropped.add(holder); phone.dropped.set(controlId, dropped); }
+        if (!stream.holders.size) endStream(phone, controlId, 'samples stopped');
+      }
       if (phone.lastPoseAt !== undefined && !phone.stale && now - phone.lastPoseAt > watchdogMs) { phone.stale = true; publishUnavailablePose(phone, 'pose watchdog'); }
     }
-  }, Math.max(20, Math.min(100, Math.floor(Math.min(watchdogMs, holdTimeoutMs) / 3)))); watchdogTimer.unref();
+  }, Math.max(20, Math.min(100, Math.floor(Math.min(watchdogMs, holdTimeoutMs, streamTimeoutMs) / 3)))); watchdogTimer.unref();
   return { app, server, wss, close: () => { if (watchedHtml) fs.unwatchFile(watchedHtml, reloadHtml); clearInterval(cameraTimer); clearInterval(heartbeatTimer); clearInterval(watchdogTimer); for (const socket of clients.keys()) socket.terminate(); return new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 if (process.env.NODE_ENV !== 'test') {

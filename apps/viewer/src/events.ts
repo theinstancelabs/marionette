@@ -1,4 +1,4 @@
-import { CALIBRATION_STEPS, describeCheckResult, type CalibrationCheckResult, type CalibrationStep, type ConfigMessage, type InputMessage, type PhoneInfo, type PosePacket, type StatusMessage, type TrackingState, type UiControl } from '@marionette/protocol';
+import { CALIBRATION_STEPS, describeCheckResult, isStickValue, sameValue, type CalibrationCheckResult, type CalibrationStep, type ConfigMessage, type ControlValue, type InputMessage, type PhoneInfo, type PosePacket, type StatusMessage, type StickValue, type TrackingState, type UiControl } from '@marionette/protocol';
 import { TRACKING_WORDS } from './motion';
 
 export const EVENT_KINDS = ['session', 'tracking', 'calibration', 'validation', 'input', 'safety', 'camera', 'settings'] as const;
@@ -14,7 +14,6 @@ export type Tone = 'normal' | 'pass' | 'fail';
  */
 export type EventDraft = { kind: EventKind; message: string; tone: Tone; phoneId?: string; pair?: 'replace' | 'prefix'; key?: string; settleMs?: number };
 export type ConsoleEvent = { id: number; at: number; kind: EventKind; message: string; tone: Tone; phoneId?: string };
-export type Primitive = string | number | boolean;
 
 /** Kind of a change to a control's value, or of a gateway reply to it. */
 export function kindForAction(action: string | undefined): EventKind {
@@ -47,15 +46,20 @@ export function statusDraft(status: StatusMessage, config?: Pick<ConfigMessage, 
 }
 
 const decimals = (step: number) => Math.min(3, String(step).split('.')[1]?.length ?? 0);
-export function formatPrimitive(value: Primitive): string {
+const signed2 = (n: number) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(2)}`;
+/** Where a stick is pushed, in words: "forward +0.42, left −0.10", or "at rest". */
+export function stickText(value: StickValue): string { return value.x || value.y ? `forward ${signed2(value.x)}, left ${signed2(value.y)}` : 'at rest'; }
+export function formatValue(value: ControlValue): string {
   if (typeof value === 'number') return String(Number(value.toFixed(3)));
+  if (isStickValue(value)) return stickText(value);
   return String(value);
 }
-/** A control's current value in words: "on", "Right arm", "1.5×". Buttons have none. */
+/** A control's current value in words: "on", "Right arm", "1.5×", "forward +0.42, left −0.10". Buttons have none. */
 export function valueText(control: UiControl): string | undefined {
   if (control.type === 'toggle') return control.value ? 'on' : 'off';
   if (control.type === 'select') return control.options.find(option => option.value === control.value)?.label ?? control.value;
   if (control.type === 'slider') return `${control.value.toFixed(decimals(control.step))}${control.unit ?? ''}`;
+  if (control.type === 'joystick') return stickText(control.value);
   return undefined;
 }
 
@@ -106,14 +110,15 @@ export function calibrationEvents(a: ConfigMessage['calibration'], b: ConfigMess
 /**
  * Value changes worth a log line, from one of a phone's configs to the next:
  * Stop on and off, arm and camera choices, and any other toggle, select or
- * slider. Holds are logged from the input stream instead.
+ * slider (once a drag settles). Holds and sticks are logged from the input
+ * stream instead.
  */
 export function controlEvents(prev: ConfigMessage, next: ConfigMessage): EventDraft[] {
   const out: EventDraft[] = [];
   for (const after of next.controls) {
-    if (after.type === 'button') continue;
+    if (after.type === 'button' || after.type === 'joystick' || (after.type === 'slider' && after.live)) continue;
     const before = prev.controls.find(candidate => candidate.id === after.id);
-    if (!before || before.type !== after.type || before.value === after.value) continue;
+    if (!before || before.type !== after.type || sameValue(before.value, after.value)) continue;
     const kind = kindForAction(after.action);
     if (after.type === 'toggle') out.push({ kind, message: `${after.label} ${after.value ? 'on' : 'off'}`, tone: after.action === 'safety.estop' && after.value ? 'fail' : 'normal' });
     else if (after.type === 'select') out.push({ kind, message: `${after.label}: ${valueText(after)}`, tone: 'normal' });
@@ -145,20 +150,23 @@ export function rosterEvents(prev: PhoneInfo[], next: PhoneInfo[]): EventDraft[]
 }
 
 const via = (input: InputMessage) => input.source === 'mirror' ? ' (desktop mirror)' : '';
+const byGateway = (input: InputMessage) => `by the gateway${input.reason ? ` (${input.reason})` : ''}`;
 /**
  * How one input reads in a phone's recent inputs: "pressed", "released by the
- * gateway (hold not renewed)", "→ Right arm".
+ * gateway (hold not renewed)", "→ Right arm", "→ forward +0.42, left −0.10 (live)".
  */
 export function inputText(input: InputMessage, control?: UiControl): string {
   if (control?.type === 'button') {
-    if (control.hold && input.value === false) return input.source === 'gateway' ? `released by the gateway${input.reason ? ` (${input.reason})` : ''}` : `released${via(input)}`;
+    if (control.hold && input.value === false) return input.source === 'gateway' ? `released ${byGateway(input)}` : `released${via(input)}`;
     return `pressed${typeof input.value === 'string' ? ` (${input.value})` : ''}${via(input)}`;
   }
   if (input.value === undefined) return `sent${via(input)}`;
+  const drag = input.source === 'gateway' ? `, ended ${byGateway(input)}` : input.live ? ' (live)' : '';
   if (control?.type === 'toggle' && typeof input.value === 'boolean') return `${input.value ? 'on' : 'off'}${via(input)}`;
-  if (control?.type === 'select') return `→ ${control.options.find(option => option.value === input.value)?.label ?? formatPrimitive(input.value)}${via(input)}`;
-  if (control?.type === 'slider' && typeof input.value === 'number') return `→ ${input.value.toFixed(decimals(control.step))}${control.unit ?? ''}${via(input)}`;
-  return `${formatPrimitive(input.value)}${via(input)}`;
+  if (control?.type === 'select') return `→ ${control.options.find(option => option.value === input.value)?.label ?? formatValue(input.value)}${via(input)}`;
+  if (control?.type === 'slider' && typeof input.value === 'number') return `→ ${input.value.toFixed(decimals(control.step))}${control.unit ?? ''}${drag}${via(input)}`;
+  if (control?.type === 'joystick' && isStickValue(input.value)) return `→ ${stickText(input.value)}${drag}${via(input)}`;
+  return `${formatValue(input.value)}${via(input)}`;
 }
 
 /**
@@ -166,10 +174,13 @@ export function inputText(input: InputMessage, control?: UiControl): string {
  * and neither does a second press of a hold already pressed (`wasHeld`), nor
  * the release of a hold that had already ended (the phone letting go after
  * the gateway released it for missed renewals).
+ * A stick logs when it is first pushed and when it is let go (`wasLive` says a
+ * drag was under way); the samples in between do not. A slider or stick whose
+ * samples the gateway stopped hearing is logged as such.
  * Toggles, selects and sliders are logged from the phone's config when the
  * value changes, and calibration buttons from the calibration progress.
  */
-export function inputDraft(input: InputMessage, control: UiControl | undefined, wasHeld: boolean): EventDraft | undefined {
+export function inputDraft(input: InputMessage, control: UiControl | undefined, wasHeld: boolean, wasLive = false): EventDraft | undefined {
   if (input.renew) return undefined;
   const kind: EventKind = input.action.startsWith('safety.') ? 'safety' : 'input';
   const base = { kind, tone: 'normal' as const, phoneId: input.phoneId };
@@ -179,9 +190,14 @@ export function inputDraft(input: InputMessage, control: UiControl | undefined, 
     if (!control.hold && control.action.startsWith('calibration.')) return undefined;
     return { ...base, message: `${control.label} ${inputText(input, control)}` };
   }
+  if ((control?.type === 'slider' || control?.type === 'joystick') && input.source === 'gateway') return wasLive ? { ...base, message: `${control.label} let go ${byGateway(input)}` } : undefined;
+  if (control?.type === 'joystick') {
+    if (input.live) return wasLive ? undefined : { ...base, message: `${control.label} pushed${via(input)}` };
+    return wasLive ? { ...base, message: `${control.label} let go${via(input)}` } : undefined;
+  }
   if (control) return undefined;
   // An action the layout does not declare, such as a custom screen's own button.
-  return { ...base, kind: 'input', message: `${input.action}${input.value === undefined ? '' : `: ${formatPrimitive(input.value)}`}${via(input)}`, key: `input:${input.controlId}`, settleMs: typeof input.value === 'number' ? 600 : undefined };
+  return { ...base, kind: 'input', message: `${input.action}${input.value === undefined ? '' : `: ${formatValue(input.value)}`}${via(input)}`, key: `input:${input.controlId}`, settleMs: typeof input.value === 'number' || input.live ? 600 : undefined };
 }
 
 /** Whether a phone is streaming, from its latest pose and how long ago it arrived. */

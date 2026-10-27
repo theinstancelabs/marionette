@@ -1,9 +1,10 @@
-import { defaultConfig, normalizeQuaternion, phoneColor, type ConfigMessage, type PhoneInfo, type PosePacket } from '@marionette/protocol';
+import { defaultConfig, normalizeQuaternion, phoneColor, type ConfigMessage, type PhoneInfo, type PosePacket, type StickValue } from '@marionette/protocol';
 
 /**
  * Two simulated phones for the connect page's "simulate" link: Phone 1 on the
  * left arm and Phone 2 on the right, each with its own motion and a hold it
- * presses now and then. Nothing here reaches a gateway or a robot.
+ * presses now and then. Phone 1 also drives the base with its stick now and
+ * then. Nothing here reaches a gateway or a robot.
  */
 export const SIM_PHONES = [
   { id: 'phone-1', name: 'Phone 1', arm: 'left', hold: { control: 'deadman', start: 2, period: 9, length: 3.5 } },
@@ -29,6 +30,16 @@ export function simulatedConfig(index: number, roster: PhoneInfo[]): ConfigMessa
 export function simulatedHolds(index: number, t: number): string[] {
   const { hold } = SIM_PHONES[index]; if (t < hold.start) return [];
   return (t - hold.start) % hold.period < hold.length ? [hold.control] : [];
+}
+
+/** Where simulated phone `index` is pushing its drive stick `t` seconds in, or undefined while it is let go. */
+export function simulatedStick(index: number, t: number): StickValue | undefined {
+  const start = 6, period = 12, length = 4;
+  if (index !== 0 || t < start || (t - start) % period >= length) return undefined;
+  // Ease forward, sweep left and right, then ease off; never longer than 1.
+  const k = (t - start) % period / length; const push = Math.sin(Math.PI * k) * 0.85;
+  const round = (n: number) => Math.trunc(n * 100) / 100 || 0;
+  return { x: round(push * Math.cos(Math.sin(k * 2 * Math.PI) * 0.9)), y: round(push * Math.sin(Math.sin(k * 2 * Math.PI) * 0.9)) };
 }
 
 const clock = () => typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() / 1000 : Date.now() / 1000;

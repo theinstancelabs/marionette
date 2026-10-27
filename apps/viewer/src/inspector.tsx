@@ -1,5 +1,5 @@
 import React from 'react';
-import { CALIBRATION_STEPS, CALIBRATION_STEP_TEXT, CHECK_EXPECTED_AXIS, CHECK_MOVE_TEXT, MIN_CALIBRATION_STEP_M, describeCheckResult, dominantAxis, metersToMillimeters, type ConfigMessage, type UiControl, type Vector3 } from '@marionette/protocol';
+import { CALIBRATION_STEPS, CALIBRATION_STEP_TEXT, CHECK_EXPECTED_AXIS, CHECK_MOVE_TEXT, MIN_CALIBRATION_STEP_M, describeCheckResult, dominantAxis, isLiveControl, isStickValue, metersToMillimeters, type ConfigMessage, type StickValue, type UiControl, type Vector3 } from '@marionette/protocol';
 import { inputText, knownStep, valueText } from './events';
 import { AXIS_WORD, axisText, recentMotion, signed, stepProgressMm, tiltDegrees, trackingValue } from './motion';
 import { stopOn, type Phone } from './phones';
@@ -138,8 +138,22 @@ function CalibrationSection({ config, live, selected, simulated }: { config?: Co
   </section>;
 }
 
-/** A control's current value for this phone, in words, and how to color it. */
+/** Where a stick is pushed, seen from above: up the glyph is forward, left is left. */
+function StickGlyph({ value, live }: { value: StickValue; live: boolean }) {
+  return <svg className={`stick-glyph ${live ? 'live' : ''}`} viewBox="-12 -12 24 24" aria-hidden="true">
+    <circle r="10.5" className="rim" /><path d="M0 -10.5V10.5M-10.5 0H10.5" className="cross" />
+    {(value.x || value.y) ? <line x2={-value.y * 7.5} y2={-value.x * 7.5} className="vec" /> : null}
+    <circle cx={-value.y * 7.5} cy={-value.x * 7.5} r="3" className="knob" />
+  </svg>;
+}
+
+/** A control's current value for this phone, in words, and how to color it. While a slider or stick is dragged, its newest live sample. */
 function controlState(control: UiControl, live: PhoneLive | undefined, now: number): { text: string; tone?: string } {
+  if (isLiveControl(control)) {
+    const dragged = control.live ? live?.dragging.get(control.id) : undefined;
+    const current = { ...control, value: dragged ?? control.value } as UiControl;
+    return { text: valueText(current) ?? '', tone: control.live ? 'live' : undefined };
+  }
   if (control.type === 'button') {
     if (control.hold) return control.held ? { text: 'held', tone: 'live' } : { text: 'not held', tone: 'muted' };
     const last = [...live?.inputs ?? []].reverse().find(record => record.input.controlId === control.id);
@@ -161,7 +175,8 @@ function ControlsSection({ config, live, selected, now }: { config?: ConfigMessa
       : !controls.length ? <p className="empty">This phone's screen declares no controls.</p>
       : <dl className="kv controls">{controls.map(control => {
           const state = controlState(control, live, now);
-          return <div key={control.id}><dt>{control.label}</dt><dd className={state.tone}>{state.text}</dd></div>;
+          const stick = control.type === 'joystick' ? (control.live ? live?.dragging.get(control.id) : undefined) ?? control.value : undefined;
+          return <div key={control.id}><dt>{control.label}</dt><dd className={state.tone}>{isStickValue(stick) && <StickGlyph value={stick} live={isLiveControl(control) && !!control.live} />}{state.text}</dd></div>;
         })}</dl>}
   </section>;
 }
@@ -169,7 +184,7 @@ function ControlsSection({ config, live, selected, now }: { config?: ConfigMessa
 function InputsSection({ config, live, selected }: { config?: ConfigMessage; live?: PhoneLive; selected: boolean }) {
   const records = (live?.inputs ?? []).slice(-SHOWN_INPUTS).reverse();
   return <section id="inspector-inputs" className="section">
-    <Head title="Recent inputs" note="repeats of a hold left out" selected={selected} />
+    <Head title="Recent inputs" note="repeats left out, a drag shown once" selected={selected} />
     {!records.length ? <p className="empty">No inputs yet.</p>
       : <ol className="inputs">{records.map(({ id, at, input }) => {
           const control = config?.controls.find(candidate => candidate.id === input.controlId);

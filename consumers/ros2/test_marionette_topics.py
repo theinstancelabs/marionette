@@ -78,6 +78,25 @@ class TopicsTest(unittest.TestCase):
         self.assertEqual([item.topic for item in topics.handle(ROSTER)], ["/marionette/phones"])
         self.assertEqual(topics.handle(pose("phone-1", 2))[0].payload["state"], "normal")
 
+    def test_streams_dragged_values_and_ends_them_when_the_gateway_is_lost(self):
+        topics = Topics()
+        topics.handle(ROSTER)
+        sample = topics.handle({"type": "input", "phoneId": "phone-1", "controlId": "drive", "action": "base.drive", "value": {"x": 0.5, "y": -0.2}, "live": True, "source": "phone", "receivedAt": 9})
+        self.assertEqual((sample[0].topic, sample[0].payload["value"], sample[0].payload["live"]), ("/marionette/phone_1/buttons", {"x": 0.5, "y": -0.2}, True))
+        final = topics.handle({"type": "input", "phoneId": "phone-1", "controlId": "drive", "action": "base.drive", "value": {"x": 0, "y": 0}, "source": "phone", "receivedAt": 10})
+        self.assertNotIn("live", final[0].payload)
+        config = {"type": "config", "phone": ROSTER["phones"][0], "phones": ROSTER["phones"], "calibration": {"status": "uncalibrated", "epoch": 0},
+                  "controls": [{"id": "drive", "type": "joystick", "action": "base.drive", "value": {"x": 0.5, "y": -0.2}, "live": True}, {"id": "speed-limit", "type": "slider", "action": "base.speedLimit", "value": 70, "live": True},
+                               {"id": "estop", "type": "toggle", "action": "safety.estop", "value": False}]}
+        [state] = topics.handle(config)
+        self.assertEqual(state.payload["controls"], [{"control": "drive", "action": "base.drive", "value": {"x": 0.5, "y": -0.2}, "live": True}, {"control": "speed-limit", "action": "base.speedLimit", "value": 70, "live": True},
+                                                     {"control": "estop", "action": "safety.estop", "value": False}])
+        lost = topics.gateway_lost()
+        ends = [item.payload for item in lost if item.topic.endswith("/buttons")]
+        self.assertEqual([(end["control"], end["value"], end["source"]) for end in ends], [("drive", {"x": 0, "y": 0}, "bridge"), ("speed-limit", 70, "bridge")])
+        after = next(item for item in lost if item.topic.endswith("/state")).payload["controls"]
+        self.assertEqual(after[:2], [{"control": "drive", "action": "base.drive", "value": {"x": 0, "y": 0}, "live": False}, {"control": "speed-limit", "action": "base.speedLimit", "value": 70, "live": False}])
+
     def test_ignores_messages_that_are_not_objects(self):
         self.assertEqual(Topics().handle(["config"]), [])
         self.assertEqual(Topics().handle("pose"), [])

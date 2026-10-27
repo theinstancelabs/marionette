@@ -1,13 +1,13 @@
 # Marionette
 
-Marionette turns iPhones into teleoperation inputs. Each phone streams its ARKit pose and its button presses to a gateway, which publishes both, tagged with the phone they came from, to whatever consumes them: a ROS 2 bridge, a robot controller, the viewer. Marionette is only the relay. It keeps each phone's control values and runs the calibration that sets each phone's axes, and decides nothing else: stopping, scaling, which phone drives which arm and every safety check belong to the consumer. Several phones can connect at once, for example one in each hand driving one arm each.
+Marionette turns iPhones into teleoperation inputs. Each phone streams its ARKit pose and its inputs (button presses, and sliders and a drive stick that stream live while dragged) to a gateway, which publishes both, tagged with the phone they came from, to whatever consumes them: a ROS 2 bridge, a robot controller, the viewer. Marionette is only the relay. It keeps each phone's control values and runs the calibration that sets each phone's axes, and decides nothing else: stopping, scaling, which phone drives which arm and every safety check belong to the consumer. Several phones can connect at once, for example one in each hand driving one arm each.
 
 The repository contains:
 
 - `apps/mobile`: Expo + React Native + TypeScript iPhone app. It opens on a connect page (type the gateway's IP; recent addresses are remembered) and then shows the gateway's HTML screen full screen: every control, calibration, the camera return and Stop live in that page. The native `@marionette/arkit` Expo module streams ARKit world transforms at the camera frame rate. On the simulator (or a build without the native module) it emits a `synthetic`, `limited` bring-up stream so the transport and controls can still be exercised; it is marked `synthetic` and never calibrates. A real ARKit failure, such as denied camera access, is reported instead of falling back.
 - `apps/backend`: small Express/WebSocket gateway. It names each phone, converts its poses into its operator frame, relays every pose and press to consoles, serves the HTML screen and the control layout, runs per-phone calibration, and routes camera streams (three simulated ones by default).
-- `apps/viewer`: Vite + React + Three.js desktop console. It opens on the same connect page, then shows a Rerun-style console of every phone in its own color: streams you can show or hide, a 3D/Top/Side view, position plots, the cameras, an inspector per phone, and a timeline with an event log. It only watches. A pair of simulated phones is available from the connect page for trying the UI without iPhones.
-- `consumers/ros2`: a ROS 2 bridge that publishes each phone's pose and button presses on topics.
+- `apps/viewer`: Vite + React + Three.js desktop console. It opens on the same connect page, then shows a Rerun-style console of every phone in its own color: streams you can show or hide, a 3D/Top/Side view, position plots, the cameras, an inspector per phone (control values follow sliders and sticks live while they are dragged), and a timeline with an event log. It only watches. A pair of simulated phones is available from the connect page for trying the UI without iPhones.
+- `consumers/ros2`: a ROS 2 bridge that publishes each phone's pose and inputs (including the stick's live samples) on topics.
 
 ## Run the diagnostic loop
 
@@ -48,7 +48,7 @@ The iOS permission string and ARKit module are registered by `app.plugin.js` and
 
 ## Protocol
 
-`packages/protocol/src/index.ts` is the single source of truth. Pose packets contain `version`, `sessionId`, `seq`, monotonic timestamp, translation, quaternion, covariance, `trackingState`, calibration version, heartbeat and (on everything the gateway forwards) `phoneId`. The gateway rejects unknown versions, malformed values, and non-monotonic sequence numbers within a session; a new phone session may restart at sequence zero. Controls are declarative (`button`, `toggle`, `select`, `slider`, with `hold: true` for press-and-hold buttons), so a layout can change from the gateway or the screen without a new app binary. The app drops individual controls it cannot render instead of rejecting a newer layout. Every gateway reply carries `values.accepted` (true or false).
+`packages/protocol/src/index.ts` is the single source of truth. Pose packets contain `version`, `sessionId`, `seq`, monotonic timestamp, translation, quaternion, covariance, `trackingState`, calibration version, heartbeat and (on everything the gateway forwards) `phoneId`. The gateway rejects unknown versions, malformed values, and non-monotonic sequence numbers within a session; a new phone session may restart at sequence zero. Controls are declarative (`button`, `toggle`, `select`, `slider`, `joystick`, with `hold: true` for press-and-hold buttons), so a layout can change from the gateway or the screen without a new app binary. The app drops individual controls it cannot render instead of rejecting a newer layout. Every gateway reply carries `values.accepted` (true or false).
 
 ### Frames
 
@@ -60,7 +60,7 @@ The viewer labels each axis and has **3D**, **Top** (forward is screen-up) and *
 
 Every phone says `hello` with a device id the app keeps, and the gateway names it in connection order: **Phone 1** (amber `#c98200`), **Phone 2** (orchid `#b04fc4`), then graphite for any more, which are told apart by name. The id (`phone-1`), name and color stay with that device for the gateway's lifetime, so a phone that drops off Wi-Fi and reconnects comes back as itself, with its control values (Stop stays on) but uncalibrated, because a new connection is a new ARKit session; a second connection from the same phone replaces the first. An older app that sends no hello still works, as a phone that leaves the roster when it disconnects. Each phone shows its name and color in its status strip and along the top edge of its screen, matching the viewer.
 
-Each phone has its own pose stream, calibration, control values (arm, cameras, scale, Stop, …) and held buttons. Nothing is shared and nothing is arbitrated: both phones may pick the same arm and hold their deadman at once, and one phone never blocks the other. Phones only receive their own config, replies and camera streams; consoles receive everything.
+Each phone has its own pose stream, calibration, control values (arm, cameras, scale, Stop, …), held buttons and dragged sliders and sticks. Nothing is shared and nothing is arbitrated: both phones may pick the same arm and hold their deadman at once, and one phone never blocks the other. Phones only receive their own config, replies and camera streams; consoles receive everything.
 
 ### Consuming Marionette
 
@@ -69,13 +69,19 @@ A consumer connects to `ws://<gateway>:8787/ws`, sends `{"type":"hello","version
 | Message | What it is |
 |---|---|
 | `config` without `phone` | The control layout, camera streams and views, and the roster in `phones` (`{id, name, color, connected, sessionId}`). Sent on connect and whenever a phone joins or leaves. |
-| `config` with `phone` | One phone's state: whether it is connected, its control values, `held: true` on each hold button it is holding, and its calibration. Sent on connect, whenever it changes and whenever the roster does. |
+| `config` with `phone` | One phone's state: whether it is connected, its control values, `held: true` on each hold button it is holding, `live: true` on each slider or stick being dragged, and its calibration. Sent on connect, whenever it changes and whenever the roster does; during a drag only when it starts and ends (the samples are in `input`). |
 | `pose` | Each phone's pose at the ARKit frame rate, tagged `phoneId`, in that phone's operator frame. When a phone's stream stops (watchdog, 1.5 s) or it disconnects, one pose with `heartbeat: false` and `trackingState: 'unavailable'`. |
-| `input` | The button stream: every action a phone sends, verbatim, tagged `phoneId`, including the 200 ms repeats of a held button (`renew: true`) and actions no control declares. `source` is `phone`, `mirror` (the desktop `/screen` mirror acting as that phone) or `gateway`, which marks a release the gateway inferred, with a `reason`: the hold stopped being repeated for 600 ms (`renewals stopped`, `MARIONETTE_HOLD_TIMEOUT_MS`), its phone or mirror went away (`phone disconnected`, `mirror disconnected`, `replaced by a newer connection`, `mirror moved to another phone`), or a saved screen removed the button (`screen changed`). A repeat never restarts a hold the gateway has ended, so a consumer that follows the gateway's releases should do the same. |
+| `input` | The input stream: every action a phone sends, verbatim, tagged `phoneId`, including the 200 ms repeats of a held button (`renew: true`), every live sample of a slider or stick being dragged (`live: true`, see [Live values](#live-values-sliders-and-sticks)) and actions no control declares. `source` is `phone`, `mirror` (the desktop `/screen` mirror acting as that phone) or `gateway`, which marks a release or end of drag the gateway inferred, with a `reason`: the hold stopped being repeated for 600 ms or the drag's samples for 400 ms (`renewals stopped`, `samples stopped`; `MARIONETTE_HOLD_TIMEOUT_MS`, `MARIONETTE_STREAM_TIMEOUT_MS`), its phone or mirror went away (`phone disconnected`, `mirror disconnected`, `replaced by a newer connection`, `mirror moved to another phone`), or a saved screen removed the control (`screen changed`). A repeat never restarts a hold or drag the gateway has ended, so a consumer that follows the gateway's releases should do the same. |
 | `status` | Replies, tagged `phoneId` when they concern one phone (calibration progress and refusals). |
 | `camera_frame` | Every camera stream, unless the hello said `"cameras":false`. |
 
-Consoles only watch: an action from a console is refused. `GET /api/state` returns the same picture as JSON (`phones[]` with each phone's config and latest pose). In the default layout Stop (`safety.estop`) is a per-phone toggle, `teleop.deadman` ("Hold to move") and `gripper.hold` are holds, and `arm.select`, `camera.view`, `lift.toggle` and `teleop.translationScale` are values; all of them are signals for the consumer to interpret.
+Consoles only watch: an action from a console is refused. `GET /api/state` returns the same picture as JSON (`phones[]` with each phone's config and latest pose). In the default layout Stop (`safety.estop`) is a per-phone toggle, `teleop.deadman` ("Hold to move"), `gripper.hold`, `base.turnLeft` and `base.turnRight` are holds, `base.drive` is a stick, and `arm.select`, `camera.view`, `lift.toggle`, `teleop.translationScale` and `base.speedLimit` are values; all of them are signals for the consumer to interpret.
+
+### Live values: sliders and sticks
+
+A slider or stick streams while the operator drags it, so a consumer can follow it in real time (a fast linear axis, a joint, a base). Each new value goes out as an `input` with `live: true`, at most once per screen frame (about 60 Hz on the phone) and only when it changed. While the finger rests on it, the app repeats the latest value every 50 ms (`live` and `renew`), so a consumer sees at least 20 samples a second for as long as it is touched. Letting go sends the final value without `live`. A stick's value is `{"x": …, "y": …}` in operator axes: `x` is up the pad (forward), `y` is to the left, each from −1 to 1 and never more than 1 together, and it returns to `{"x": 0, "y": 0}` when let go.
+
+The gateway keeps the latest sample as the phone's value. It republishes the phone's config only when a drag starts and ends (`live: true`, then `false`), not for every sample. If the samples stop for 400 ms (Wi-Fi drops, the app freezes) it ends the drag itself, with an `input` from `source: gateway`, `reason: samples stopped`: a stick goes back to rest, and a slider keeps its last value. If the phone is still touching it, its samples are relayed but the gateway keeps the drag ended until the operator lets go, the same rule as a hold. The phone shows **Dropped** in red until then.
 
 **ROS 2.** `consumers/ros2/marionette_ros2_bridge.py` is a ready consumer:
 
@@ -88,11 +94,11 @@ python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost --dry-run  
 For each phone it publishes:
 
 - `/marionette/phone_1/pose`: `geometry_msgs/PoseStamped`, frame `phone_1/operator`, only while the stream is live.
-- `/marionette/phone_1/buttons`: `std_msgs/String`, one JSON object per input event (`control`, `action`, `value`, `source`, `repeat` for the 200 ms repeats, `reason` for inferred releases).
+- `/marionette/phone_1/buttons`: `std_msgs/String`, one JSON object per input event (`control`, `action`, `value`, `source`, `live` for samples of a drag, `repeat` for repeats, `reason` for inferred releases). The stick's samples arrive here, for example `{"control":"drive","action":"base.drive","value":{"x":0.5,"y":-0.2},"live":true,…}`.
 - `/marionette/phone_1/tracking`: `std_msgs/String`, latched, on change (`normal`, `limited`, …, `unavailable`).
-- `/marionette/phone_1/state`: `std_msgs/String`, latched, on change: whether the phone is connected, every control value (Stop included) and which hold buttons it is holding, and its calibration (`status`, `epoch`, `mode`, `validated`; re-anchor when `epoch` changes). A node that starts late learns from this that Stop is already on.
+- `/marionette/phone_1/state`: `std_msgs/String`, latched, on change: whether the phone is connected, every control value (Stop included), which hold buttons it is holding and which sliders and sticks are being dragged (`live`), and its calibration (`status`, `epoch`, `mode`, `validated`; re-anchor when `epoch` changes). A node that starts late learns from this that Stop is already on.
 
-It also publishes the roster on `/marionette/phones` (latched). Topic names come from the phones' names. Every publisher is reliable (keep last), so it matches both the default reliable subscriptions and best-effort ones; latched topics are transient-local. The bridge reconnects with backoff. While the gateway is unreachable it does not leave the last values standing: each phone's tracking goes `unavailable`, every phone reads as disconnected, and each hold the gateway had reported gets a release on `buttons` with `"source":"bridge"`.
+It also publishes the roster on `/marionette/phones` (latched). Topic names come from the phones' names. Every publisher is reliable (keep last), so it matches both the default reliable subscriptions and best-effort ones; latched topics are transient-local. The bridge reconnects with backoff. While the gateway is unreachable it does not leave the last values standing: each phone's tracking goes `unavailable`, every phone reads as disconnected, and each hold or drag the gateway had reported gets a release on `buttons` with `"source":"bridge"` (a stick back at rest).
 
 ### Calibration frame
 
@@ -112,7 +118,7 @@ The gateway can carry any number of camera streams at once. A camera process (on
 
 ## The phone screen is HTML
 
-The gateway sends a `html_config` message beside the `config` message, and the iPhone shows that document full screen in `react-native-webview`. There are no native controls behind it: the default screen (`apps/backend/src/sample-controls.html`) has Stop (this phone's toggle, with a banner and Reset while it is on), the hold-to-move pad, a grip, live pose, the cameras, every other control as a row, and full-screen guided calibration and optional validation. Hold buttons show what the gateway knows: **Holding…** until the gateway reports the hold, **Holding** once it does, and **Hold dropped** if the gateway lets go while the button is still pressed (its repeats stopped arriving), which needs a fresh press. It finds controls in the config by action rather than by id, so a different layout still gets a working screen; anything it doesn't know is drawn as a generic button, switch, choice or slider. The point is that the screen is yours: make it send exactly the buttons your consumer needs. HTML is trusted developer content: keep the gateway on a private network; the document is not sanitized. The protocol validates the message schema, bridge version, and a 512 KB UTF-8 size limit. The WebView cannot navigate away from the supplied document; http(s) links open in Safari.
+The gateway sends a `html_config` message beside the `config` message, and the iPhone shows that document full screen in `react-native-webview`. There are no native controls behind it: the default screen (`apps/backend/src/sample-controls.html`) has Stop (this phone's toggle, with a banner and Reset while it is on), the hold-to-move pad, a grip, live pose, the cameras, **Drive base** (the stick between Turn left and Turn right, what it is sending, and the speed limit), every other control as a row, and full-screen guided calibration and optional validation. Hold buttons show what the gateway knows: **Holding…** until the gateway reports the hold, **Holding** once it does, and **Hold dropped** if the gateway lets go while the button is still pressed (its repeats stopped arriving), which needs a fresh press. The stick and sliders work the same way: blue once the gateway hears them live, red (**Dropped**) if it stops hearing them mid-drag. The stick follows the finger anywhere on the pad and springs back when let go; on the desktop mirror the arrow keys push it too. It finds controls in the config by action rather than by id, so a different layout still gets a working screen; anything it doesn't know is drawn as a generic button, switch, choice, slider or stick. The point is that the screen is yours: make it send exactly the buttons your consumer needs. HTML is trusted developer content: keep the gateway on a private network; the document is not sanitized. The protocol validates the message schema, bridge version, and a 512 KB UTF-8 size limit. The WebView cannot navigate away from the supplied document; http(s) links open in Safari.
 
 To make your own screen, copy the default document and point the gateway at it (relative paths resolve from the directory you run the command in). The gateway pushes the file to every phone again whenever you save it:
 
@@ -144,6 +150,14 @@ Marionette.sendAction('deadman', 'teleop.deadman', true);   // press; send false
 Marionette.sendAction('sensitivity', 'teleop.translationScale', 1.5);
 Marionette.sendAction('horn', 'horn.honk');                  // undeclared actions are relayed too
 
+// A value being dragged: update() sends the newest value at most once a frame, only when it changed,
+// marked live; end() sends the final value. The app repeats the latest sample while the finger rests.
+const drive = Marionette.stream('drive', 'base.drive');
+drive.update({ x: 0.5, y: -0.2 });   // half forward, a little right
+drive.end({ x: 0, y: 0 });           // let go: back to rest
+const speed = Marionette.stream('speed-limit', 'base.speedLimit');
+speed.update(62); speed.end();       // end() with no value sends the last one
+
 const unsubscribe = Marionette.on('pose', pose => renderPose(pose));          // operator frame, ~15 Hz
 Marionette.on('config', config => renderConfig(config));                      // config.phone is this phone
 Marionette.on('status', status => renderStatus(status.message));
@@ -154,7 +168,7 @@ Marionette.latest('config');   // the last config, or undefined
 Marionette.disconnect();       // back to the connect page
 ```
 
-`on` calls a new listener straight away with the last value of that type, so a page that subscribes late still starts from the current state. `sendAction` accepts a control id, action name, and optional string/number/boolean value. For a control the config marks `hold: true`, send `true` on press and `false` on release; the app repeats the press while it is held and releases it if the document reloads or the app leaves the foreground. A calibration capture names the step the gateway is waiting for (`config.calibration.step`) and a validation move names `config.calibration.check.step`. The app converts bridge actions into the version 1 WebSocket `action` message.
+`on` calls a new listener straight away with the last value of that type, so a page that subscribes late still starts from the current state. `sendAction` accepts a control id, action name, an optional string, number, boolean or stick (`{x, y}`) value, and `{ live: true }` for a sample of a value being dragged (`stream` does this for you). For a control the config marks `hold: true`, send `true` on press and `false` on release; the app repeats the press while it is held and releases it if the document reloads or the app leaves the foreground. A drag is ended the same way: a stick at rest, a slider at its last value. A calibration capture names the step the gateway is waiting for (`config.calibration.step`) and a validation move names `config.calibration.check.step`. The app converts bridge actions into the version 1 WebSocket `action` message.
 
 ## Developing without iPhones
 
@@ -164,6 +178,7 @@ Marionette.disconnect();       // back to the connect page
 DEVICE=a ARM=left npx tsx tools/phone-sim.mts 8787 wander          # Phone 1, left arm
 DEVICE=b ARM=right PHASE=7 npx tsx tools/phone-sim.mts 8787 calibrate   # Phone 2: full calibration and validation, then wander
 npx tsx tools/act.mts 8787 phone-2 estop safety.estop true          # turn Phone 2's Stop on
+npx tsx tools/act.mts 8787 phone-1 drive base.drive '{"x":0.5,"y":0}' 2000   # push Phone 1's stick half forward for 2 s
 ```
 
 For integrating a robot (what the streams are, where things run, and a recommended consumer for a bimanual mobile manipulator), see [docs/INTEGRATION.md](docs/INTEGRATION.md).

@@ -65,6 +65,17 @@ describe('control changes', () => {
   it('keys slider changes so a drag settles into one line', () => {
     expect(controlEvents(base(), withValue(base(), 'sensitivity', 1.5))).toEqual([{ kind: 'settings', message: 'Translation scale: 1.5×', tone: 'normal', key: 'control:sensitivity', settleMs: 600 }]);
   });
+
+  it('logs a slider once its drag settles, and a stick never from configs', () => {
+    const live = (config: ConfigMessage, id: string, on: boolean) => ({ ...config, controls: config.controls.map(c => c.id === id ? { ...c, live: on } as UiControl : c) });
+    const dragging = live(withValue(base(), 'speed-limit', 62), 'speed-limit', true);
+    expect(controlEvents(base(), dragging)).toEqual([]);
+    expect(messages(controlEvents(dragging, live(withValue(base(), 'speed-limit', 80), 'speed-limit', false)))).toEqual(['Speed limit: 80%']);
+    const pushed = { ...base(), controls: base().controls.map(c => c.id === 'drive' ? { ...c, value: { x: 0.5, y: 0 }, live: true } as UiControl : c) };
+    expect(controlEvents(base(), pushed)).toEqual([]); expect(controlEvents(pushed, base())).toEqual([]);
+    // A config repeated for another reason (a roster change) carries equal but new stick objects: not a change.
+    expect(controlEvents(base(), base())).toEqual([]);
+  });
 });
 
 describe('roster', () => {
@@ -101,6 +112,24 @@ describe('inputs', () => {
     expect(inputDraft(input({ controlId: 'calibration', action: 'calibration.capture', value: 'flat' }), capture, false)).toBeUndefined();
     expect(inputDraft(input({ controlId: 'estop', action: 'safety.estop', value: true }), control('estop'), false)).toBeUndefined();
     expect(inputDraft(input({ controlId: 'open', action: 'gripper.open', value: 0.4 }), undefined, false)).toMatchObject({ kind: 'input', message: 'gripper.open: 0.4', key: 'input:open', settleMs: 600 });
+  });
+
+  it('logs a stick when it is pushed and let go, and a drag the gateway ended, but not the samples between', () => {
+    const drive = control('drive'), speed = control('speed-limit');
+    const sample = (over: Partial<InputMessage> = {}) => input({ controlId: 'drive', action: 'base.drive', value: { x: 0.4, y: -0.1 }, live: true, ...over });
+    expect(inputDraft(sample(), drive, false, false)?.message).toBe('Drive pushed');
+    expect(inputDraft(sample(), drive, false, true)).toBeUndefined();
+    expect(inputDraft(sample({ live: undefined, value: { x: 0, y: 0 } }), drive, false, true)?.message).toBe('Drive let go');
+    expect(inputDraft(sample({ live: undefined, value: { x: 0, y: 0 }, source: 'mirror' }), drive, false, true)?.message).toBe('Drive let go (desktop mirror)');
+    expect(inputDraft(sample({ live: undefined, value: { x: 0, y: 0 }, source: 'gateway', reason: 'samples stopped' }), drive, false, true)?.message).toBe('Drive let go by the gateway (samples stopped)');
+    // The phone letting go after the gateway ended its drag is not news.
+    expect(inputDraft(sample({ live: undefined, value: { x: 0, y: 0 } }), drive, false, false)).toBeUndefined();
+    expect(inputDraft(input({ controlId: 'speed-limit', action: 'base.speedLimit', value: 70, live: true }), speed, false, false)).toBeUndefined();
+    expect(inputDraft(input({ controlId: 'speed-limit', action: 'base.speedLimit', value: 70, source: 'gateway', reason: 'samples stopped' }), speed, false, true)?.message).toBe('Speed limit let go by the gateway (samples stopped)');
+    expect(inputText(sample(), drive)).toBe('→ forward +0.40, left −0.10 (live)');
+    expect(inputText(sample({ live: undefined, value: { x: 0, y: 0 }, source: 'gateway', reason: 'samples stopped' }), drive)).toBe('→ at rest, ended by the gateway (samples stopped)');
+    expect(inputText(input({ controlId: 'speed-limit', value: 70, live: true }), speed)).toBe('→ 70% (live)');
+    expect(inputDraft(input({ controlId: 'pan', action: 'camera.pan', value: { x: 0.2, y: 0 }, live: true }), undefined, false)).toMatchObject({ message: 'camera.pan: forward +0.20, left 0.00', key: 'input:pan', settleMs: 600 });
   });
 
   it('says what each input did, for the inspector', () => {

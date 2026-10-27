@@ -159,3 +159,56 @@ Mockup approved (viewer with two phones, the phones' identity chip and color rul
   - The rclpy bridge has never run under real ROS 2.
   - A device id restored from a backup clones a phone's identity.
   - On-device test with two real iPhones.
+
+## Round 6: live values and a drive stick (2026-10-27)
+User: the Translation scale slider only sends on release. Values should stream live while the operator drags, so a consumer can run a fast linear axis or a joint-space controller in real time. Build this continuous value sender as a building block, then use it for a virtual joystick that jogs the wheeled base: the "Drive base" card from the Almond Axol jogging page (stick with forward/back/left/right, speed limit slider, Turn left / Turn right), built into Marionette's default screen.
+
+Design (same shape as holds: Marionette relays and tracks liveness, the consumer decides):
+- **Wire:** an action may carry `live: true`, meaning "a sample of a value being dragged, more to come". Letting go sends the final value without it. While the finger rests, the host (app or `/screen` mirror) repeats the latest value every 50 ms marked `renew` (so a consumer sees at least 20 Hz while touched). Samples go out at most once per animation frame, only when the value changes.
+- **Stick values:** a new `joystick` control type whose value is `{x, y}`, each −1..1 in REP-103 terms (x forward, up the pad; y left), back to `{0, 0}` when released.
+- **Gateway:** relays every sample verbatim (`input` with `live`), keeps the latest as the phone's value, and publishes the phone's config only when a stream starts and ends (`live` flag on the control, like `held`), not per sample. It infers an end if samples stop for 400 ms (`MARIONETTE_STREAM_TIMEOUT_MS`) or the phone or mirror leaves: a `source: gateway` input with the stick's rest value (a slider keeps its last value) and a reason. A repeat never starts a stream. A touch the gateway dropped stays dropped until the operator lets go.
+- **Bridge building block:** `Marionette.stream(controlId, action)` returns `{ update(value), end(value) }`, with per-frame throttling and change detection; `sendAction(id, action, value, { live: true })` underneath.
+
+- [x] Protocol: `StickValue`, `ControlValue`, `joystick` control, `live` on action/input/bridge action and on slider/joystick in phone configs, validators, `Marionette.stream`, `streamEndValue`, `STREAM_RENEW_MS`; default controls `drive` (base.drive), `turn-left`/`turn-right` holds (base.turnLeft/base.turnRight), `speed-limit` slider (base.speedLimit).
+- [x] Gateway: stream tracking (start, extend, end, timeout, dropped-until-release, socket close, phone disconnect, layout change); publish on start and end only; tests.
+- [x] Phone screen: sliders stream live; Drive base section (stick between Turn left / Turn right, forward/left readout, speed limit); generic joystick row for any other stick; headline states for driving and a dropped stick.
+- [x] App + `/screen` mirror: forward `live`, repeat open streams every 50 ms, end them on background, reload and disconnect.
+- [x] Viewer: live slider and stick values in the inspector (a small stick glyph), stream start and end in the log, stick samples coalesced in recent inputs, simulated phones drive the stick.
+- [x] ROS bridge: `live` on `/buttons`, `live` in `/state`, bridge-inferred stream ends when the gateway is lost; tests.
+- [x] Docs: README and INTEGRATION (live values, the stick, base driving); `tools/act.mts` can stream a stick.
+- [x] Verify: unit tests, typecheck, lint; drive the stick and slider in `/screen` and watch the viewer and a dry-run ROS bridge; rebuild and install the app.
+
+## Review (round 6)
+- **Building block:**
+  - **Wire:** an action carries `live: true` for each sample of a value being dragged. The final sample has no `live`.
+  - **Repeats:** the host repeats the latest sample every 50 ms (`STREAM_RENEW_MS`) while the finger rests.
+  - **Page API:** `Marionette.stream(id, action)` (`update` / `end`) throttles to one sample per frame and sends only changes.
+  - **Gateway:** tracks liveness like holds. It publishes the config only on start and end (`live` on the control), and ends a silent drag after 400 ms (`MARIONETTE_STREAM_TIMEOUT_MS`, `reason: samples stopped`). A stick goes back to rest; a slider keeps its value. A repeat never starts a drag, and a dropped touch stays dropped until the operator lets go.
+  - **Stick values:** `joystick` controls carry `{x, y}` (REP-103: x forward, y left; |v| ≤ 1, truncated to 0.01 so a diagonal never exceeds 1).
+- **Screen:**
+  - Sliders stream live.
+  - **Drive base** section: the stick between tall Turn left / Turn right holds, a forward/left readout of what it sends, and the speed limit.
+  - Any other stick a screen declares gets a generic stick row.
+  - States: Sending… / Driving / Dropped in red, plus headline states. The arrow keys work on the desktop mirror.
+  - The pad position is captured at touch-down, so a layout shift can't change the command. The drive notes stay on one line so the stick doesn't move under the finger.
+- **App and mirror:** forward `live`, repeat open drags, and end them (a stick at rest) on background, reload or disconnect.
+- **Viewer:**
+  - The inspector shows live slider and stick values, with a stick glyph.
+  - The log has one line when a stick is pushed and one when it's let go, plus drags the gateway ended. A slider is logged once its drag settles.
+  - "Recent inputs" shows one entry per drag, and simulated Phone 1 drives its stick.
+- **ROS 2 bridge:** `live` on `/buttons` and in `/state`; bridge-inferred ends for drags when the gateway is lost.
+- **Tools:** `tools/act.mts` streams a stick (`'{"x":0.5,"y":0}' 2000`, `no` to stop repeats).
+- **Docs:** README (live values section, `Marionette.stream`) and INTEGRATION (stick samples, drive controls table, live-values contract, base-driving recipe, bring-up checks).
+- **Verification:**
+  - **Tests:** gateway 28, protocol 22, viewer 70, bridge 8. Typecheck, lint and the viewer build are clean.
+  - **Live (scratch gateway 18787, two scripted phones, `/screen` mirror):**
+    - A stick sweep reached consumers at about 33 Hz in correct axes, with 50 ms renews while resting and a final `{0,0}`; only two configs per drag.
+    - A 700 ms socket stall made the gateway infer an end about 430 ms after the stall began; the page showed Dropped, stayed dropped through renews, and recovered after letting go.
+    - The slider streamed every value.
+    - The viewer showed live values and logged push and let-go.
+    - The bridge dry-run published 268 live samples over 8 s.
+    - A custom screen's extra stick rendered as a generic row.
+- **Housekeeping:** `__pycache__` is now ignored and the committed `.pyc` files are untracked (staged, not committed).
+- **Deployed:** gateway 8787 restarted on the new code (no clients connected). Device build r10 installed on the iPhone.
+- **Follow-up (user):** the fixed graph-paper background behind the 3D view was distracting (it stayed put while the scene orbited). Removed it from `.space`; the scene's own floor grid remains and can be hidden with the grid toggle.
+- **Not done:** on-device feel of the stick (touch latency, Wi-Fi gaps on the real network); no reviewer subagent this round.

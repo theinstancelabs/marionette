@@ -45,8 +45,8 @@ Phones are named by the gateway in connection order ("Phone 1", "Phone 2", …),
 | `/marionette/phones` | `std_msgs/String` (latched) | Roster JSON: `{"phones":[{"id":"phone-1","name":"Phone 1","topic":"/marionette/phone_1","color":"#c98200","connected":true}, …]}` |
 | `/marionette/<phone>/pose` | `geometry_msgs/PoseStamped` | Pose in frame `<phone>/operator`; stamp is bridge receive time. Published only while the stream is live. |
 | `/marionette/<phone>/tracking` | `std_msgs/String` (latched) | `{"phone":"phone-1","state":"normal"}`. States are `normal`, `limited`, `initializing`, `relocalizing` and `unavailable`. It goes `unavailable` when the stream stops, the phone disconnects or the bridge loses the gateway. |
-| `/marionette/<phone>/buttons` | `std_msgs/String` | One JSON object per input event (see below). Repeats included. |
-| `/marionette/<phone>/state` | `std_msgs/String` (latched) | `{"phone","name","connected","controls":[{"control","action","value"}…, {"control","action","held"}…],"calibration":{"status","epoch","mode","validated"}}`, on change. A node that starts late learns current values here, for example that Stop is already on. |
+| `/marionette/<phone>/buttons` | `std_msgs/String` | One JSON object per input event (see below): presses, value changes, and every live sample of a slider or stick being dragged. Repeats included. |
+| `/marionette/<phone>/state` | `std_msgs/String` (latched) | `{"phone","name","connected","controls":[{"control","action","value"}…, {"control","action","held"}…],"calibration":{"status","epoch","mode","validated"}}`, on change. Sliders and sticks also carry `"live": true` while they are being dragged. A node that starts late learns current values here, for example that Stop is already on. |
 
 A `buttons` event looks like this:
 
@@ -54,13 +54,19 @@ A `buttons` event looks like this:
 {"phone":"phone-1","control":"deadman","action":"teleop.deadman","value":true,"repeat":true,"source":"phone","received_at_ms":1793079134142,"sent_at_ms":1793079134141}
 ```
 
+A sample of the drive stick being pushed looks like this. `x` is forward and `y` is left, each from −1 to 1:
+
+```json
+{"phone":"phone-1","control":"drive","action":"base.drive","value":{"x":0.5,"y":-0.2},"live":true,"source":"phone","received_at_ms":1793087775692,"sent_at_ms":1793087775690}
+```
+
 `source` is one of:
 - `phone`: the phone itself.
 - `mirror`: the desktop `/screen` mirror acting as that phone.
-- `gateway`: a release the gateway inferred because a held button stopped repeating, or its phone disconnected. `reason` says which.
-- `bridge`: the bridge lost the gateway and released every hold it knew about.
+- `gateway`: a release the gateway inferred because a held button stopped repeating, a drag's samples stopped (a stick comes back as `{"x":0,"y":0}`), or the phone disconnected. `reason` says which.
+- `bridge`: the bridge lost the gateway and released every hold and drag it knew about.
 
-`repeat: true` marks the 200 ms re-send of a held button. Typed message definitions would be a sensible follow-up; for now the JSON is the contract.
+`repeat: true` marks the 200 ms re-send of a held button, or the 50 ms re-send of a slider or stick the operator is touching but not moving. `live: true` marks a sample of a drag in progress (see [Live values](#live-values-sliders-and-sticks)). Typed message definitions would be a sensible follow-up; for now the JSON is the contract.
 
 The bridge has only been exercised in dry-run mode (it was written without a ROS install). Expect to verify it on the robot.
 
@@ -86,8 +92,8 @@ Add `"cameras": false` if you don't want camera frames. A console only listens; 
 ```
 
 **Phone config** (has `phone`): one phone's state. It is sent on connect, whenever that phone changes something, and on roster changes.
-- `controls[].value` holds that phone's current value for toggles, selects and sliders.
-- Hold buttons carry `held: true|false`.
+- `controls[].value` holds that phone's current value for toggles, selects, sliders and sticks.
+- Hold buttons carry `held: true|false`. Sliders and sticks carry `live: true|false`: whether they are being dragged. During a drag this config is sent only when the drag starts and ends; follow the samples in `input`.
 - `calibration` is `{status: "uncalibrated"|"capturing"|"captured", epoch, step?, reference?, check?}`.
 
 **Pose**, per phone at about 60 Hz:
@@ -111,7 +117,11 @@ Add `"cameras": false` if you don't want camera frames. A console only listens; 
 {"type":"input","version":1,"phoneId":"phone-2","sessionId":"iphone-x1","controlId":"estop","action":"safety.estop","value":true,"source":"phone","sentAt":1793079054968,"receivedAt":1793079054970}
 ```
 
-Every action a phone sends is forwarded verbatim, including actions no control declares. `renew: true` marks held-button repeats. `source`/`reason` are as above, minus `bridge`.
+Every action a phone sends is forwarded verbatim, including actions no control declares. `renew: true` marks repeats, `live: true` samples of a drag. `source`/`reason` are as above, minus `bridge`. A stick sample:
+
+```json
+{"type":"input","version":1,"phoneId":"phone-1","controlId":"drive","action":"base.drive","value":{"x":0.5,"y":-0.2},"live":true,"source":"phone","sentAt":1793087775690,"receivedAt":1793087775692}
+```
 
 **Status**: gateway replies, tagged `phoneId` when they concern one phone (mostly calibration progress), with `values.accepted` true or false.
 
@@ -141,7 +151,10 @@ The default phone screen sends these. Every value is per phone.
 | `arm` | `arm.select` | select `left` / `right` | Which arm this phone drives |
 | `cameras` | `camera.view` | select `head` / `arms` | Which streams the phone shows (handled by Marionette) |
 | `lift` | `lift.toggle` | toggle ("Include lift") | Whether vertical motion beyond the arm's reach goes to the lift |
-| `sensitivity` | `teleop.translationScale` | slider 0.1–4.0 | Translation scale for this phone |
+| `sensitivity` | `teleop.translationScale` | slider 0.1–4.0, live | Translation scale for this phone |
+| `drive` | `base.drive` | stick, live: `{x, y}`, x forward and y left, each −1..1, at rest `{0, 0}` | Base translation velocity, as a fraction of the speed limit |
+| `turn-left`, `turn-right` | `base.turnLeft`, `base.turnRight` | holds ("Turn left", "Turn right") | Rotate the base in place while held |
+| `speed-limit` | `base.speedLimit` | slider 0–100 %, live | The base's top speed, as a percentage of what you allow |
 | `calibration*`, `capture-origin`, `reset-origin` | `calibration.*` | buttons | Marionette's own calibration. Ignore them, or pause motion while a phone is calibrating (`calibration.status == "capturing"`) |
 
 Hold semantics:
@@ -150,6 +163,15 @@ Hold semantics:
 3. On release it sends `value:false`.
 
 If the repeats stop for 600 ms, or the phone drops, the gateway emits a `source:"gateway"` release. Don't rely on the release alone: also time out on your side if no repeat arrives for ~600 ms, and treat a lost pose stream (`heartbeat:false`) as a release.
+
+### Live values: sliders and sticks
+
+Sliders and the stick stream while they are dragged, so they can drive something in real time.
+1. Each new value is an input with `live: true`, at most once per phone screen frame (about 60 Hz) and only when it changed.
+2. While the finger rests, the phone repeats the latest value every 50 ms (`live` and `renew`). You get at least 20 samples a second for as long as it is touched.
+3. Letting go sends the final value without `live`. A stick lets go at `{"x":0,"y":0}`.
+
+If the samples stop for 400 ms, the gateway ends the drag itself (`source:"gateway"`, `reason:"samples stopped"`). The stick comes back at rest; a slider keeps its last value. A phone that is still touching it after that keeps sending samples, and they are relayed, but the gateway counts the drag as ended until the operator lets go. Do the same in your consumer, and also time out on your side: if no sample of a live stick arrives for about 250 ms, command zero.
 
 ## A recommended consumer for a bimanual wheeled humanoid with a lift
 
@@ -170,7 +192,13 @@ Build a single node that owns all decisions:
 
    On release, any gate failing, or a `calibrationVersion` or `sessionId` change: stop and drop the anchor. The operator re-presses to continue, and engaging never jumps the arm.
 4. **Lift.** When that phone's `lift.toggle` is on, give the lift the vertical component the arm can't reach. A simple way: if the arm's IK solution is near its vertical limit, move the lift by the remaining Z error at a capped speed. Alternatively, drive the lift from both phones' average Z while both deadmen are held. Pick one and document it on the phone screen.
-5. **Base.** The default screen has no base controls; add them (see the next section). Example: a custom screen sends `base.vx` and `base.wz` slider values while a "Drive" hold button is held. The consumer drives the base only while that hold is alive, and zeroes velocity on release, timeout or Stop.
+5. **Base.** The default screen's **Drive base** section has a stick (`base.drive`), Turn left and Turn right holds, and a speed limit slider; the stick is its own deadman. Each cycle, for the phone you let drive the base:
+   - `limit = base.speedLimit / 100` (that phone's value).
+   - While `base.drive` is live and its last sample is under ~250 ms old: `vx = v_max * limit * x`, `vy = v_max * limit * y` (a holonomic base; a differential one uses `vx` and ignores `y`, or turns with it).
+   - While `base.turnLeft` (or `turnRight`) is held with repeats arriving: `wz = +w_max * limit` (or `-w_max * limit`).
+   - Otherwise zero. Zero everything on Stop, the stick's final or gateway-inferred sample, a held button's release or timeout, and a phone disconnect.
+   - Ramp `vx`, `vy` and `wz` through your acceleration limits, so letting go decelerates rather than stops dead.
+   - If both phones push their sticks, pick a policy (first to push drives, or only the phone assigned to the base). Marionette won't pick.
 6. **Gripper.** `gripper.hold` closes the gripper while held, or toggles it on press; choose and say so on the screen.
 7. **Feedback.** The phones show tracking, Stop and holds by themselves. To show robot state on the phones (for example "arm at joint limit"), put it in the camera stream overlay for now. There is no consumer-to-phone message channel yet; add one to the gateway if needed.
 
@@ -191,7 +219,7 @@ The phone screen is an HTML page served by the gateway, and the app has no nativ
    ```
    If you declare `controls`, the list replaces the defaults. Include any defaults you still want, such as `teleop.deadman`, `safety.estop` and `arm.select`. Calibration actions work whatever ids you use.
 3. Run `MARIONETTE_HTML_FILE=config/humanoid.html npm --workspace @marionette/backend run start`. Saving the file pushes it to every phone. Use `http://<gateway>:8787/screen` to develop it in a desktop browser.
-4. Anything the page sends with `Marionette.sendAction(id, action, value)` reaches consumers as `input`, even if undeclared. Values must be a string, number or boolean. Send two actions rather than an object.
+4. Anything the page sends with `Marionette.sendAction(id, action, value)` reaches consumers as `input`, even if undeclared. A value is a string, number, boolean or stick `{x, y}`. For a value that changes while dragged, use `Marionette.stream(id, action)` (`update(value)` while dragging, `end(value)` on release); it sends live samples at most once per frame and the app repeats the latest while the finger rests. Declare a stick as `{ "id": "pan", "type": "joystick", "label": "Camera pan", "action": "camera.pan", "value": {"x": 0, "y": 0} }`; the default screen draws any stick it doesn't know as a generic stick row.
 
 ## Cameras
 
@@ -214,9 +242,9 @@ Aim for about 640×360 JPEG at 10–15 Hz per stream. Each frame must be under 2
 
 ## Bring-up checklist for the integration
 
-1. Run the gateway, then simulate two phones without iPhones (from the repo root): `DEVICE=a ARM=left npx tsx tools/phone-sim.mts 8787 wander` and `DEVICE=b ARM=right PHASE=7 npx tsx tools/phone-sim.mts 8787 wander`. They send the same hello, ARKit-style transforms and actions as the app (`calibrate` mode runs a full calibration first; `HOST=` points them at another machine). `npx tsx tools/act.mts 8787 phone-2 estop safety.estop true` presses a control as a phone, which is handy for testing your gates.
+1. Run the gateway, then simulate two phones without iPhones (from the repo root): `DEVICE=a ARM=left npx tsx tools/phone-sim.mts 8787 wander` and `DEVICE=b ARM=right PHASE=7 npx tsx tools/phone-sim.mts 8787 wander`. They send the same hello, ARKit-style transforms and actions as the app (`calibrate` mode runs a full calibration first; `HOST=` points them at another machine). `npx tsx tools/act.mts 8787 phone-2 estop safety.estop true` presses a control as a phone, which is handy for testing your gates. `npx tsx tools/act.mts 8787 phone-1 drive base.drive '{"x":0.5,"y":0}' 2000` pushes Phone 1's stick half forward for 2 s; add `no` at the end to stop the repeats and watch the gateway end the drag.
 2. Start the bridge with `--dry-run` and check roster, pose, tracking, buttons and state for both phones.
-3. With the robot disabled, verify the gates: Stop on either phone, deadman release, a phone disconnect, tracking `limited`, and a recalibration. Each must stop motion and drop the clutch anchor.
+3. With the robot disabled, verify the gates: Stop on either phone, deadman release, a phone disconnect, tracking `limited`, and a recalibration. Each must stop motion and drop the clutch anchor. For the base: letting go of the stick, a stick whose samples stop, and Stop must each bring it to zero.
 4. Then enable one arm at low scale, then both, then the lift and base.
 
 ## Known limits

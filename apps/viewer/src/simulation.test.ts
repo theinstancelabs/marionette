@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validatePose } from '@marionette/protocol';
-import { SIM_PHONES, simulatedConfig, simulatedHolds, simulatedRoster, simulationPose } from './simulation';
+import { SIM_PHONES, simulatedConfig, simulatedHolds, simulatedStick, simulatedRoster, simulationPose } from './simulation';
 
 describe('viewer simulation', () => {
   it('emits valid, attributed poses with distinct motion per phone', () => {
@@ -27,5 +27,11 @@ describe('viewer simulation', () => {
     expect(simulatedHolds(0, SIM_PHONES[0].hold.start + 1)).toEqual(['deadman']);
     expect(simulatedHolds(0, SIM_PHONES[0].hold.start + SIM_PHONES[0].hold.length + 0.5)).toEqual([]);
     expect(simulatedHolds(1, SIM_PHONES[1].hold.start + 0.5)).toEqual(['grip']);
+  });
+
+  it('drives Phone 1’s stick now and then, never pushing it past 1', () => {
+    expect(simulatedStick(0, 3)).toBeUndefined(); expect(simulatedStick(1, 7)).toBeUndefined(); expect(simulatedStick(0, 10.5)).toBeUndefined();
+    for (let t = 6; t < 10; t += 0.05) { const v = simulatedStick(0, t)!; expect(Math.hypot(v.x, v.y)).toBeLessThanOrEqual(1); }
+    expect(simulatedStick(0, 8)!.x).toBeGreaterThan(0.5);
   });
 });

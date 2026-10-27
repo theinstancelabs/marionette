@@ -27,7 +27,7 @@ body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.4 var(--sans);font-v
   background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px;
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;touch-action:manipulation}
-button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+button:focus-visible,input:focus-visible,select:focus-visible,.stick:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 [hidden]{display:none!important}
 .hand{font-family:var(--hand);color:var(--blue)}
 .app{min-height:100vh;display:flex;flex-direction:column;padding-top:var(--top)}
@@ -82,6 +82,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .row.stack{display:block}
 .row.stack .row-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .row .val{color:var(--ink2)}
+/* A value being dragged: blue once the gateway hears it live, red if it stopped hearing it mid-drag. */
+.row .val.live{color:var(--blue)}.row .val.dropped{color:var(--red)}
 .row.link{width:100%;text-align:left}
 .row.link .val::after{content:" ›";color:var(--ink2)}
 .ok{color:var(--green)!important}.bad{color:var(--red)!important}
@@ -103,6 +105,33 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 .row-btn.wide{width:100%}
 .row-btn small{font-weight:400;color:var(--ink2)}
 .mono{font-family:var(--mono);font-size:15px}
+
+/* Drive base: a spring-return stick between the turn buttons, then what it sends and the speed limit */
+.drive{margin-top:18px;border-top:1.5px solid var(--ink);padding-top:12px}
+.drive-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.drive-head h2{margin:0;font-size:20px;line-height:1.2;font-weight:600;letter-spacing:-.01em}
+.drive-state{font-size:15px;color:var(--ink2)}
+.drive-state.live{color:var(--blue);font-weight:600}.drive-state.dropped{color:var(--red);font-weight:600}
+.drive .note{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drive-grid{display:grid;grid-template-columns:64px minmax(0,220px) 64px;justify-content:space-between;gap:12px;margin-top:14px}
+.hold.turn{width:auto;height:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:14px;line-height:1.2;padding:0 4px}
+.hold.turn b{font-size:28px;font-weight:400;line-height:1}
+.stick{position:relative;aspect-ratio:1;border-radius:50%;background:#fff;border:1.5px solid var(--ink);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
+.stick.dragging{cursor:grabbing}
+.stick svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.stick .edge{position:absolute;font-size:13px;line-height:1;color:var(--ink2);pointer-events:none}
+.stick .edge.n{top:7%;left:50%;transform:translateX(-50%)}.stick .edge.s{bottom:7%;left:50%;transform:translateX(-50%)}
+.stick .edge.w{left:6%;top:50%;transform:translateY(-50%)}.stick .edge.e{right:6%;top:50%;transform:translateY(-50%)}
+/* The knob is 30% of the pad and travels 35% of it, so a full push moves it 35/30 of its own size. */
+.knob{position:absolute;left:35%;top:35%;width:30%;height:30%;border-radius:50%;background:#fff;border:2.5px solid var(--blue);box-shadow:0 2px 6px rgba(46,48,51,.18);transition:transform .2s cubic-bezier(.3,1.35,.6,1);pointer-events:none}
+.stick.dragging .knob{transition:none}
+.stick.pending .knob{background:#e9eef9}
+.stick.live .knob{background:var(--blue)}
+.stick.dropped .knob{border-color:var(--red);background:#fff}
+.stick .vec{stroke:var(--blue)}.stick.dropped .vec{stroke:var(--red)}
+.pose.two{grid-template-columns:repeat(2,1fr);margin-top:16px}
+.stick-row{display:flex;justify-content:center;padding:4px 0 6px}
+.stick-row .stick{width:min(200px,62%)}
 
 /* Dock */
 .spacer{flex:1;min-height:24px}
@@ -177,7 +206,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   body{background-color:#e9ebe6}
   .app{background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px}
 }
-@media (prefers-reduced-motion:reduce){.sheet{animation:none}.switch,.switch::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.sheet{animation:none}.switch,.switch::after,.knob{transition:none}}
 </style>
 </head>
 <body>
@@ -200,6 +229,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       <div><small>up</small><b id="pose-z">0</b><span class="bar"><i id="bar-z" style="background:var(--blue)"></i></span></div>
     </div>
     <figure class="cam" id="cam" hidden></figure>
+    <section class="drive" id="drive" aria-label="Drive base" hidden></section>
     <div class="rows" id="rows"></div>
   </section>
   <div class="spacer"></div>
@@ -216,6 +246,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     deadman: 'teleop.deadman', estop: 'safety.estop',
     start: 'calibration.start', capture: 'calibration.capture', cancel: 'calibration.cancel',
     check: 'calibration.check', origin: 'calibration.captureOrigin', clear: 'calibration.reset',
+    drive: 'base.drive', turnLeft: 'base.turnLeft', turnRight: 'base.turnRight', speedLimit: 'base.speedLimit',
   };
   const STEPS = ['flat', 'forward', 'right', 'up'];
   const MOVES = ['forward', 'right', 'up'];
@@ -276,16 +307,90 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     let held;
     const press = e => { e.preventDefault(); if (held) return; const c = getControl(); if (!c) return; held = c; pressed.set(c.id, false); try { node.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the press still counts */ } send(c, true); renderHolds(); if (onChange) onChange(true); };
     const release = () => { if (!held) return; const c = held; held = undefined; pressed.delete(c.id); send(c, false); renderHolds(); if (onChange) onChange(false); };
-    const onHidden = () => { if (document.hidden) release(); };
     node.addEventListener('pointerdown', press);
     for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, release);
-    window.addEventListener('blur', release);
-    document.addEventListener('visibilitychange', onHidden);
     node.addEventListener('contextmenu', e => e.preventDefault());
-    group.push(() => { release(); window.removeEventListener('blur', release); document.removeEventListener('visibilitychange', onHidden); });
+    letGoOnLeave(release, group);
+  }
+  // Leaving the page (another app, a hidden tab) or rebuilding the control lets go, so nothing stays pressed or pushed.
+  function letGoOnLeave(letGo, group) {
+    const onHidden = () => { if (document.hidden) letGo(); };
+    window.addEventListener('blur', letGo); document.addEventListener('visibilitychange', onHidden);
+    group.push(() => { letGo(); window.removeEventListener('blur', letGo); document.removeEventListener('visibilitychange', onHidden); });
   }
   const disposeAll = group => { while (group.length) group.pop()(); };
-  const rowHolds = [], dockHolds = [];
+  const rowHolds = [], dockHolds = [], driveHolds = [];
+
+  /* ---------- Live values: sliders and sticks stream while they are dragged ---------- */
+  // Sliders and sticks being dragged here: control id → whether the gateway has reported the stream during this drag.
+  const touching = new Map();
+  // idle; pending (dragged, not yet reported live); live; or dropped (the gateway stopped hearing it while it is still
+  // dragged here; like a hold, it only counts again once the operator lets go).
+  const liveState = c => !c || !touching.has(c.id) ? 'idle' : s.connection && s.connection.state === 'disconnected' ? 'dropped' : c.live ? 'live' : touching.get(c.id) ? 'dropped' : 'pending';
+  // The bridge's stream sends the newest value at most once a frame, marked live; `end` sends the final value.
+  function dragger(getControl) {
+    let stream, id;
+    return {
+      update(value) {
+        if (!stream) { const c = getControl(); if (!c) return; id = c.id; stream = window.Marionette.stream(c.id, c.action); touching.set(id, false); renderLive(); }
+        stream.update(value);
+      },
+      end(value) { if (!stream) return; stream.end(value); stream = undefined; touching.delete(id); renderLive(); },
+    };
+  }
+
+  // A stick's value is where it is pushed, in operator axes: x up the pad (forward), y to the left, each -1..1 and at most 1 together.
+  const KNOB_TRAVEL = 35 / 30 * 100;
+  const KEYS = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowLeft: [0, 1], ArrowRight: [0, -1] };
+  // Two decimals, rounded toward zero, so a full diagonal push never comes out longer than 1.
+  const toward0 = n => (Math.trunc(n * 100) / 100) || 0;
+  const limit = (x, y) => { const n = Math.hypot(x, y); return n > 1 ? { x: toward0(x / n), y: toward0(y / n) } : { x: toward0(x), y: toward0(y) }; };
+  const signed2 = n => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n).toFixed(2);
+  function stick(getControl, group, { label, edges, onMove }) {
+    const c = getControl();
+    const face = svg('<svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="35" fill="none" stroke="#cfd3d6" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><path d="M50 3V97M3 50H97" stroke="#e6ebf2" vector-effect="non-scaling-stroke"/><line class="vec" x1="50" y1="50" x2="50" y2="50" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>');
+    const vec = face.querySelector('.vec'); const knob = h('span', { class: 'knob' });
+    const pad = h('div', { class: 'stick', tabindex: '0', role: 'group', 'aria-roledescription': 'stick', 'aria-label': label + '. Drag to push it, or hold the arrow keys. Let go to stop.', 'data-live': c.id },
+      face, (edges || []).map((word, i) => h('span', { class: 'edge ' + 'nswe'[i] }, word)), knob);
+    const drag = dragger(getControl); let rect, pointer, pushed = false; const keys = new Set();
+    const show = v => {
+      knob.style.transform = v.x || v.y ? 'translate(' + (-v.y * KNOB_TRAVEL).toFixed(1) + '%,' + (-v.x * KNOB_TRAVEL).toFixed(1) + '%)' : '';
+      vec.setAttribute('x2', (50 - v.y * 35).toFixed(1)); vec.setAttribute('y2', (50 - v.x * 35).toFixed(1));
+      if (onMove) onMove(v);
+    };
+    const push = v => { pushed = true; show(v); drag.update(v); };
+    const letGo = () => { if (!pushed) return; pushed = false; pointer = undefined; keys.clear(); pad.classList.remove('dragging'); show({ x: 0, y: 0 }); drag.end({ x: 0, y: 0 }); };
+    // A touch anywhere on the pad pushes the stick that far from the centre, and it follows the finger until let go.
+    const at = e => limit((rect.top + rect.height / 2 - e.clientY) / (rect.height * 0.35), (rect.left + rect.width / 2 - e.clientX) / (rect.width * 0.35));
+    pad.addEventListener('pointerdown', e => {
+      e.preventDefault(); if (pointer !== undefined) return;
+      pointer = e.pointerId; rect = pad.getBoundingClientRect(); keys.clear(); pad.classList.add('dragging');
+      try { pad.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the drag still counts */ }
+      push(at(e));
+    });
+    pad.addEventListener('pointermove', e => { if (e.pointerId === pointer) push(at(e)); });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) pad.addEventListener(name, e => { if (e.pointerId === pointer) letGo(); });
+    const fromKeys = () => { let x = 0, y = 0; for (const key of keys) { x += KEYS[key][0]; y += KEYS[key][1]; } return limit(x, y); };
+    pad.addEventListener('keydown', e => { if (!KEYS[e.key] || pointer !== undefined) return; e.preventDefault(); if (e.repeat || keys.has(e.key)) return; keys.add(e.key); pad.classList.add('dragging'); push(fromKeys()); });
+    pad.addEventListener('keyup', e => { if (!keys.delete(e.key)) return; if (keys.size) push(fromKeys()); else letGo(); });
+    pad.addEventListener('blur', () => { if (keys.size) letGo(); });
+    pad.addEventListener('contextmenu', e => e.preventDefault());
+    letGoOnLeave(letGo, group);
+    return pad;
+  }
+  // Every live control shows what the gateway knows, like the hold buttons.
+  function renderLive() {
+    if (!s.config) return;
+    for (const node of document.querySelectorAll('[data-live]')) { const state = liveState(byId(node.dataset.live)); for (const name of ['pending', 'live', 'dropped']) node.classList.toggle(name, state === name); }
+    const head = $('drive-state');
+    if (head) {
+      const state = liveState(control(ACTION.drive)); const turning = [ACTION.turnLeft, ACTION.turnRight].map(control).find(c => holdState(c) === 'held');
+      const [text, note] = { idle: turning ? [turning.label.replace(/^Turn/, 'Turning'), 'let go to stop turning'] : ['', 'touch the stick and drag, let go to stop'], pending: ['Sending…', 'waiting for the gateway'], live: ['Driving', 'let go to stop'], dropped: ['Dropped', 'let go and touch it again'] }[state];
+      setText(head, text); head.className = 'drive-state ' + (state === 'idle' && turning ? 'live' : state);
+      setText($('drive-note'), note); $('drive-note').className = 'note' + (state === 'dropped' ? ' bad' : '');
+    }
+    renderHeadline();
+  }
 
   /* ---------- Status strip, Stop, headline ---------- */
   // Stop is this phone's own signal: a toggle the consumer reads. Marionette itself stops nothing.
@@ -309,7 +414,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   function armWord() { const c = s.config && s.config.controls.find(x => x.action === 'arm.select'); const o = c && c.type === 'select' && c.options.find(x => x.value === c.value); return o ? 'the ' + o.label.toLowerCase() : 'the arm'; }
   // Most urgent first: no gateway, this phone's Stop, no pose at all, then the pad, then rough tracking.
   function renderHeadline() {
-    const c = s.config, t = s.tracking, conn = s.connection; const pad = holdState(control(ACTION.deadman));
+    const c = s.config, t = s.tracking, conn = s.connection; const pad = holdState(control(ACTION.deadman)); const drive = liveState(control(ACTION.drive));
     const rough = t && t.state !== 'normal' ? (REASON_NOTES[t.reason] || REASON_NOTES[t.state] || 'the pose may be rough until tracking recovers') : '';
     let title = c ? 'Ready' : 'Connecting…', tone = '', note = control(ACTION.deadman) ? 'hold the pad to move ' + armWord() : '', bad = false;
     if (conn && conn.state === 'disconnected') { title = 'Gateway lost'; note = conn.reason || 'reconnect to keep going'; bad = true; }
@@ -317,7 +422,9 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     else if (stopOn()) { title = 'Stopped'; tone = 'stopped'; note = 'reset Stop when it’s safe to carry on'; bad = true; }
     else if (t && (t.message || t.state === 'unavailable')) { title = 'No tracking'; note = t.message || 'the pose can’t be trusted until tracking returns'; bad = true; }
     else if (pad === 'dropped') { title = 'Hold dropped'; note = 'the gateway stopped hearing the pad; let go and press again'; bad = true; }
+    else if (drive === 'dropped') { title = 'Drive dropped'; note = 'let go of the stick and touch it again'; bad = true; }
     else if (pad !== 'idle') { title = pad === 'held' ? 'Holding' : 'Holding…'; tone = 'moving'; note = pad === 'pending' ? 'waiting for the gateway' : rough || 'release the pad to let go'; bad = !!rough; }
+    else if (drive !== 'idle') { title = drive === 'live' ? 'Driving' : 'Driving…'; tone = 'moving'; note = drive === 'pending' ? 'waiting for the gateway' : 'let go of the stick to stop'; }
     else if (t && t.state !== 'normal') { title = t.state === 'initializing' ? 'Starting up' : 'Tracking ' + (t.state === 'limited' ? 'limited' : t.state); note = rough; }
     else if (c && c.calibration.status === 'capturing') { title = 'Calibrating'; note = 'finish or cancel it in the calibration sheet'; }
     setText($('state'), title); $('state').className = 'state ' + tone;
@@ -369,11 +476,16 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   setInterval(renderCamera, 1000);
 
   /* ---------- Rows: every control without a fixed place ---------- */
-  const PLACED = new Set(Object.values(ACTION));
+  const PLACED = new Set([ACTION.deadman, ACTION.estop, ACTION.start, ACTION.capture, ACTION.cancel, ACTION.check, ACTION.origin, ACTION.clear]);
+  // With a drive stick, the turn buttons and the speed limit join it in the Drive base section; without one they are ordinary controls.
+  const driveGroup = () => { const stickControl = control(ACTION.drive); if (!stickControl || stickControl.type !== 'joystick') return [];
+    const turn = action => { const c = control(action); return c && c.type === 'button' && c.hold ? c : undefined; }; const speed = control(ACTION.speedLimit);
+    return [stickControl, turn(ACTION.turnLeft), turn(ACTION.turnRight), speed && speed.type === 'slider' ? speed : undefined]; };
+  const inDrive = c => driveGroup().includes(c);
   // The dock takes the deadman pad and up to two other hold buttons; any more get rows.
-  const dockedHoldControls = () => s.config.controls.filter(c => c.type === 'button' && c.hold && c.action !== ACTION.deadman).slice(0, 2);
+  const dockedHoldControls = () => s.config.controls.filter(c => c.type === 'button' && c.hold && c.action !== ACTION.deadman && !inDrive(c)).slice(0, 2);
   const inDock = c => dockedHoldControls().includes(c);
-  function rowFor(c) {
+  function rowFor(c, group = rowHolds) {
     if (c.type === 'toggle') {
       const sw = h('button', { class: 'switch', role: 'switch', type: 'button', 'aria-checked': String(c.value), 'aria-label': c.label, 'data-id': c.id, onclick: () => send(c, sw.getAttribute('aria-checked') !== 'true') });
       return h('div', { class: 'row' }, h('span', {}, c.label), sw);
@@ -386,13 +498,31 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label)), field);
     }
     if (c.type === 'slider') {
-      const out = h('span', { class: 'val', 'data-out': c.id }, format(c, c.value));
-      const range = h('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: c.value, 'data-id': c.id, 'aria-label': c.label, oninput: e => setText(out, format(c, Number(e.target.value))), onchange: e => send(c, Number(e.target.value)) });
+      // Every value goes out live while the thumb is dragged; letting go (or a key press) sends the final one.
+      const out = h('span', { class: 'val', 'data-out': c.id, 'data-live': c.id }, format(c, c.value));
+      const drag = dragger(() => byId(c.id)); const finish = () => drag.end(Number(range.value));
+      const range = h('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: c.value, 'data-id': c.id, 'aria-label': c.label, oninput: e => { const value = Number(e.target.value); setText(out, format(c, value)); drag.update(value); }, onchange: finish });
+      for (const name of ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'blur']) range.addEventListener(name, finish);
+      letGoOnLeave(finish, group);
       return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), range);
     }
+    if (c.type === 'joystick') {
+      const out = h('span', { class: 'val', 'data-live': c.id }, 'at rest');
+      const pad = stick(() => byId(c.id), group, { label: c.label, onMove: v => setText(out, v.x || v.y ? 'up ' + signed2(v.x) + ', left ' + signed2(v.y) : 'at rest') });
+      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), h('div', { class: 'stick-row' }, pad));
+    }
     const btn = h('button', { type: 'button', class: 'row-btn wide' + (c.tone === 'danger' ? ' danger' : ''), 'data-hold': c.hold ? c.id : undefined }, c.label, c.hold ? h('small', {}, ' (hold)') : null);
-    if (c.hold) holdable(btn, () => byId(c.id), null, rowHolds); else btn.addEventListener('click', () => send(c));
+    if (c.hold) holdable(btn, () => byId(c.id), null, group); else btn.addEventListener('click', () => send(c));
     return h('div', { class: 'row' }, btn);
+  }
+  // Values change with every config; update them in place so a drag in progress is not reset.
+  function syncValues(root, list) {
+    for (const x of list) {
+      const node = x && root.querySelector('[data-id="' + CSS.escape(x.id) + '"]'); if (!node) continue;
+      if (x.type === 'toggle') node.setAttribute('aria-checked', String(x.value));
+      if (x.type === 'select') { if (node.tagName === 'SELECT') { if (document.activeElement !== node) node.value = x.value; } else for (const b of node.children) b.setAttribute('aria-pressed', String(b.dataset.value === x.value)); }
+      if (x.type === 'slider' && document.activeElement !== node && !touching.has(x.id)) { node.value = x.value; setText(root.querySelector('[data-out="' + CSS.escape(x.id) + '"]'), format(x, x.value)); }
+    }
   }
   function format(c, value) { const digits = String(c.step).includes('.') ? String(c.step).split('.')[1].length : 0; return Number(value).toFixed(digits) + (c.unit || ''); }
   function calibrationSummary() {
@@ -407,7 +537,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   }
   function renderRows() {
     const c = s.config; if (!c) return;
-    const listed = c.controls.filter(x => !PLACED.has(x.action) && !inDock(x));
+    const listed = c.controls.filter(x => !PLACED.has(x.action) && !inDock(x) && !inDrive(x));
     const hasCalibration = !!control(ACTION.start) || !!control(ACTION.origin);
     const key = JSON.stringify([listed.map(x => [x.id, x.type, x.label, x.options, x.min, x.max, x.step]), hasCalibration]);
     const rows = $('rows');
@@ -417,16 +547,40 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       for (const x of listed) rows.append(rowFor(x));
       rows.append(h('div', { class: 'row' }, h('span', { class: 'mono', id: 'gateway-row' }), h('button', { type: 'button', class: 'row-btn', onclick: () => window.Marionette.disconnect() }, 'Disconnect')));
     }
-    // Values change with every config; update them in place so a drag in progress is not reset.
-    for (const x of listed) {
-      const node = rows.querySelector('[data-id="' + CSS.escape(x.id) + '"]'); if (!node) continue;
-      if (x.type === 'toggle') node.setAttribute('aria-checked', String(x.value));
-      if (x.type === 'select') { if (node.tagName === 'SELECT') { if (document.activeElement !== node) node.value = x.value; } else for (const b of node.children) b.setAttribute('aria-pressed', String(b.dataset.value === x.value)); }
-      if (x.type === 'slider' && document.activeElement !== node) { node.value = x.value; setText(rows.querySelector('[data-out="' + CSS.escape(x.id) + '"]'), format(x, x.value)); }
-    }
+    syncValues(rows, listed);
     const [summary, tone] = calibrationSummary(); const val = $('calibration-val');
     if (val) { setText(val, summary); val.className = 'val ' + tone; }
     setText($('gateway-row'), s.connection ? s.connection.gateway : '');
+  }
+
+  /* ---------- Drive base: the stick between the turn buttons, what it sends, and the speed limit ---------- */
+  let driveKey = '';
+  const readCell = (word, id, color) => h('div', {}, h('small', {}, word), h('b', { id }, '0.00'), h('span', { class: 'bar' }, h('i', { id: id + '-bar', style: 'background:' + color })));
+  function showDrive(v) {
+    for (const [id, n] of [['drive-x', v.x], ['drive-y', v.y]]) {
+      setText($(id), signed2(n)); const bar = $(id + '-bar'); const fraction = clamp(n, -1, 1) * 50;
+      bar.style.left = (fraction < 0 ? 50 + fraction : 50) + '%'; bar.style.width = Math.abs(fraction) + '%';
+    }
+  }
+  function renderDrive() {
+    if (!s.config) return;
+    const [drive, left, right, speed] = driveGroup(); const section = $('drive');
+    const key = JSON.stringify([drive && [drive.id, drive.label], [left, right].map(x => x && [x.id, x.label]), speed && [speed.id, speed.label, speed.min, speed.max, speed.step, speed.unit]]);
+    if (key !== driveKey) {
+      driveKey = key; disposeAll(driveHolds); section.replaceChildren(); section.hidden = !drive;
+      if (drive) {
+        const turn = (x, glyph) => { if (!x) return h('span'); const btn = h('button', { type: 'button', class: 'hold turn', 'data-hold': x.id }, h('b', { 'aria-hidden': 'true' }, glyph), x.label); holdable(btn, () => byId(x.id), renderLive, driveHolds); return btn; };
+        section.append(
+          h('div', { class: 'drive-head' }, h('h2', {}, 'Drive base'), h('span', { class: 'drive-state', id: 'drive-state', role: 'status' })),
+          h('p', { class: 'note', id: 'drive-note' }),
+          h('div', { class: 'drive-grid' }, turn(left, '↺'), stick(() => control(ACTION.drive), driveHolds, { label: drive.label, edges: ['forward', 'back', 'left', 'right'], onMove: showDrive }), turn(right, '↻')),
+          h('div', { class: 'pose two', 'aria-label': 'What the stick is sending, from −1 to 1' }, readCell('forward', 'drive-x', 'var(--red)'), readCell('left', 'drive-y', 'var(--green)')),
+          speed ? rowFor(speed, driveHolds) : null);
+        showDrive({ x: 0, y: 0 });
+      }
+    }
+    syncValues(section, [speed]);
+    renderLive();
   }
 
   /* ---------- Dock: the hold-to-move pad and other hold buttons ---------- */
@@ -665,7 +819,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   /* ---------- Bridge wiring ---------- */
   const boot = () => {
     const M = window.Marionette; if (!M || boot.done) return; boot.done = true;
-    M.on('connection', c => { s.connection = c; renderStrip(); renderHeadline(); renderRows(); renderHolds(); });
+    M.on('connection', c => { s.connection = c; renderStrip(); renderHeadline(); renderRows(); renderHolds(); renderLive(); });
     M.on('tracking', t => { s.tracking = t; renderStrip(); renderHeadline(); renderDock(); if (s.sheet) renderSheetLive(); });
     M.on('camera_frame', m => {
       const view = cameraView(); if (!view || view.streams.indexOf(m.cameraId) < 0) return;
@@ -677,6 +831,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     M.on('config', c => {
       const before = s.config ? s.config.calibration : undefined; s.config = c; const cal = c.calibration;
       for (const id of pressed.keys()) { const x = byId(id); if (x && x.held) pressed.set(id, true); }
+      for (const id of touching.keys()) { const x = byId(id); if (x && x.live) touching.set(id, true); }
       // Remember where the phone was when forward was captured, to measure the right step across it.
       if (before && before.step === 'forward' && cal.step === 'right' && s.pose) s.forwardAt = s.pose.position;
       if (cal.status !== 'capturing') s.forwardAt = undefined;
@@ -685,7 +840,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       if (before && before.check && before.check.step && cal.check && cal.check.passed !== undefined) s.sheet = 'validated';
       else if (before && before.check && before.check.step && !(cal.check && cal.check.step) && s.sheet === 'validate') s.sheet = undefined;
       if (before && (before.step !== cal.step || (before.check && before.check.step) !== (cal.check && cal.check.step))) s.reply = undefined;
-      renderStrip(); renderHeadline(); renderRows(); renderDock(); renderCamera(); renderSheet();
+      renderStrip(); renderHeadline(); renderRows(); renderDrive(); renderDock(); renderCamera(); renderSheet();
     });
     M.on('status', m => {
       const c = s.config; const from = m.controlId && c && c.controls.find(x => x.id === m.controlId);

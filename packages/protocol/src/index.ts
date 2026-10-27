@@ -224,12 +224,47 @@ export type PosePacket = {
   calibrationVersion: string; heartbeat: boolean; phoneId?: string;
 };
 
+/**
+ * Where a stick is pushed, in operator axes (ROS REP-103): `x` is up the pad (forward), `y` is
+ * to the left, each from -1 to 1 and never more than 1 together. It is `{ x: 0, y: 0 }` at rest.
+ */
+export type StickValue = { x: number; y: number };
+export type ControlValue = string | number | boolean | StickValue;
+export const STICK_REST: StickValue = { x: 0, y: 0 };
+
 export type UiControl =
   /** `held` is the gateway's view of a hold button on one phone (phone configs only). */
   | { id: string; type: 'button'; label: string; action: string; tone?: 'default' | 'danger' | 'accent'; hold?: boolean; held?: boolean }
   | { id: string; type: 'toggle'; label: string; action: string; value: boolean }
   | { id: string; type: 'select'; label: string; action: string; value: string; options: { label: string; value: string }[] }
-  | { id: string; type: 'slider'; label: string; action: string; value: number; min: number; max: number; step: number; unit?: string };
+  /** `live` is the gateway's view of a slider or stick being dragged on one phone (phone configs only). */
+  | { id: string; type: 'slider'; label: string; action: string; value: number; min: number; max: number; step: number; unit?: string; live?: boolean }
+  /** A spring-return stick: it streams while touched and goes back to rest when let go. */
+  | { id: string; type: 'joystick'; label: string; action: string; value: StickValue; live?: boolean };
+/** Controls whose value streams live while the operator drags them. */
+export type LiveControl = Extract<UiControl, { type: 'slider' | 'joystick' }>;
+export const isLiveControl = (control: UiControl | undefined): control is LiveControl => control?.type === 'slider' || control?.type === 'joystick';
+/**
+ * While a value is being dragged, the host repeats the latest sample this often (marked
+ * `renew`) so a resting finger still reads as live. The gateway ends a stream whose samples stop.
+ */
+export const STREAM_RENEW_MS = 50;
+/** The value a stream settles on when it ends without a final sample: a stick returns to rest, anything else keeps its last value. */
+export function streamEndValue(control: UiControl | undefined, last: ControlValue | undefined): ControlValue | undefined {
+  return control?.type === 'joystick' ? { ...STICK_REST } : last;
+}
+/** Whether two control values are the same (sticks compare by axis). */
+export function sameValue(a: ControlValue | undefined, b: ControlValue | undefined): boolean {
+  if (isStickValue(a) || isStickValue(b)) return isStickValue(a) && isStickValue(b) && a.x === b.x && a.y === b.y;
+  return a === b;
+}
+export function isStickValue(value: unknown): value is StickValue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { x, y } = value as Partial<StickValue>;
+  return typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y) && Object.keys(value).length === 2;
+}
+/** A stick value a control can hold: both axes within -1..1 and the push no longer than 1. */
+export const isStickInRange = (value: unknown): value is StickValue => isStickValue(value) && Math.abs(value.x) <= 1 && Math.abs(value.y) <= 1 && Math.hypot(value.x, value.y) <= 1 + 1e-6;
 
 export type CameraStream = { id: string; label: string; url: string; status: 'live' | 'offline' };
 /** A named set of camera streams shown together, chosen per phone with the `camera.view` control. */
@@ -266,11 +301,15 @@ export type ConfigMessage = {
 };
 
 /**
- * `renew` marks the repeat of a held press (every 200 ms while held). It only
- * extends a hold the gateway already has and never starts one, so a renewal
- * that races a release cannot start the hold again.
+ * `renew` marks the repeat of a held press (every 200 ms while held), or of the latest
+ * sample of a value being dragged (every `STREAM_RENEW_MS` while the finger rests). It
+ * only extends a hold or stream the gateway already has and never starts one, so a
+ * renewal that races a release cannot start it again.
+ *
+ * `live` marks a sample of a value being dragged (a slider, a stick): more will follow.
+ * Letting go sends the final value without `live`.
  */
-export type ActionMessage = { type: 'action'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId: string; action: string; value?: string | number | boolean; renew?: true; sentAt: number };
+export type ActionMessage = { type: 'action'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId: string; action: string; value?: ControlValue; renew?: true; live?: true; sentAt: number };
 export type HtmlConfigMessage = {
   type: 'html_config'; version: typeof PROTOCOL_VERSION; sessionId: string;
   htmlVersion: typeof HTML_CONFIG_VERSION; bridgeVersion: typeof HTML_BRIDGE_VERSION;
@@ -278,7 +317,7 @@ export type HtmlConfigMessage = {
 };
 export type HtmlBridgeAction = {
   type: 'action'; version: typeof HTML_BRIDGE_VERSION; controlId: string; action: string;
-  value?: string | number | boolean; sentAt: number;
+  value?: ControlValue; live?: true; sentAt: number;
 };
 /** A gateway reply. `phoneId` names the phone it concerns; phones only receive their own and gateway-wide ones. */
 export type StatusMessage = { type: 'status'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId?: string; message: string; values?: Record<string, string | number | boolean>; phoneId?: string };
@@ -293,15 +332,16 @@ export type CameraFrameMessage = { type: 'camera_frame'; version: typeof PROTOCO
 export type HelloMessage = { type: 'hello'; version: typeof PROTOCOL_VERSION; role: 'phone' | 'console'; deviceId?: string; follow?: string; cameras?: boolean };
 /**
  * The button stream. Every action a phone sends is forwarded to consoles exactly as
- * received, tagged with the phone, including the 200 ms repeats of a held button
- * (`renew`). Marionette never filters, merges or acts on them (apart from running its
- * own calibration); the consumer decides what each one means. `source` is `mirror` for
- * a desktop mirror of the phone's screen, and `gateway` for a release the gateway
- * infers when a held button stops being renewed or its phone disconnects (`reason`).
+ * received, tagged with the phone, including the repeats of a held button or a resting
+ * finger (`renew`) and every live sample of a slider or stick being dragged (`live`).
+ * Marionette never filters, merges or acts on them (apart from running its own
+ * calibration); the consumer decides what each one means. `source` is `mirror` for a
+ * desktop mirror of the phone's screen, and `gateway` for an end the gateway infers
+ * when a hold or a stream stops being renewed or its phone disconnects (`reason`).
  */
 export type InputMessage = {
   type: 'input'; version: typeof PROTOCOL_VERSION; phoneId: string; sessionId?: string;
-  controlId: string; action: string; value?: string | number | boolean; renew?: true;
+  controlId: string; action: string; value?: ControlValue; renew?: true; live?: true;
   source: 'phone' | 'mirror' | 'gateway'; reason?: string; sentAt?: number; receivedAt: number;
 };
 export type MarionetteMessage = PosePacket | ConfigMessage | HtmlConfigMessage | ActionMessage | StatusMessage | CameraFrameMessage | HelloMessage | InputMessage;
@@ -345,8 +385,10 @@ function isControl(value: unknown): value is UiControl {
   if (c.type === 'toggle') return typeof c.value === 'boolean';
   if (c.type === 'select') return typeof c.value === 'string' && Array.isArray(c.options) && c.options.length > 0
     && c.options.every(option => !!option && typeof option === 'object' && isBoundedString((option as { label?: unknown }).label, 256) && typeof (option as { value?: unknown }).value === 'string');
+  if (c.live !== undefined && typeof c.live !== 'boolean') return false;
   if (c.type === 'slider') return [c.value, c.min, c.max, c.step].every(n => typeof n === 'number' && Number.isFinite(n))
     && (c.max as number) > (c.min as number) && (c.step as number) > 0 && (c.unit === undefined || typeof c.unit === 'string');
+  if (c.type === 'joystick') return isStickInRange(c.value);
   return false;
 }
 
@@ -405,6 +447,8 @@ export function validateStatus(message: unknown): message is StatusMessage {
 }
 
 function isPrimitive(value: unknown): value is string | number | boolean { return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean'; }
+/** A value an action may carry: a string, finite number, boolean, or a stick's `{ x, y }`. */
+export function isControlValue(value: unknown): value is ControlValue { return isPrimitive(value) || isStickValue(value); }
 function isBoundedString(value: unknown, maxLength: number): value is string { return typeof value === 'string' && value.length > 0 && value.length <= maxLength; }
 
 export function validateAction(message: unknown): message is ActionMessage {
@@ -412,8 +456,8 @@ export function validateAction(message: unknown): message is ActionMessage {
   const action = message as Partial<ActionMessage>;
   return action.type === 'action' && action.version === PROTOCOL_VERSION
     && isBoundedString(action.sessionId, 128) && isBoundedString(action.controlId, 128)
-    && isBoundedString(action.action, 256) && (action.value === undefined || isPrimitive(action.value))
-    && (action.renew === undefined || action.renew === true)
+    && isBoundedString(action.action, 256) && (action.value === undefined || isControlValue(action.value))
+    && (action.renew === undefined || action.renew === true) && (action.live === undefined || action.live === true)
     && typeof action.sentAt === 'number' && Number.isFinite(action.sentAt);
 }
 
@@ -429,9 +473,9 @@ export function validateInput(message: unknown): message is InputMessage {
   if (!message || typeof message !== 'object') return false;
   const input = message as Partial<InputMessage>;
   return input.type === 'input' && input.version === PROTOCOL_VERSION && isBoundedString(input.phoneId, 64)
-    && isBoundedString(input.controlId, 128) && isBoundedString(input.action, 256) && (input.value === undefined || isPrimitive(input.value))
+    && isBoundedString(input.controlId, 128) && isBoundedString(input.action, 256) && (input.value === undefined || isControlValue(input.value))
     && (input.source === 'phone' || input.source === 'mirror' || input.source === 'gateway') && typeof input.receivedAt === 'number' && Number.isFinite(input.receivedAt)
-    && (input.renew === undefined || input.renew === true) && (input.sessionId === undefined || isBoundedString(input.sessionId, 128))
+    && (input.renew === undefined || input.renew === true) && (input.live === undefined || input.live === true) && (input.sessionId === undefined || isBoundedString(input.sessionId, 128))
     && (input.reason === undefined || isBoundedString(input.reason, 256)) && (input.sentAt === undefined || (typeof input.sentAt === 'number' && Number.isFinite(input.sentAt)));
 }
 
@@ -452,7 +496,7 @@ export function validateHtmlBridgeAction(message: unknown): message is HtmlBridg
   const action = message as Partial<HtmlBridgeAction>;
   return action.type === 'action' && action.version === HTML_BRIDGE_VERSION
     && isBoundedString(action.controlId, 128) && isBoundedString(action.action, 256)
-    && (action.value === undefined || isPrimitive(action.value))
+    && (action.value === undefined || isControlValue(action.value)) && (action.live === undefined || action.live === true)
     && typeof action.sentAt === 'number' && Number.isFinite(action.sentAt);
 }
 
@@ -475,13 +519,27 @@ export function isHtmlBridgeDisconnect(message: unknown): message is HtmlBridgeD
  * bridge action, or a disconnect) to the host. The iPhone app and the
  * gateway's desktop preview install this same script, then call
  * `Marionette._receive({ type, payload })` for every incoming event.
+ *
+ * `sendAction(controlId, action, value, { live: true })` sends one sample of a
+ * value being dragged. `stream(controlId, action)` wraps that for a slider or
+ * stick: `update(value)` sends the newest value at most once per animation frame
+ * and only when it changed, and `end(value)` sends the final value (the last one
+ * if left out) and closes the stream. The host repeats the latest sample while
+ * the stream is open.
  */
 export function htmlBridgeScript(post: string): string {
   return `(function(){if(window.Marionette){window.dispatchEvent(new Event('marionette-ready'));return;}
 var deliver=(${post});var types=${JSON.stringify(HTML_BRIDGE_EVENTS)};var listeners={};var last={};
 var primitive=function(v){var t=typeof v;return t==='string'||t==='boolean'||(t==='number'&&isFinite(v));};
+var clean=function(v){if(primitive(v))return v;if(v&&typeof v==='object'&&typeof v.x==='number'&&typeof v.y==='number'&&isFinite(v.x)&&isFinite(v.y))return{x:v.x,y:v.y};return undefined;};
+var same=function(a,b){return a===b||(!!a&&!!b&&typeof a==='object'&&typeof b==='object'&&a.x===b.x&&a.y===b.y);};
 var M={version:${HTML_BRIDGE_VERSION},
-sendAction:function(controlId,action,value){if(typeof controlId!=='string'||typeof action!=='string')return;var m={type:'action',version:${HTML_BRIDGE_VERSION},controlId:controlId,action:action,sentAt:Date.now()};if(value!==undefined&&primitive(value))m.value=value;deliver(m);},
+sendAction:function(controlId,action,value,options){if(typeof controlId!=='string'||typeof action!=='string')return;var m={type:'action',version:${HTML_BRIDGE_VERSION},controlId:controlId,action:action,sentAt:Date.now()};var v=clean(value);if(v!==undefined)m.value=v;if(options&&options.live)m.live=true;deliver(m);},
+stream:function(controlId,action){var open=false,pending,sent,frame=0;
+var flush=function(){frame=0;if(pending===undefined)return;sent=pending;pending=undefined;M.sendAction(controlId,action,sent,{live:true});};
+return{update:function(value){var v=clean(value);if(v===undefined||(open&&same(v,pending===undefined?sent:pending)))return;open=true;pending=v;if(!frame)frame=requestAnimationFrame(flush);},
+end:function(value){if(!open)return;var v=value===undefined?(pending===undefined?sent:pending):value;open=false;if(frame)cancelAnimationFrame(frame);frame=0;pending=undefined;sent=undefined;M.sendAction(controlId,action,v);},
+isOpen:function(){return open;}};},
 on:function(type,callback){if(types.indexOf(type)<0||typeof callback!=='function')return function(){};(listeners[type]||(listeners[type]=[])).push(callback);if(Object.prototype.hasOwnProperty.call(last,type)){try{callback(last[type]);}catch(e){}}return function(){listeners[type]=(listeners[type]||[]).filter(function(item){return item!==callback;});};},
 latest:function(type){return last[type];},
 disconnect:function(){deliver({type:'disconnect',version:${HTML_BRIDGE_VERSION}});},
@@ -570,6 +628,10 @@ export const defaultConfig = (): ConfigMessage => ({ type: 'config', version: PR
     { id: 'cameras', type: 'select', label: 'Cameras', action: 'camera.view', value: 'head', options: [{ label: 'Head cam', value: 'head' }, { label: 'Arm cams', value: 'arms' }] },
     { id: 'lift', type: 'toggle', label: 'Include lift', action: 'lift.toggle', value: true },
     { id: 'sensitivity', type: 'slider', label: 'Translation scale', action: 'teleop.translationScale', value: 1, min: 0.1, max: 4, step: 0.1, unit: '×' },
+    { id: 'drive', type: 'joystick', label: 'Drive', action: 'base.drive', value: { ...STICK_REST } },
+    { id: 'turn-left', type: 'button', label: 'Turn left', action: 'base.turnLeft', hold: true },
+    { id: 'turn-right', type: 'button', label: 'Turn right', action: 'base.turnRight', hold: true },
+    { id: 'speed-limit', type: 'slider', label: 'Speed limit', action: 'base.speedLimit', value: 50, min: 0, max: 100, step: 1, unit: '%' },
     { id: 'calibration-start', type: 'button', label: 'Start guided calibration', action: 'calibration.start', tone: 'accent' },
     { id: 'calibration', type: 'button', label: 'Capture current calibration step', action: 'calibration.capture', tone: 'accent' },
     { id: 'capture-origin', type: 'button', label: 'Quick capture origin', action: 'calibration.captureOrigin', tone: 'accent' },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HTML_BRIDGE_VERSION, HTML_CONFIG_VERSION, PROTOCOL_VERSION, applyPhoneFrame, gatewayLabel, gatewayUrl, htmlBridgeScript, isHtmlBridgeDisconnect, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, isPhoneInfo, phoneColor, selectedCameraView, validateHello, validateInput, dominantAxis, guidedCaptureError, phoneAxes, matrixToQuaternion, metersToMillimeters, normalizeQuaternion, operatorPose, poseFromTransform, rotateVector, sanitizeConfig, validateAction, validateCameraFrame, validateHtmlBridgeAction, validateHtmlConfig, validatePose, validateStatus, type CalibrationSample, type PoseReference, type Quaternion, type Vector3 } from './index';
+import { HTML_BRIDGE_VERSION, HTML_CONFIG_VERSION, PROTOCOL_VERSION, STICK_REST, applyPhoneFrame, isControlValue, isLiveControl, isStickInRange, sameValue, streamEndValue, gatewayLabel, gatewayUrl, htmlBridgeScript, isHtmlBridgeDisconnect, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, isPhoneInfo, phoneColor, selectedCameraView, validateHello, validateInput, dominantAxis, guidedCaptureError, phoneAxes, matrixToQuaternion, metersToMillimeters, normalizeQuaternion, operatorPose, poseFromTransform, rotateVector, sanitizeConfig, validateAction, validateCameraFrame, validateHtmlBridgeAction, validateHtmlConfig, validatePose, validateStatus, type CalibrationSample, type PoseReference, type Quaternion, type Vector3 } from './index';
 
 // Fixtures are real ARKit camera transforms: ARKit's camera +X points to the
 // bottom edge of a portrait phone, +Y to its right edge, +Z out of the screen.
@@ -199,7 +199,39 @@ describe('protocol', () => {
     expect(validateAction({ ...bridgeAction, version: PROTOCOL_VERSION, sessionId: 'gateway', renew: true })).toBe(true);
     expect(validateAction({ ...bridgeAction, version: PROTOCOL_VERSION, sessionId: 'gateway', renew: 'yes' })).toBe(false);
     expect(isHtmlBridgeDisconnect({ type: 'disconnect', version: HTML_BRIDGE_VERSION })).toBe(true);
+    // A stick's value is exactly { x, y }; `live` marks a sample of a value being dragged.
+    expect(validateHtmlBridgeAction({ ...bridgeAction, value: { x: 0.5, y: -0.2 }, live: true })).toBe(true);
+    expect(validateHtmlBridgeAction({ ...bridgeAction, live: 'yes' })).toBe(false);
+    expect(validateAction({ ...bridgeAction, version: PROTOCOL_VERSION, sessionId: 'gateway', value: { x: 0.5, y: 0 }, live: true, renew: true })).toBe(true);
+    expect(validateAction({ ...bridgeAction, version: PROTOCOL_VERSION, sessionId: 'gateway', value: { x: 0.5 } })).toBe(false);
+    expect(validateInput({ type: 'input', version: 1, phoneId: 'phone-1', controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 }, live: true, source: 'gateway', receivedAt: 1 })).toBe(true);
+    expect(validateInput({ type: 'input', version: 1, phoneId: 'phone-1', controlId: 'drive', action: 'base.drive', value: { x: NaN, y: 0 }, source: 'phone', receivedAt: 1 })).toBe(false);
     expect(isHtmlBridgeDisconnect({ type: 'disconnect', version: 99 })).toBe(false);
+  });
+  it('describes stick values and how a dragged value settles', () => {
+    expect([{ x: 1, y: 0 }, { x: -0.6, y: 0.8 }, STICK_REST].every(isStickInRange)).toBe(true);
+    expect([{ x: 0.9, y: 0.9 }, { x: 1.2, y: 0 }, { x: 0, y: 0, z: 0 }, { x: '0', y: 0 }, [0, 0], null].some(isStickInRange)).toBe(false);
+    expect(isControlValue({ x: 3, y: 0 })).toBe(true); expect(isControlValue({ x: 0 })).toBe(false); expect(isControlValue(Infinity)).toBe(false);
+    expect(sameValue({ x: 0.1, y: 0 }, { x: 0.1, y: 0 })).toBe(true); expect(sameValue({ x: 0.1, y: 0 }, 0.1)).toBe(false); expect(sameValue(2, 2)).toBe(true);
+    const [drive, speed, arm] = ['base.drive', 'base.speedLimit', 'arm.select'].map(action => defaultConfig().controls.find(control => control.action === action)!);
+    expect([drive, speed, arm].map(isLiveControl)).toEqual([true, true, false]);
+    expect(streamEndValue(drive, { x: 0.7, y: 0 })).toEqual({ x: 0, y: 0 }); expect(streamEndValue(speed, 80)).toBe(80);
+    expect(sanitizeConfig({ ...defaultConfig(), sessionId: 'g', controls: [{ ...drive, live: 'yes' }, { ...drive, id: 'far', value: { x: 1, y: 1 } }, { ...drive, live: true }] })?.controls).toEqual([{ ...drive, live: true }]);
+  });
+  it('streams a dragged value from the page: one live sample per frame when it changes, then the final value', () => {
+    const posted: any[] = []; const frames: (() => void)[] = []; const page = { dispatchEvent: () => {} } as Record<string, any>;
+    new Function('window', 'Event', 'post', 'requestAnimationFrame', 'cancelAnimationFrame', htmlBridgeScript('post'))(page, class {}, (m: unknown) => posted.push(m), (f: () => void) => frames.push(f), (id: number) => { frames[id - 1] = () => {}; });
+    const frame = () => frames.splice(0).forEach(f => f());
+    const drive = page.Marionette.stream('drive', 'base.drive');
+    expect(drive.isOpen()).toBe(false); drive.end({ x: 0, y: 0 }); expect(posted).toEqual([]);
+    drive.update({ x: 0.2, y: 0, extra: 1 }); drive.update({ x: 0.3, y: 0 }); expect(posted).toEqual([]); frame();
+    drive.update({ x: 0.3, y: 0 }); frame(); drive.update({ x: 0.4, y: -0.1 }); frame(); drive.update({ x: 'a', y: 0 }); drive.update(undefined); frame();
+    expect(posted.map(m => [m.value, m.live])).toEqual([[{ x: 0.3, y: 0 }, true], [{ x: 0.4, y: -0.1 }, true]]);
+    expect(drive.isOpen()).toBe(true); drive.update({ x: 0.5, y: 0 }); drive.end({ x: 0, y: 0 }); frame();
+    expect(posted.at(-1)).toMatchObject({ controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 } }); expect(posted.at(-1)).not.toHaveProperty('live'); expect(posted).toHaveLength(3); expect(drive.isOpen()).toBe(false);
+    // A slider can end on whatever it last sent.
+    const speed = page.Marionette.stream('speed', 'base.speedLimit'); speed.update(60); frame(); speed.update(61); speed.end();
+    expect(posted.slice(3).map(m => [m.value, m.live])).toEqual([[60, true], [61, undefined]]);
   });
   it('runs the page bridge: actions go to the host, events reach listeners, and late subscribers get the last value', () => {
     const posted: unknown[] = []; const events: string[] = [];

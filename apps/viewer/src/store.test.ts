@@ -91,6 +91,28 @@ describe('multi-phone state', () => {
   });
 });
 
+describe('live drags', () => {
+  it('keeps a stick drag as one recent input with its latest sample, and logs only the push and the let-go', () => {
+    const { store, clock, log } = setup(); connectTwo(store);
+    const drive = (value: { x: number; y: number }, over: Partial<InputMessage> = {}) => { store.receive(input('phone-1', { controlId: 'drive', action: 'base.drive', value, live: true, ...over })); clock.wall += 30; };
+    drive({ x: 0.2, y: 0 }); drive({ x: 0.5, y: 0.1 }); drive({ x: 0.5, y: 0.1 }, { renew: true });
+    const one = store.live.phones.get('phone-1')!;
+    expect(one.dragging.get('drive')).toEqual({ x: 0.5, y: 0.1 });
+    drive({ x: 0, y: 0 }, { live: undefined }); store.journal.flush();
+    expect(one.dragging.has('drive')).toBe(false);
+    expect(one.inputs.map(record => record.input.value)).toEqual([{ x: 0, y: 0 }]);
+    expect(log().filter(line => line.includes('Drive'))).toEqual(['phone-1: Drive pushed', 'phone-1: Drive let go']);
+  });
+
+  it('logs a drag the gateway ended once, even when the phone lets go afterwards', () => {
+    const { store, clock, log } = setup(); connectTwo(store);
+    store.receive(input('phone-1', { controlId: 'drive', action: 'base.drive', value: { x: 0.7, y: 0 }, live: true })); clock.wall += 500;
+    store.receive(input('phone-1', { controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 }, source: 'gateway', reason: 'samples stopped' }));
+    store.receive(input('phone-1', { controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 } })); store.journal.flush();
+    expect(log().filter(line => line.includes('Drive'))).toEqual(['phone-1: Drive pushed', 'phone-1: Drive let go by the gateway (samples stopped)']);
+  });
+});
+
 describe('event attribution', () => {
   it('tags connections, holds, Stop and arm changes with their phone', () => {
     const { store, advance, log } = setup(); const roster = connectTwo(store);
@@ -220,5 +242,11 @@ describe('simulation', () => {
     expect(one.pose!.position.x).not.toBeCloseTo(two.pose!.position.x, 2);
     expect(log()).toEqual(expect.arrayContaining(['phone-1: Hold to move pressed', 'phone-2: Grip pressed', 'phone-2: Grip released']));
     expect(one.inputs.every(record => !record.input.renew)).toBe(true);
+    // Phone 1 drives its stick from 6 s for 4 s: live while pushed, back to rest after.
+    const drive = () => store.phoneConfigs['phone-1'].controls.find(c => c.id === 'drive') as { value: { x: number; y: number }; live?: boolean };
+    for (let frame = 0; frame < 60 * 2; frame++) { clock.now += 1000 / 60; clock.wall += 1000 / 60; store.simulateFrame(); }
+    expect(drive().live).toBe(true); expect(Math.hypot(drive().value.x, drive().value.y)).toBeLessThanOrEqual(1); expect(one.dragging.has('drive')).toBe(true);
+    for (let frame = 0; frame < 60 * 3; frame++) { clock.now += 1000 / 60; clock.wall += 1000 / 60; store.simulateFrame(); }
+    store.journal.flush(); expect(drive()).toMatchObject({ live: false, value: { x: 0, y: 0 } }); expect(log()).toEqual(expect.arrayContaining(['phone-1: Drive pushed', 'phone-1: Drive let go']));
   });
 });

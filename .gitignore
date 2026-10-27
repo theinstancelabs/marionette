@@ -8,3 +8,5 @@ apps/mobile/.expo
 apps/mobile/.gradle
 coverage
 logs
+__pycache__
+*.pyc

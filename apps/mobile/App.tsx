@@ -4,7 +4,7 @@ import { File, Paths } from 'expo-file-system';
 import WebView, { type WebViewMessageEvent } from 'react-native-webview';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, KeyboardAvoidingView, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
-import { gatewayLabel, gatewayUrl, htmlBridgeScript, isHtmlBridgeDisconnect, nominalCovariance, normalizeQuaternion, operatorPose, poseFromTransform, sanitizeConfig, selectedCameraView, validateCameraFrame, validateHtmlBridgeAction, validateHtmlConfig, validateStatus, PROTOCOL_VERSION, type ConfigMessage, type ConnectionEvent, type HtmlBridgeEvent, type HtmlConfigMessage, type MarionetteMessage, type PosePacket, type StatusMessage, type TrackingEvent, type TrackingState } from '@marionette/protocol';
+import { gatewayLabel, gatewayUrl, htmlBridgeScript, isHtmlBridgeDisconnect, nominalCovariance, normalizeQuaternion, operatorPose, poseFromTransform, sanitizeConfig, selectedCameraView, streamEndValue, validateCameraFrame, validateHtmlBridgeAction, validateHtmlConfig, validateStatus, PROTOCOL_VERSION, STREAM_RENEW_MS, type ConfigMessage, type ControlValue, type ConnectionEvent, type HtmlBridgeEvent, type HtmlConfigMessage, type MarionetteMessage, type PosePacket, type StatusMessage, type TrackingEvent, type TrackingState } from '@marionette/protocol';
 
 type ArkitEvent = { generation?: number; transform?: number[]; trackingState?: string; state?: string; reason?: string; timestamp?: number; code?: string; message?: string };
 type ArkitBridge = { isSupported(): boolean; start(generation: number): Promise<void>; stop(): Promise<void>; addListener(name: 'onPose' | 'onTracking' | 'onError' | 'onWorldReset', listener: (event: ArkitEvent) => void): { remove(): void } };
@@ -51,9 +51,11 @@ export default function App() {
   // ARKit events carry the generation passed to start(); anything else is a frame queued from an earlier run.
   const generation=useRef(0); const arkitActive=useRef(false);
   const held=useRef(new Map<string, string>());
+  // Sliders and sticks being dragged: their latest sample is repeated while the finger rests.
+  const dragging=useRef(new Map<string, { action: string; value?: ControlValue; at: number }>());
   const htmlRef = useRef<React.ComponentRef<typeof WebView>>(null);
   const send=(payload: MarionetteMessage)=>{ if(socket.current?.readyState!==WebSocket.OPEN)return false; socket.current.send(JSON.stringify(payload)); return true; };
-  const sendAction=(controlId:string,actionName:string,value?:string|number|boolean,renew?:true)=>send({type:'action',version:PROTOCOL_VERSION,sessionId:session.current,controlId,action:actionName,value,renew,sentAt:Date.now()});
+  const sendAction=(controlId:string,actionName:string,value?:ControlValue,flags:{renew?:true;live?:true}={})=>send({type:'action',version:PROTOCOL_VERSION,sessionId:session.current,controlId,action:actionName,value,...flags,sentAt:Date.now()});
   const inject=(type:HtmlBridgeEvent,payload:unknown)=>htmlRef.current?.injectJavaScript(`window.Marionette&&window.Marionette._receive(${JSON.stringify({type,payload})});true;`);
   const toHtml=(type:HtmlBridgeEvent,payload:unknown)=>{ latest.current.set(type,payload); inject(type,payload); };
   const localStatus=(message:string)=>toHtml('status',{type:'status',version:PROTOCOL_VERSION,sessionId:session.current,message} satisfies StatusMessage);
@@ -61,7 +63,10 @@ export default function App() {
   const emitPose=(raw:PosePacket)=>{ send(raw); const now=Date.now(); if(now-lastUiAt.current<UI_INTERVAL_MS)return; lastUiAt.current=now; toHtml('pose',operatorPose(raw,configRef.current?.calibration.reference)); };
   const pressHold=(controlId:string,actionName:string)=>{ held.current.set(controlId,actionName); if(!sendAction(controlId,actionName,true))localStatus('Not connected; the hold was not sent'); };
   const releaseHold=(controlId:string)=>{ const actionName=held.current.get(controlId); if(actionName===undefined)return; held.current.delete(controlId); sendAction(controlId,actionName,false); };
-  const releaseAllHolds=()=>{ for(const controlId of [...held.current.keys()])releaseHold(controlId); };
+  // A drag the screen can no longer finish (the app leaves, the screen reloads) ends where the control rests: a stick at zero.
+  const endDrag=(controlId:string)=>{ const drag=dragging.current.get(controlId); if(!drag)return; dragging.current.delete(controlId); const control=configRef.current?.controls.find(c=>c.id===controlId&&c.action===drag.action); sendAction(controlId,drag.action,streamEndValue(control,drag.value)); };
+  /** Lets go of every held button and dragged control. */
+  const releaseAll=()=>{ for(const controlId of [...held.current.keys()])releaseHold(controlId); for(const controlId of [...dragging.current.keys()])endDrag(controlId); };
   // A new pose session tells the gateway the ARKit world changed, which clears calibration there.
   const startPoseSession=()=>{ session.current=newSessionId(); seq.current=0; };
   const stopSyntheticMotion=()=>{if(syntheticTimer.current)clearInterval(syntheticTimer.current);syntheticTimer.current=undefined;};
@@ -84,11 +89,13 @@ export default function App() {
     return()=>{ subs.forEach(sub=>sub.remove()); stopTracking(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-  useEffect(()=>{ const renew=setInterval(()=>{ for(const [controlId,actionName] of held.current)sendAction(controlId,actionName,true,true); },HOLD_RENEW_MS); const appState=AppState.addEventListener('change',next=>{ if(next!=='active')releaseAllHolds(); }); return()=>{ clearInterval(renew); appState.remove(); };
+  useEffect(()=>{ const renew=setInterval(()=>{ for(const [controlId,actionName] of held.current)sendAction(controlId,actionName,true,{renew:true}); },HOLD_RENEW_MS);
+    const repeat=setInterval(()=>{ const now=Date.now(); for(const [controlId,drag] of dragging.current)if(now-drag.at>=STREAM_RENEW_MS){ drag.at=now; sendAction(controlId,drag.action,drag.value,{live:true,renew:true}); } },STREAM_RENEW_MS/2);
+    const appState=AppState.addEventListener('change',next=>{ if(next!=='active')releaseAll(); }); return()=>{ clearInterval(renew); clearInterval(repeat); appState.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   /** Leaves the gateway and returns to the connect page, with a reason unless the operator chose to leave. */
-  const disconnect=(reason?:string)=>{ clearTimeout(connectTimer.current); releaseAllHolds(); const previous=socket.current; socket.current=undefined; previous?.close(); stopTracking(); configRef.current=undefined; latest.current.clear(); setHtmlConfig(undefined); setHtmlLoaded(false); setError(reason); setScreen('connect'); };
+  const disconnect=(reason?:string)=>{ clearTimeout(connectTimer.current); releaseAll(); const previous=socket.current; socket.current=undefined; previous?.close(); stopTracking(); configRef.current=undefined; latest.current.clear(); setHtmlConfig(undefined); setHtmlLoaded(false); setError(reason); setScreen('connect'); };
   const connect=(input=address)=>{ const url=gatewayUrl(input); if(!url){ setError('That doesn’t look like an address. Type the IP the gateway printed, like 192.168.1.20.'); return; }
     disconnect(); const label=gatewayLabel(url); gatewayRef.current=label; setGateway(label); setAddress(label); setError(undefined); setScreen('connecting'); startPoseSession();
     let ws:WebSocket; try { ws=new WebSocket(url); } catch { setScreen('connect'); setError('That address can’t be opened.'); return; }
@@ -102,7 +109,7 @@ export default function App() {
       // console grace first gets console traffic (the gateway view and other phones' configs), so the latest config
       // that names a phone wins instead of the first, and a config without a phone never replaces one that has it.
       if(type==='config'){ const next=sanitizeConfig(m); if(!next||(configRef.current?.phone&&!next.phone))return; configRef.current=next; toHtml('config',next); }
-      else if(type==='html_config'){ if(validateHtmlConfig(m)){ releaseAllHolds(); setHtmlConfig(m); setHtmlLoaded(false); setHtmlKey(key=>key+1); } }
+      else if(type==='html_config'){ if(validateHtmlConfig(m)){ releaseAll(); setHtmlConfig(m); setHtmlLoaded(false); setHtmlKey(key=>key+1); } }
       else if(type==='status'){ if(validateStatus(m)&&(!m.phoneId||m.phoneId===configRef.current?.phone?.id))toHtml('status',m); }
       else if(type==='camera_frame'){ const config=configRef.current; if(validateCameraFrame(m)&&config&&selectedCameraView(config)?.streams.includes(m.cameraId))toHtml('camera_frame',m); } };
     ws.onclose=()=>{ if(socket.current!==ws)return; disconnect(opened?`Lost the connection to ${label}.`:unreachable); };
@@ -112,6 +119,9 @@ export default function App() {
   const onHtmlMessage=(event:WebViewMessageEvent)=>{ const url=event.nativeEvent.url??''; if(url&&!url.startsWith('about:'))return; try { const message=JSON.parse(event.nativeEvent.data);
     if(isHtmlBridgeDisconnect(message)){ disconnect(); return; }
     if(!validateHtmlBridgeAction(message))return;
+    // A live sample of a value being dragged; the final sample (no `live`) closes the drag. A dropped sample is not worth a notice.
+    if(message.live){ dragging.current.set(message.controlId,{action:message.action,value:message.value,at:Date.now()}); sendAction(message.controlId,message.action,message.value,{live:true}); return; }
+    dragging.current.delete(message.controlId);
     if(message.value===false&&held.current.has(message.controlId)){ releaseHold(message.controlId); return; }
     const control=configRef.current?.controls.find(c=>c.id===message.controlId&&c.action===message.action);
     if(control?.type==='button'&&control.hold&&typeof message.value==='boolean'){ if(message.value)pressHold(control.id,control.action); else releaseHold(control.id); return; }
@@ -121,7 +131,7 @@ export default function App() {
   if(screen==='live'&&htmlConfig)return <View style={styles.live}><StatusBar style="dark"/>
     <WebView key={htmlKey} ref={htmlRef} originWhitelist={['*']} source={{html:htmlConfig.html,baseUrl:'about:blank'}} injectedJavaScriptBeforeContentLoaded={bridgeScript} injectedJavaScript={bridgeScript} onMessage={onHtmlMessage}
       onShouldStartLoadWithRequest={request=>{ if(request.url.startsWith('about:')||!request.isTopFrame)return true; if(/^https?:/i.test(request.url))Linking.openURL(request.url).catch(()=>{}); return false; }}
-      onLoadStart={releaseAllHolds} onLoad={replayToHtml} onContentProcessDidTerminate={()=>{ releaseAllHolds(); setHtmlLoaded(false); setHtmlKey(key=>key+1); }}
+      onLoadStart={releaseAll} onLoad={replayToHtml} onContentProcessDidTerminate={()=>{ releaseAll(); setHtmlLoaded(false); setHtmlKey(key=>key+1); }}
       javaScriptEnabled domStorageEnabled bounces={false} contentInsetAdjustmentBehavior="never" automaticallyAdjustContentInsets={false} dataDetectorTypes="none" allowsLinkPreview={false} style={styles.webview}/>
     {!htmlLoaded&&<View style={styles.loading} pointerEvents="none"><ActivityIndicator color={INK2}/></View>}
   </View>;

@@ -1,8 +1,8 @@
-import { defaultConfig, sanitizeConfig, validateCameraFrame, validateInput, validatePose, validateStatus, type ConfigMessage, type InputMessage, type PhoneInfo, type PosePacket, type StatusMessage, type UiControl } from '@marionette/protocol';
+import { STICK_REST, defaultConfig, isLiveControl, sanitizeConfig, validateCameraFrame, validateInput, validatePose, validateStatus, type ConfigMessage, type ControlValue, type InputMessage, type PhoneInfo, type PosePacket, type StatusMessage, type UiControl } from '@marionette/protocol';
 import { EventJournal, configEvents, inputDraft, phoneEvents, phoneState, rosterEvents, statusDraft, type ConsoleEvent, type EventDraft, type PhoneState, type Tone } from './events';
 import { frameKey, trimBefore, type Sample } from './motion';
 import { rosterPhones, safeColor, type Phone } from './phones';
-import { SIM_PHONES, simulatedConfig, simulatedGatewayConfig, simulatedHolds, simulatedRoster, simulationPose } from './simulation';
+import { SIM_PHONES, simulatedConfig, simulatedGatewayConfig, simulatedHolds, simulatedRoster, simulatedStick, simulationPose } from './simulation';
 
 /** `id` is unique for the store's lifetime, so lists can key on it. */
 export type InputRecord = { id: number; at: number; input: InputMessage };
@@ -18,6 +18,8 @@ export type PhoneLive = {
   inputs: InputRecord[];
   /** Hold buttons pressed according to the input stream. */
   holding: Set<string>;
+  /** Sliders and sticks being dragged according to the input stream, with their latest live value. */
+  dragging: Map<string, ControlValue>;
   /** The gateway's latest reply about this phone. */
   reply?: { message: string; tone: Tone; at: number };
 };
@@ -30,7 +32,7 @@ export const HISTORY_MS = 20_000;
 export const MAX_INPUTS = 12;
 const RENEW_MS = 200;
 
-const emptyPhone = (): PhoneLive => ({ poseAt: -Infinity, trail: [], history: [], presence: { present: false }, inputs: [], holding: new Set() });
+const emptyPhone = (): PhoneLive => ({ poseAt: -Infinity, trail: [], history: [], presence: { present: false }, inputs: [], holding: new Set(), dragging: new Map() });
 export type Clocks = { now: () => number; wall: () => number };
 const systemClocks: Clocks = { now: () => performance.now(), wall: () => Date.now() };
 
@@ -137,11 +139,15 @@ export class ViewerStore {
     // That also covers a hold that was already on when this viewer connected.
     const wasHeld = phone.holding.has(input.controlId) || (control?.type === 'button' && !!control.held);
     if (control?.type === 'button' && control.hold) { if (input.value === false) phone.holding.delete(input.controlId); else phone.holding.add(input.controlId); }
-    // A slider being dragged is one entry that keeps its latest value.
+    // Like a hold, a drag already under way when this viewer connected shows in the config.
+    const wasLive = phone.dragging.has(input.controlId) || (isLiveControl(control) && !!control.live);
+    if (input.live && input.value !== undefined && input.source !== 'gateway') phone.dragging.set(input.controlId, input.value); else phone.dragging.delete(input.controlId);
+    // A slider or stick being dragged is one entry that keeps its latest value, through to where it was let go.
     const last = phone.inputs.at(-1);
-    if (last && last.input.controlId === input.controlId && typeof input.value === 'number' && typeof last.input.value === 'number' && at - last.at < 1000) phone.inputs[phone.inputs.length - 1] = { id: last.id, at, input };
+    const sameDrag = !!last && last.input.controlId === input.controlId && (last.input.live || (typeof input.value === 'number' && typeof last.input.value === 'number')) && at - last.at < 1000;
+    if (sameDrag) phone.inputs[phone.inputs.length - 1] = { id: last.id, at, input };
     else { phone.inputs.push({ id: this.inputSeq++, at, input }); if (phone.inputs.length > MAX_INPUTS) phone.inputs.shift(); }
-    const draft = inputDraft(input, control, wasHeld);
+    const draft = inputDraft(input, control, wasHeld, wasLive);
     if (draft) this.propose([draft]);
   }
 
@@ -189,7 +195,7 @@ export class ViewerStore {
     this.sim = { start: this.clocks.now(), seq: 0, renewedAt: -Infinity };
   }
 
-  /** One simulated frame: a pose from each phone, plus the presses, renewals and releases of their holds. */
+  /** One simulated frame: a pose from each phone, the presses, renewals and releases of their holds, and Phone 1's stick. */
   simulateFrame(now = this.clocks.now()) {
     const sim = this.sim; if (!sim) return;
     const t = (now - sim.start) / 1000; const renew = now - sim.renewedAt >= RENEW_MS;
@@ -197,8 +203,15 @@ export class ViewerStore {
     SIM_PHONES.forEach((phone, index) => {
       this.ingestPose(phone.id, simulationPose(index, t, sim.seq), now);
       const config = this.phoneConfigs[phone.id]; if (!config?.phone) return;
-      const want = simulatedHolds(index, t); let changed = false;
+      const want = simulatedHolds(index, t); const push = simulatedStick(index, t); let changed = false;
       const controls = config.controls.map(control => {
+        if (control.type === 'joystick') {
+          // A pushed stick streams a live sample every frame; letting go sends it back to rest.
+          const sample: InputMessage = { type: 'input', version: 1, phoneId: phone.id, sessionId: config.sessionId, controlId: control.id, action: control.action, value: push ?? { ...STICK_REST }, source: 'phone', receivedAt: this.clocks.wall() };
+          if (push) { this.ingestInput({ ...sample, live: true }); if (control.live) return control; changed = true; return { ...control, value: push, live: true }; }
+          if (!control.live) return control;
+          changed = true; this.ingestInput(sample); return { ...control, value: { ...STICK_REST }, live: false };
+        }
         if (control.type !== 'button' || !control.hold) return control;
         const held = want.includes(control.id);
         const input: InputMessage = { type: 'input', version: 1, phoneId: phone.id, sessionId: config.sessionId, controlId: control.id, action: control.action, value: held, source: 'phone', receivedAt: this.clocks.wall() };

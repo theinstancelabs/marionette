@@ -131,7 +131,8 @@ button.eye:hover { color: var(--ink); background: #fff; }
 .eye.value { font-variant-numeric: tabular-nums; }
 
 /* Spatial view */
-.space { position: relative; border-bottom: 1px solid var(--rule); background-color: #fdfdfb; background-image: var(--graph); background-size: 28px 28px; overflow: hidden; min-height: 0; }
+/* Plain paper: the scene draws its own floor grid, which moves with the view. */
+.space { position: relative; border-bottom: 1px solid var(--rule); background-color: #fdfdfb; overflow: hidden; min-height: 0; }
 .space-canvas { position: absolute; inset: 0; }
 .space-canvas canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .tabs { position: absolute; left: 12px; top: 10px; display: flex; gap: 14px; }
@@ -235,6 +236,13 @@ button.eye:hover { color: var(--ink); background: #fff; }
 .kv > div.stack dd { white-space: normal; text-align: right; margin-left: auto; }
 .kv dd .muted { font-size: 11.5px; }
 .kv.controls > div { padding: 2.5px 0; }
+.stick-glyph { width: 15px; height: 15px; margin-right: 6px; vertical-align: -3px; overflow: visible; }
+.stick-glyph .rim { fill: #fff; stroke: var(--ink2); stroke-width: 1.2; }
+.stick-glyph .cross { stroke: var(--rule); stroke-width: 0.8; }
+.stick-glyph .vec { stroke: var(--ink2); stroke-width: 1.6; stroke-linecap: round; }
+.stick-glyph .knob { fill: var(--ink2); }
+.stick-glyph.live .vec { stroke: var(--blue); }
+.stick-glyph.live .knob { fill: var(--blue); }
 .steps { display: flex; gap: 4px; margin: 2px 0 10px; }
 .steps li { flex: 1; text-align: center; font-size: 11.5px; padding: 4px 0; border-radius: 6px; border: 1px solid var(--rule); background: #fff; color: var(--ink2); }
 .steps li.done { border-color: var(--green); color: var(--green); }
