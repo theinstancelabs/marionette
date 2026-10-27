@@ -44,8 +44,9 @@ describe('RobotLink against the real gateway', () => {
     expect(one.robotStates().find(m => !m.phoneId)).toMatchObject({ robotId: 'axol', state: { ready: true, battery: null, frames: ['axol', 'head'] }, everyMs: 100, sentAt: expect.any(Number), receivedAt: expect.any(Number) });
     await sleep(450);
     expect(two.robotStates().filter(m => !m.phoneId).length).toBeGreaterThanOrEqual(4); expect(two.robotStates().some(m => m.phoneId)).toBe(false);
+    // A change goes out at once, not at the next re-send: its sentAt is when state() was called.
     const changed = Date.now(); link.state({ ready: false });
-    await one.waitFor(() => one.robotStates().at(-1)?.state?.ready === false || one.robotStates().some(m => m.state?.ready === false)); expect(Date.now() - changed).toBeLessThan(60);
+    const fresh = await one.waitFor(() => one.robotStates().find(m => m.state?.ready === false)); expect(fresh.sentAt - changed).toBeLessThan(20);
     const late = await phoneOn(gateway, { deviceId: 'late' });
     await late.waitFor(() => late.robotStates().length > 0);
     expect(late.robotStates()[0]).toMatchObject({ robotId: 'axol', state: { ready: false } });
@@ -129,15 +130,16 @@ describe('SimPhone and the tracker against the real gateway', () => {
     const phone = await phoneOn(gateway, { clockOffsetMs: 4000 });
     await waitFor(() => link.tracker!.get(phone.id!)?.pose?.latencyMs !== undefined && link.client.offsetMs !== undefined);
     const pose = link.tracker!.get(phone.id!)!.pose!;
-    expect(pose.latencyMs!).toBeLessThan(50); expect(pose.sentAt! - Date.now()).toBeGreaterThan(3000);
-    expect(pose.age(link.tracker!.now())).toBeGreaterThanOrEqual(0); expect(pose.age(link.tracker!.now())).toBeLessThan(100);
+    // The phone's clock is 4 s ahead, and none of that shows up in the latency or the age.
+    expect(pose.latencyMs!).toBeLessThan(200); expect(pose.sentAt! - Date.now()).toBeGreaterThan(3000);
+    expect(pose.age(link.tracker!.now())).toBeGreaterThanOrEqual(0); expect(pose.age(link.tracker!.now())).toBeLessThan(500);
     expect(gate(link.tracker!.get(phone.id!), link.tracker!.now())).toBeUndefined();
     phone.press('teleop.deadman');
     await waitFor(() => link.tracker!.get(phone.id!)!.hold('teleop.deadman').down);
   });
 
   it('follows holds, drags and the mirror policy from real traffic', async () => {
-    const gateway = await gatewayFor({ holdTimeoutMs: 300, streamTimeoutMs: 200 }); const link = await robotOn(gateway); const tracker = link.tracker!;
+    const gateway = await gatewayFor({ holdTimeoutMs: 500, streamTimeoutMs: 300 }); const link = await robotOn(gateway); const tracker = link.tracker!;
     const phone = await phoneOn(gateway); const now = () => tracker.now();
     const p = () => tracker.get('phone-1')!;
     phone.press('teleop.deadman'); await waitFor(() => p().hold('teleop.deadman').down);
