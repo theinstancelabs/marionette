@@ -34,6 +34,8 @@ const RETRY_FIRST_MS = 500; const RETRY_MAX_MS = 5000; const RETRY_TIMEOUT_MS = 
 // A gateway that pings (every second) and then goes quiet this long is gone, even while iOS still thinks the socket is open.
 const SILENCE_MS = 3500;
 const MAX_RECENT = 5; const MAX_CODES = 32; const MAX_HOSTS = 8; const MAX_EARLY = 32;
+// Only Stop is kept for a gateway that isn't there: it only ever stops, so it is safe to deliver late.
+const ESTOP_ACTION = 'safety.estop';
 const FEATURES: HtmlBridgeFeature[] = ['live', 'robot_state', 'link', 'rtc', 'reconnect', 'orientation'];
 const bridgeScript = htmlBridgeScript('function(m){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(m));}', FEATURES);
 
@@ -142,6 +144,8 @@ export default function App() {
   // Drags the connection dropped under, or touched while there was no connection. The page lives on, so their later
   // samples are swallowed until the finger lifts: nothing touched without a gateway acts once it is back.
   const cutDrags=useRef(new Set<string>());
+  // Stop pressed while there was no gateway (control id → action), sent as soon as the gateway accepts the phone again.
+  const stops=useRef(new Map<string, string>());
   const htmlRef = useRef<React.ComponentRef<typeof WebView>>(null);
   const send=(payload: MarionetteMessage)=>{ if(socket.current?.readyState!==WebSocket.OPEN)return false; socket.current.send(JSON.stringify(payload)); return true; };
   /** Whether the page's actions can go out: the socket is open and the gateway has accepted the phone on it. */
@@ -184,7 +188,7 @@ export default function App() {
   /** Closes every socket and timer of the connection. */
   const closeConnection=()=>{ attempt.current++; clearTimeout(attemptTimer.current); clearTimeout(retryTimer.current); for(const ws of racing.current)ws.close(); racing.current.clear(); const previous=socket.current; socket.current=undefined; previous?.close(); accepted.current=false; early.current=[]; };
   /** Leaves the gateway and returns to the connect page, with a reason unless the operator chose to leave. */
-  const disconnect=(reason?:string)=>{ releaseAll(); closeConnection(); stopTracking(); target.current=undefined; established.current=false; cutDrags.current.clear();
+  const disconnect=(reason?:string)=>{ releaseAll(); closeConnection(); stopTracking(); target.current=undefined; established.current=false; cutDrags.current.clear(); stops.current.clear();
     configRef.current=undefined; htmlConfigRef.current=undefined; latest.current.clear(); robotStates.current.clear(); gatewaySession.current=undefined;
     setHtmlConfig(undefined); setHtmlLoaded(false); setReconnecting(undefined); setError(reason); setScreen('connect'); };
   /** A fresh connection: a new pose session, and back to the connect page if it never opens. */
@@ -251,7 +255,9 @@ export default function App() {
     accepted.current=true; retryMs.current=RETRY_FIRST_MS; current.gatewayId=next.gatewayId; if(current.pinned===undefined)current.pinned=next.gatewayId??'';
     setReconnecting(undefined); toHtml('connection',{state:'connected',gateway:current.label} satisfies ConnectionEvent);
     if(current.sent)rememberCode(current.label,next.gatewayId,current.sent); setCode(''); setCodeShown(false); setCodeNote(undefined);
-    for(const message of early.current.splice(0))relay(message); };
+    for(const message of early.current.splice(0))relay(message);
+    // Stop pressed while the gateway was away.
+    if(stops.current.size){ for(const [controlId,actionName] of stops.current)sendAction(controlId,actionName,true); stops.current.clear(); localStatus('Stop sent'); } };
   const relay=(m:unknown)=>{ const type=m&&typeof m==='object'?(m as {type?:unknown}).type:undefined;
     // The gateway sends its screen on every connection: the same document again must not reload the page.
     if(type==='html_config'){ if(validateHtmlConfig(m)){ const same=htmlConfigRef.current?.html===m.html; htmlConfigRef.current=m; if(same)return; releaseAll(); cutDrags.current.clear(); setHtmlConfig(m); setHtmlLoaded(false); setHtmlKey(key=>key+1); } }
@@ -303,6 +309,8 @@ export default function App() {
     const control=configRef.current?.controls.find(c=>c.id===message.controlId&&c.action===message.action);
     if(control?.type==='button'&&control.hold&&typeof message.value==='boolean'){ if(message.value)pressHold(control.id,control.action); else releaseHold(control.id); return; }
     if(linked()&&sendAction(message.controlId,message.action,message.value))return;
+    // Stop (on, never off) waits for the gateway to accept the phone again; nothing else is kept for later.
+    if(message.action===ESTOP_ACTION&&message.value===true){ stops.current.set(message.controlId,message.action); localStatus('Stop will be sent when the gateway is back'); return; }
     localStatus('Not connected; action not sent'); } catch { /* Ignore messages outside the documented bridge. */ } };
   const replayToHtml=()=>{ setHtmlLoaded(true); for(const [type,payload] of latest.current)inject(type,payload); for(const state of robotStates.current.values())inject('robot_state',state); };
   // Timers, app state and links are subscribed once too, for the same reason.
@@ -384,13 +392,16 @@ function NearbyRow({gateway,needsCode,onConnect}:{gateway:NearbyGateway;needsCod
     <Text style={styles.rowGo}>{needsCode?'Pair':'Connect'}</Text></Pressable>;
 }
 
-/** Shown over the screen while the app reconnects in place; the page underneath keeps running. */
+/**
+ * Shown over the foot of the screen while the app reconnects in place; the page underneath keeps running. The top
+ * stays clear: the kit's Stop floats in the top right, and Stop still works while reconnecting (it is sent on return).
+ */
 function ReconnectBanner({gateway,reason,onLeave}:{gateway:string;reason:string;onLeave:()=>void}){
-  return <SafeAreaView style={styles.bannerWrap} pointerEvents="box-none"><View style={styles.banner} accessibilityRole="alert">
+  return <SafeAreaView style={styles.bannerWrap} pointerEvents="box-none"><View style={styles.bannerSpace} pointerEvents="box-none"><View style={styles.banner} accessibilityRole="alert">
     <ActivityIndicator color={RED}/>
     <View style={styles.bannerText}><Text style={styles.bannerTitle} numberOfLines={2}>Reconnecting to <Text style={styles.mono}>{gateway}</Text>…</Text><Text style={styles.bannerReason} numberOfLines={1}>{reason}</Text></View>
     <Pressable style={({pressed})=>[styles.secondary,styles.bannerLeave,pressed&&styles.pressed]} onPress={onLeave} accessibilityRole="button"><Text style={styles.secondaryText}>Leave</Text></Pressable>
-  </View></SafeAreaView>;
+  </View></View></SafeAreaView>;
 }
 
 /** Full-screen QR scanner for a gateway's pairing link. ARKit isn't running on the connect page, so the camera is free. */
@@ -452,7 +463,8 @@ const styles=StyleSheet.create({
   recentText:{fontFamily:'Menlo',fontSize:15,color:INK},
   waiting:{flex:1,alignItems:'center',justifyContent:'center',gap:16,paddingHorizontal:30}, waitingText:{color:INK,fontSize:17,textAlign:'center'}, waitingNote:{color:INK2,fontSize:15,textAlign:'center',marginTop:-8},
   secondary:{minHeight:44,paddingHorizontal:20,borderRadius:10,borderWidth:1.5,borderColor:INK,backgroundColor:'#fff',alignItems:'center',justifyContent:'center'}, secondaryText:{color:INK,fontSize:16,fontWeight:'500'},
-  bannerWrap:{position:'absolute',top:0,left:0,right:0}, banner:{flexDirection:'row',alignItems:'center',gap:12,marginHorizontal:12,marginTop:8,paddingVertical:10,paddingLeft:14,paddingRight:10,borderRadius:14,borderWidth:1.5,borderColor:RED,backgroundColor:PAPER,shadowColor:INK,shadowOpacity:0.18,shadowRadius:10,shadowOffset:{width:0,height:3}},
+  bannerWrap:{position:'absolute',left:0,right:0,bottom:0}, bannerSpace:{alignItems:'center',paddingHorizontal:12,paddingBottom:8},
+  banner:{width:'100%',maxWidth:520,flexDirection:'row',alignItems:'center',gap:12,paddingVertical:10,paddingLeft:14,paddingRight:10,borderRadius:14,borderWidth:1.5,borderColor:RED,backgroundColor:PAPER,shadowColor:INK,shadowOpacity:0.18,shadowRadius:10,shadowOffset:{width:0,height:-2}},
   bannerText:{flex:1}, bannerTitle:{color:INK,fontSize:15,fontWeight:'600'}, bannerReason:{color:INK2,fontSize:13,marginTop:2}, bannerLeave:{minHeight:38,paddingHorizontal:14}, mono:{fontFamily:'Menlo',fontWeight:'400'},
   scanner:{flex:1,backgroundColor:'#111214'}, scannerChrome:{flex:1,alignItems:'center',justifyContent:'space-between',padding:20},
   scannerCard:{maxWidth:480,width:'100%',backgroundColor:PAPER,borderRadius:14,borderWidth:1.5,borderColor:INK,padding:16}, scannerTitle:{color:INK,fontSize:18,fontWeight:'600'}, scannerBody:{color:INK2,fontSize:14,lineHeight:20,marginTop:4},
