@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { defaultConfig, phoneColor, type ConfigMessage, type InputMessage, type PhoneInfo, type PosePacket, type UiControl } from '@marionette/protocol';
+import { defaultConfig, phoneColor, type ConfigMessage, type InputMessage, type PhoneInfo, type PosePacket, type RobotInfo, type RobotStateMessage, type UiControl } from '@marionette/protocol';
 import type { ConsoleEvent } from './events';
-import { ViewerStore } from './store';
+import { freshness } from './robots';
+import { ViewerStore, recentMedian } from './store';
 
 /** A store on a fake clock, with every logged event collected. */
 function setup() {
@@ -248,5 +249,115 @@ describe('simulation', () => {
     expect(drive().live).toBe(true); expect(Math.hypot(drive().value.x, drive().value.y)).toBeLessThanOrEqual(1); expect(one.dragging.has('drive')).toBe(true);
     for (let frame = 0; frame < 60 * 3; frame++) { clock.now += 1000 / 60; clock.wall += 1000 / 60; store.simulateFrame(); }
     store.journal.flush(); expect(drive()).toMatchObject({ live: false, value: { x: 0, y: 0 } }); expect(log()).toEqual(expect.arrayContaining(['phone-1: Drive pushed', 'phone-1: Drive let go']));
+  });
+});
+
+const robot = (over: Partial<RobotInfo> = {}): RobotInfo => ({ id: 'axol', name: 'Axol', connected: true, ...over });
+const robotState = (over: Partial<RobotStateMessage> = {}): RobotStateMessage => ({ type: 'robot_state', version: 1, robotId: 'axol', state: { mode: 'teleop', arms: { left: { joints: [0.1, 0.2] } }, lift: null }, everyMs: 200, receivedAt: 1_000_000, ...over });
+const withRobots = (phones: PhoneInfo[], robots: RobotInfo[]): ConfigMessage => ({ ...gatewayConfig(phones), gatewayId: 'gw-abc', robots });
+
+describe('robots', () => {
+  it('lists robots from the roster and logs them joining, leaving, coming back and publishing video', () => {
+    const { store, advance, log } = setup(); const roster = connectTwo(store);
+    store.receive(withRobots(roster, [robot()]));
+    store.receive(withRobots(roster, [robot({ streams: ['head'] })]));
+    store.receive(withRobots(roster, [robot({ connected: false })]));
+    store.receive(withRobots(roster, [robot({ name: 'Axol arm' })]));
+    advance(300);
+    expect(store.robots().map(r => r.name)).toEqual(['Axol arm']);
+    expect(log().slice(3)).toEqual(['gateway: Axol connected', 'gateway: Axol publishes head over WebRTC', 'gateway: Axol disconnected', 'gateway: Axol arm reconnected']);
+  });
+
+  it('keeps the latest state per robot and phone, in roster order', () => {
+    const { store } = setup(); const roster = connectTwo(store);
+    store.receive(withRobots(roster, [robot()]));
+    store.receive(robotState({ phoneId: 'phone-2', state: { arm: 'right' } }));
+    store.receive(robotState({ phoneId: 'phone-1', state: { arm: 'left' } }));
+    store.receive(robotState());
+    store.receive(robotState({ state: { mode: 'idle' } }));
+    store.receive({ ...robotState(), state: { bad: Infinity } });
+    const { all, phones } = store.robotStates('axol');
+    expect(all?.message.state).toEqual({ mode: 'idle' });
+    expect(phones.map(entry => entry.message.phoneId)).toEqual(['phone-1', 'phone-2']);
+    // A phone that leaves the roster takes its robot state with it, as at the gateway.
+    store.receive(withRobots([roster[0]], [robot()]));
+    expect(store.robotStates('axol').phones.map(entry => entry.message.phoneId)).toEqual(['phone-1']);
+  });
+
+  it('goes stale after max(1.5 s, 3 × everyMs) without a state, and offline when the roster says so', () => {
+    const { store, clock } = setup(); const roster = connectTwo(store);
+    store.receive(withRobots(roster, [robot()]));
+    store.receive(robotState({ everyMs: 1000 }));
+    const entry = () => store.robotStates('axol').all!;
+    const fresh = () => freshness(entry(), store.robots()[0].connected, store.stateAge(entry()));
+    clock.wall += 2900; expect(fresh()).toBe('fresh');
+    clock.wall += 200; expect(fresh()).toBe('stale');
+    store.receive(robotState({ everyMs: 100 })); clock.wall += 1400; expect(fresh()).toBe('fresh');
+    clock.wall += 200; expect(fresh()).toBe('stale');
+    store.receive(withRobots(roster, [robot({ connected: false })]));
+    expect(fresh()).toBe('offline');
+  });
+
+  it('ages a replayed state on the gateway’s clock once a pong gives the offset', () => {
+    const { store, clock } = setup(); const roster = connectTwo(store);
+    // No pings to an older gateway (no id): it would answer with an error.
+    expect(store.ping()).toBeUndefined();
+    store.receive(withRobots(roster, [robot({ connected: false })]));
+    // The gateway's clock runs 5 s ahead of the viewer's; the state was received there 60 s ago.
+    store.receive(robotState({ receivedAt: clock.wall + 5000 - 60_000 }));
+    expect(store.stateAge(store.robotStates('axol').all!)).toBe(0);
+    const ping = store.ping()!;
+    expect(ping).toMatchObject({ type: 'ping', version: 1, id: 1, sentAt: clock.wall });
+    expect(store.ping()).toBeUndefined();
+    clock.wall += 20;
+    store.receive({ type: 'pong', version: 1, id: ping.id, sentAt: ping.sentAt, at: ping.sentAt + 10 + 5000 });
+    expect(store.gatewayOffset()).toBe(5000);
+    expect(store.stateAge(store.robotStates('axol').all!)).toBe(60_020);
+    clock.wall += 5000; expect(store.ping()).toMatchObject({ id: 2 });
+  });
+
+  it('logs whose screen the phones show when it changes, not the one they had', () => {
+    const { store, log } = setup(); const roster = connectTwo(store);
+    store.receive(withRobots(roster, [robot()]));
+    const screen = (source?: { kind: 'default' | 'file' | 'robot'; robotId?: string }) => store.receive({ type: 'html_config', version: 1, sessionId: 'gw', htmlVersion: 1, bridgeVersion: 1, html: '<p>screen</p>', ...(source ? { source } : {}) });
+    screen({ kind: 'default' }); screen({ kind: 'robot', robotId: 'axol' }); screen({ kind: 'robot', robotId: 'axol' }); screen({ kind: 'file' }); screen();
+    store.journal.flush();
+    expect(log().filter(line => /screen/i.test(line))).toEqual(['gateway: Phones show Axol’s screen', 'gateway: Axol sent a new screen', 'gateway: Phones show the screen file', 'gateway: Phones show the default screen']);
+  });
+
+  it('passes WebRTC signaling on to the video panes', () => {
+    const rtc: unknown[] = [];
+    const store = new ViewerStore({ onEvents: () => {}, onRtc: message => rtc.push(message) });
+    store.receive({ type: 'rtc', version: 1, kind: 'offer', peer: 'head-1', from: 'c7', sdp: 'v=0' });
+    store.receive({ type: 'rtc', version: 1, kind: 'nonsense' });
+    expect(rtc).toEqual([{ type: 'rtc', version: 1, kind: 'offer', peer: 'head-1', from: 'c7', sdp: 'v=0' }]);
+  });
+});
+
+describe('link latency', () => {
+  it('is the median of the last second of pose and input stamps', () => {
+    const { store, clock } = setup(); connectTwo(store);
+    expect(store.latency('phone-1')).toBeUndefined();
+    [12, 8, 30, 10].forEach((latencyMs, i) => { store.receive(pose('phone-1', i, 0, { latencyMs })); clock.now += 100; });
+    store.receive(input('phone-1', { latencyMs: 9 }));
+    // Releases the gateway infers have no phone behind them.
+    store.receive(input('phone-1', { value: false, source: 'gateway', latencyMs: 500 }));
+    expect(store.latency('phone-1')).toEqual({ ms: 10, count: 5 });
+    clock.now += 850;
+    expect(store.latency('phone-1')).toEqual({ ms: 9.5, count: 2 });
+    clock.now += 1000;
+    expect(store.latency('phone-1')).toBeUndefined();
+    expect(recentMedian([], 0)).toBeUndefined();
+  });
+
+  it('comes with the simulated phones, along with the simulated robot’s state', () => {
+    const { store, clock } = setup(); store.simulate();
+    for (let frame = 0; frame < 60; frame++) { clock.now += 1000 / 60; clock.wall += 1000 / 60; store.simulateFrame(); }
+    expect(store.latency('phone-1')!.ms).toBeGreaterThan(0);
+    expect(store.robots()).toMatchObject([{ id: 'sim-robot', connected: true, screen: true }]);
+    const { all, phones } = store.robotStates('sim-robot');
+    expect(all?.message.state).toMatchObject({ mode: 'teleop', lift: null, faults: [] });
+    expect(phones.map(entry => entry.message.state.arm)).toEqual(['left', 'right']);
+    expect(freshness(all!, true, store.stateAge(all!))).toBe('fresh');
   });
 });

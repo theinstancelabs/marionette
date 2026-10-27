@@ -1,7 +1,7 @@
-import { CALIBRATION_STEPS, describeCheckResult, isStickValue, sameValue, type CalibrationCheckResult, type CalibrationStep, type ConfigMessage, type ControlValue, type InputMessage, type PhoneInfo, type PosePacket, type StatusMessage, type StickValue, type TrackingState, type UiControl } from '@marionette/protocol';
+import { CALIBRATION_STEPS, describeCheckResult, isStickValue, sameValue, type CalibrationCheckResult, type CalibrationStep, type ConfigMessage, type ControlValue, type HtmlConfigMessage, type InputMessage, type PhoneInfo, type PosePacket, type RobotInfo, type StatusMessage, type StickValue, type TrackingState, type UiControl } from '@marionette/protocol';
 import { TRACKING_WORDS } from './motion';
 
-export const EVENT_KINDS = ['session', 'tracking', 'calibration', 'validation', 'input', 'safety', 'camera', 'settings'] as const;
+export const EVENT_KINDS = ['session', 'tracking', 'calibration', 'validation', 'input', 'safety', 'camera', 'settings', 'robot'] as const;
 export type EventKind = typeof EVENT_KINDS[number];
 export type Tone = 'normal' | 'pass' | 'fail';
 /**
@@ -147,6 +147,37 @@ export function rosterEvents(prev: PhoneInfo[], next: PhoneInfo[]): EventDraft[]
   }
   for (const phone of prev) if (phone.connected && !next.some(candidate => candidate.id === phone.id)) out.push({ kind: 'session', message: 'Disconnected', tone: 'normal', phoneId: phone.id });
   return out;
+}
+
+/**
+ * Robots joining, leaving and coming back, and the streams they start or stop publishing over WebRTC, from one
+ * roster to the next. A robot stays in the roster, offline, once it has connected.
+ */
+export function robotEvents(prev: RobotInfo[] = [], next: RobotInfo[] = []): EventDraft[] {
+  const out: EventDraft[] = [];
+  for (const robot of next) {
+    const before = prev.find(candidate => candidate.id === robot.id);
+    if (robot.connected && !before?.connected) out.push({ kind: 'robot', message: `${robot.name} ${before ? 'reconnected' : 'connected'}`, tone: 'normal' });
+    else if (!robot.connected && before?.connected) out.push({ kind: 'robot', message: `${robot.name} disconnected`, tone: 'normal' });
+    if (!robot.connected) continue;
+    const had = before?.connected ? before.streams ?? [] : []; const has = robot.streams ?? [];
+    const added = has.filter(id => !had.includes(id)), removed = had.filter(id => !has.includes(id));
+    if (added.length) out.push({ kind: 'camera', message: `${robot.name} publishes ${added.join(', ')} over WebRTC`, tone: 'normal' });
+    if (removed.length) out.push({ kind: 'camera', message: `${robot.name} stopped publishing ${removed.join(', ')}`, tone: 'normal' });
+  }
+  return out;
+}
+
+type ScreenSource = NonNullable<HtmlConfigMessage['source']>;
+/** The log line for a new phone screen: whose it is now (a robot's, the screen file, the default). */
+export function screenDraft(prev: ScreenSource | undefined, next: ScreenSource | undefined, robots: RobotInfo[] = []): EventDraft {
+  const same = !!prev && !!next && prev.kind === next.kind && prev.robotId === next.robotId;
+  if (next?.kind === 'robot') {
+    const name = robots.find(robot => robot.id === next.robotId)?.name ?? next.robotId ?? 'A robot';
+    return { kind: 'robot', message: same ? `${name} sent a new screen` : `Phones show ${name}’s screen`, tone: 'normal' };
+  }
+  if (next?.kind === 'file') return { kind: 'session', message: same ? 'Screen file reloaded' : 'Phones show the screen file', tone: 'normal' };
+  return { kind: 'session', message: same || !next ? 'Screen reloaded' : 'Phones show the default screen', tone: 'normal' };
 }
 
 const via = (input: InputMessage) => input.source === 'mirror' ? ' (desktop mirror)' : '';

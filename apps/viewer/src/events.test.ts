@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig, type CalibrationCheckResult, type ConfigMessage, type InputMessage, type PosePacket, type StatusMessage, type UiControl } from '@marionette/protocol';
-import { EventJournal, calibrationEvents, configEvents, controlEvents, inputDraft, inputText, isRejection, kindForText, knownStep, phoneEvents, phoneState, rosterEvents, statusDraft, type ConsoleEvent } from './events';
+import { EventJournal, calibrationEvents, configEvents, controlEvents, inputDraft, inputText, isRejection, kindForText, knownStep, phoneEvents, phoneState, robotEvents, rosterEvents, screenDraft, statusDraft, type ConsoleEvent } from './events';
 
 const base = (): ConfigMessage => ({ ...defaultConfig(), sessionId: 'gw' });
 const withValue = (config: ConfigMessage, id: string, value: string | number | boolean): ConfigMessage => ({ ...config, controls: config.controls.map(c => c.id === id ? { ...c, value } as UiControl : c) });
@@ -220,5 +220,26 @@ describe('event journal', () => {
     expect(messages(log)).toEqual(['Grip pressed']);
     j.flush(1000);
     expect(messages(log)).toEqual(['Grip pressed', 'Translation scale: 1.8×']);
+  });
+});
+
+describe('robot log lines', () => {
+  it('logs joins, leaves, returns and published streams', () => {
+    const axol = { id: 'axol', name: 'Axol', connected: true };
+    expect(robotEvents(undefined, [axol]).map(draft => draft.message)).toEqual(['Axol connected']);
+    expect(robotEvents([axol], [{ ...axol, streams: ['head', 'arm-left'] }]).map(draft => [draft.kind, draft.message])).toEqual([['camera', 'Axol publishes head, arm-left over WebRTC']]);
+    expect(robotEvents([{ ...axol, streams: ['head', 'arm-left'] }], [{ ...axol, streams: ['head'] }]).map(draft => draft.message)).toEqual(['Axol stopped publishing arm-left']);
+    expect(robotEvents([{ ...axol, streams: ['head'] }], [{ ...axol, connected: false }]).map(draft => draft.message)).toEqual(['Axol disconnected']);
+    expect(robotEvents([{ ...axol, connected: false }], [axol]).map(draft => draft.message)).toEqual(['Axol reconnected']);
+    expect(robotEvents([{ ...axol, connected: false }], [{ ...axol, connected: false }])).toEqual([]);
+  });
+
+  it('says whose screen the phones show', () => {
+    const robots = [{ id: 'axol', name: 'Axol', connected: true }];
+    expect(screenDraft({ kind: 'default' }, { kind: 'robot', robotId: 'axol' }, robots)).toMatchObject({ kind: 'robot', message: 'Phones show Axol’s screen' });
+    expect(screenDraft({ kind: 'robot', robotId: 'axol' }, { kind: 'robot', robotId: 'axol' }, robots).message).toBe('Axol sent a new screen');
+    expect(screenDraft({ kind: 'robot', robotId: 'axol' }, { kind: 'robot', robotId: 'other' }, robots).message).toBe('Phones show other’s screen');
+    expect(screenDraft({ kind: 'file' }, { kind: 'file' }).message).toBe('Screen file reloaded');
+    expect(screenDraft({ kind: 'robot', robotId: 'axol' }, { kind: 'default' }).message).toBe('Phones show the default screen');
   });
 });
