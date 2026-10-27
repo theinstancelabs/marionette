@@ -29,26 +29,76 @@ export function loadKit(dir: string | undefined, warn: (message: string) => void
   return { kit, files, reload: () => { const js = read(files[0]), css = read(files[1]); if (js === kit.js && css === kit.css) return false; kit.js = js; kit.css = css; return true; } };
 }
 
-const KIT_SCRIPT = /<script\b([^>]*?)\s+src\s*=\s*(["'])(?:\.?\/)?marionette-kit\.js\2([^>]*)>\s*<\/script\s*>/gi;
-const KIT_STYLE = /<link\b[^>]*?\bhref\s*=\s*(["'])(?:\.?\/)?marionette-kit\.css\1[^>]*>/gi;
+/**
+ * Each start tag `open` finds (a fresh global regex for the tag name, like `/<script\b/gi`): where it starts, its
+ * attributes, and where it ends, just after the first `>`. The search goes on after that `>` (another `<script` among
+ * a tag's attributes belongs to that tag) and stops at a tag that never closes (none after it can). So a screen is read
+ * once: a `[^>]*` regex reads the rest of an unclosed tag again from every `<` in it, which a robot could make take minutes.
+ */
+export function* startTags(html: string, open: RegExp): Generator<{ start: number; attributes: string; end: number }> {
+  for (let found = open.exec(html); found; found = open.exec(html)) {
+    const close = html.indexOf('>', open.lastIndex); if (close < 0) return;
+    yield { start: found.index, attributes: html.slice(open.lastIndex, close), end: close + 1 };
+    open.lastIndex = close + 1;
+  }
+}
+/** Swaps each tag `open` finds for what `replace` gives (through `end`, when that is past the tag); undefined keeps the tag. */
+function replaceTags(html: string, open: RegExp, replace: (tag: { attributes: string; end: number }) => { text: string; end?: number } | undefined): string {
+  const parts: string[] = []; let from = 0; let length = 0;
+  for (const tag of startTags(html, open)) {
+    const swap = tag.start < from ? undefined : replace(tag); if (!swap) continue;
+    parts.push(html.slice(from, tag.start), swap.text); length += tag.start - from + swap.text.length; from = swap.end ?? tag.end;
+    // A screen that names the kit again and again would grow without bound before the size check.
+    if (length > MAX_HTML_CONFIG_BYTES) throw new Error(`it is over the ${MAX_HTML_CONFIG_BYTES / 1000} KB limit with the kit inlined`);
+  }
+  return parts.join('') + html.slice(from);
+}
+const isSpace = (char: string | undefined) => char !== undefined && /\s/.test(char);
+const isWord = (char: string | undefined) => char !== undefined && /\w/.test(char);
+const KIT_SRC = /src\s*=\s*(["'])(?:\.?\/)?marionette-kit\.js\1/gi;
+const KIT_HREF = /href\s*=\s*(["'])(?:\.?\/)?marionette-kit\.css\1/gi;
 /**
  * A screen opts into the kit with `<script src="marionette-kit.js"></script>` and
  * `<link rel="stylesheet" href="marionette-kit.css">` (other attributes, and a leading `/` or `./`, are fine). Both
  * become inline copies, so the phone needs nothing but the document; nothing in the kit can close the tag early.
+ * Throws when the result is over the screen size limit.
  */
 export function inlineKit(html: string, kit: Kit): string {
-  return html.replace(KIT_SCRIPT, (_tag, before: string, _quote: string, after: string) => `<script${before}${after}>${kit.js.replace(/<\/(script)/gi, '<\\/$1')}</script>`)
-    .replace(KIT_STYLE, () => `<style>${kit.css.replace(/<\/(style)/gi, '<\\/$1')}</style>`);
+  const js = kit.js.replace(/<\/(script)/gi, '<\\/$1'); const css = kit.css.replace(/<\/(style)/gi, '<\\/$1');
+  // `src` after white space, then only white space before `</script>`; the tag keeps its other attributes.
+  const scripts = replaceTags(html, /<script\b/gi, ({ attributes, end }) => {
+    for (const src of attributes.matchAll(KIT_SRC)) {
+      const at = src.index ?? 0; if (!isSpace(attributes[at - 1])) continue;
+      const closing = /\s*<\/script\s*>/iy; closing.lastIndex = end; if (!closing.test(html)) return undefined;
+      let before = at; while (isSpace(attributes[before - 1])) before--;
+      return { text: `<script${attributes.slice(0, before)}${attributes.slice(at + src[0].length)}>${js}</script>`, end: closing.lastIndex };
+    }
+    return undefined;
+  });
+  return replaceTags(scripts, /<link\b/gi, ({ attributes }) => {
+    for (const href of attributes.matchAll(KIT_HREF)) { const at = href.index ?? 0; if (at > 0 && !isWord(attributes[at - 1])) return { text: `<style>${css}</style>` }; }
+    return undefined;
+  });
 }
 /** From `<meta name="marionette-orientation" content="portrait|landscape|any">`. */
 export function screenOrientation(html: string): ScreenOrientation | undefined {
-  for (const [tag] of html.matchAll(/<meta\b[^>]*>/gi)) {
+  for (const { start, end } of startTags(html, /<meta\b/gi)) {
+    const tag = html.slice(start, end);
     if (!/\bname\s*=\s*(?:"marionette-orientation"|'marionette-orientation'|marionette-orientation(?=[\s/>]))/i.test(tag)) continue;
     return /\bcontent\s*=\s*["']?(portrait|landscape|any)\b/i.exec(tag)?.[1].toLowerCase() as ScreenOrientation | undefined;
   }
   return undefined;
 }
 
+/** What the first `<script … id="marionette-config">` holds, up to its `</script>`; undefined without one. */
+function configBlock(html: string): string | undefined {
+  for (const { attributes, end } of startTags(html, /<script/gi)) {
+    if (!/id=["']marionette-config["']/i.test(attributes)) continue;
+    const close = /<\/script>/gi; close.lastIndex = end; const found = close.exec(html);
+    return found ? html.slice(end, found.index) : undefined;
+  }
+  return undefined;
+}
 /**
  * A screen can declare its own controls and cameras in
  * `<script type="application/json" id="marionette-config">{"controls": [...], "cameraStreams": [...], "cameraViews": [...]}</script>`.
@@ -57,10 +107,10 @@ export function screenOrientation(html: string): ScreenOrientation | undefined {
  */
 export function parseLayout(html: string): { layout: Layout; warnings: string[] } {
   const fallback = defaultConfig();
-  const match = /<script[^>]*id=["']marionette-config["'][^>]*>([\s\S]*?)<\/script>/i.exec(html);
-  if (!match) return { layout: { controls: fallback.controls, cameraStreams: fallback.cameraStreams, cameraViews: fallback.cameraViews }, warnings: [] };
+  const block = configBlock(html);
+  if (block === undefined) return { layout: { controls: fallback.controls, cameraStreams: fallback.cameraStreams, cameraViews: fallback.cameraViews }, warnings: [] };
   let declared: Partial<Layout>;
-  try { declared = JSON.parse(match[1]) as Partial<Layout>; } catch { throw new Error('the marionette-config block is not valid JSON'); }
+  try { declared = JSON.parse(block) as Partial<Layout>; } catch { throw new Error('the marionette-config block is not valid JSON'); }
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) throw new Error('the marionette-config block is not a JSON object');
   const checked = sanitizeConfig({ ...fallback, sessionId: 'layout', ...declared });
   if (!checked) throw new Error('the marionette-config block is not a valid layout');

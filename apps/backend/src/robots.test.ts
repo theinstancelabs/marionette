@@ -3,6 +3,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CLOSE_CODES, PROTOCOL_VERSION } from '@marionette/protocol';
 import { act, connect, held, hello, mirrorOf, open, phone, port, pose, robot, sendPose, sleep, start, stopGateway, tempDir, waitFor, type Client } from './test-helpers.js';
+import { buildScreen, inlineKit, parseLayout, screenOrientation } from './screens.js';
+import { screenPreview } from './preview.js';
 
 afterEach(stopGateway);
 const robotState = (client: Client, state: object, extra: object = {}) => client.ws.send(JSON.stringify({ type:'robot_state', version:PROTOCOL_VERSION, state, ...extra }));
@@ -117,4 +119,20 @@ describe('the screen kit',()=>{
       expect(latest()).toBe('<script>window.MarionetteKit={ version:2 };</script><p>robot</p>');
       for (const c of [viewer,axol]) c.ws.close(); }
     finally { delete process.env.MARIONETTE_HTML; fs.rmSync(kitDir,{recursive:true,force:true}); } });
+  it('takes the kit tags in the forms it always has', ()=>{ const kit={ js:'K', css:'C' };
+    const forms: [string, string][] = [['<script src="marionette-kit.js"></script>', '<script>K</script>'], ['<SCRIPT type="module"  SRC = \'/marionette-kit.js\' defer >\n</SCRIPT >', '<script type="module" defer >K</script>'],
+      ['<script\tsrc="./MARIONETTE-KIT.JS"></script>', '<script>K</script>'], ['<script data-src="marionette-kit.js"></script>', '<script data-src="marionette-kit.js"></script>'],
+      ['<script src="marionette-kit.js">x</script>', '<script src="marionette-kit.js">x</script>'], ['<script src="marionette-kit.js\'></script>', '<script src="marionette-kit.js\'></script>'],
+      ['<script <script src="marionette-kit.js"></script>', '<script <script>K</script>'], ['<link rel="stylesheet" href=\'./marionette-kit.css\'/>', '<style>C</style>'],
+      ['<LINK HREF = "marionette-kit.css" rel=stylesheet>', '<style>C</style>'], ['<link xhref="marionette-kit.css">', '<link xhref="marionette-kit.css">'], ['<link href="kit.css">', '<link href="kit.css">']];
+    for (const [given, inlined] of forms) expect(inlineKit(given, kit)).toBe(inlined);
+    expect(screenOrientation('<meta name="viewport"><meta content="landscape" name=marionette-orientation>')).toBe('landscape'); expect(screenOrientation('<meta name="marionette-orientation" content="sideways">')).toBeUndefined();
+    expect(parseLayout('<script type="application/json" id="marionette-config">{"controls":[]}</script>').layout.controls).toEqual([]); });
+  it('reads a screen in one pass, so a hostile one can\'t stall the gateway', ()=>{ const kit={ js:'K'.repeat(2000), css:'C' }; const fill=(unit: string) => unit.repeat(Math.floor(512_000 / unit.length));
+    // Unclosed tags and long runs of white space made the old patterns quadratic: seconds at 40 KB, minutes at 512 KB.
+    for (const raw of [`<script${' '.repeat(511_000)}`, `<script src${' '.repeat(511_000)}>`, fill('<script'), fill('<link'), fill('<meta'), fill('<head'), fill('<script id="marionette-config">'), fill('<script src="marionette-kit.js"></script>')]) {
+      const started=performance.now();
+      try { buildScreen({ raw, source:{ kind:'robot', robotId:'r' } }, kit, 's'); } catch { /* refused is fine; slow is not */ }
+      screenPreview(raw, ''); expect(performance.now()-started).toBeLessThan(100); }
+    expect(()=>inlineKit(fill('<script src="marionette-kit.js"></script>'), kit)).toThrow(/over the 512 KB limit/); });
 });

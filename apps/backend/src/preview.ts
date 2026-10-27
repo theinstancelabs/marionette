@@ -1,4 +1,5 @@
 import { STREAM_RENEW_MS, htmlBridgeScript, type HtmlBridgeFeature } from '@marionette/protocol';
+import { startTags } from './screens.js';
 
 /** FNV-1a over UTF-16 code units; the bridge computes the same in the page to tell whether a screen changed. */
 export function screenHash(text: string): number { let hash = 0x811c9dc5; for (let i = 0; i < text.length; i++) { hash ^= text.charCodeAt(i); hash = Math.imul(hash, 0x01000193) >>> 0; } return hash; }
@@ -47,4 +48,8 @@ if(m.type==='camera_frame'&&streams().indexOf(m.cameraId)<0)return;var mine=conf
 socket.onclose=function(e){if(ws!==socket)return;ws=null;
 if(e.code===4401){stopped=true;awaiting=null;receive('link',{quality:'unknown'});receive('connection',{state:'disconnected',gateway:location.host,reason:'the gateway needs its pairing code: add ?token=CODE to this address'});return;}lost();};}
 open();})();`;
-export function screenPreview(html: string, follow: string): string { const script = `<script>${previewBridge(follow, screenHash(html))}</script>`; return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, tag => tag + script) : script + html; }
+/** The screen with the bridge right after its first `<head…>`, or in front of it without one. */
+export function screenPreview(html: string, follow: string): string {
+  const script = `<script>${previewBridge(follow, screenHash(html))}</script>`; const [head] = startTags(html, /<head/gi);
+  return head ? html.slice(0, head.end) + script + html.slice(head.end) : script + html;
+}
