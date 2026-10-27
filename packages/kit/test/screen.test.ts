@@ -74,6 +74,24 @@ describe('the default screen on the kit', () => {
     p.config({}, { robots: [{ id: 'axol', name: 'Axol', connected: false }] }); expect($('robot').textContent).toBe('Axol · offline');
   });
 
+  it('runs the complete robot screen from docs/SCREEN-KIT.md', () => {
+    const docs = fs.readFileSync(new URL('../../../docs/SCREEN-KIT.md', import.meta.url), 'utf8');
+    const example = /## A complete robot screen[\s\S]*?```html\n([\s\S]*?)```/.exec(docs)![1];
+    p = page({ html: inlineKit(example) }); p.connect();
+    const c = p.config({}, { robots: [{ id: 'rover', name: 'Rover', connected: true, screen: true }] });
+    p.receive('config', { ...c, controls: [
+      { id: 'deadman', type: 'button', label: 'Hold to move', action: 'teleop.deadman', hold: true }, { id: 'estop', type: 'toggle', label: 'Stop', action: 'safety.estop', value: false },
+      { id: 'drive', type: 'joystick', label: 'Drive', action: 'base.drive', value: { x: 0, y: 0 } }, { id: 'speed', type: 'slider', label: 'Speed', action: 'base.speedLimit', value: 50, min: 0, max: 100, step: 1, unit: '%' },
+      { id: 'calibration-start', type: 'button', label: 'Start calibration', action: 'calibration.start' }] });
+    p.receive('robot_state', { type: 'robot_state', version: PROTOCOL_VERSION, robotId: 'rover', state: { ready: true, battery: 62 }, everyMs: 500 });
+    expect($('state').textContent).toBe('Ready'); expect($('note').textContent).toBe('battery 62%');
+    expect(($('speed').querySelector('input') as HTMLInputElement).max).toBe('100'); expect($('speed-value').textContent).toBe('50%');
+    expect($('rows').textContent).toBe('CalibrationNot calibrated');
+    p.pointer($('pad'), 'pointerdown'); expect(p.actions()).toEqual([{ controlId: 'deadman', action: 'teleop.deadman', value: true }]);
+    p.pointer($('pad'), 'pointerup');
+    vi.advanceTimersByTime(1800); expect($('state').textContent).toBe('No answer from the rover');
+  });
+
   it('toasts replies with no other home', () => {
     load();
     p.receive('status', { type: 'status', version: 1, sessionId: 'g', message: 'Connected to Marionette gateway' });

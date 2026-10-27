@@ -145,6 +145,8 @@ MARIONETTE_HTML_FILE=./config/operator.html npm run dev:backend
 MARIONETTE_HTML='<!doctype html><button>Developer UI</button>' npm run dev:backend
 ```
 
+The default screen is built on the **screen kit** (`packages/kit`): hold buttons, live sliders and sticks, Stop, the status strip, toasts, robot state, cameras over JPEG or WebRTC, guided calibration and generic rows, as parts you can use in any layout. A screen opts in with `<link rel="stylesheet" href="marionette-kit.css">` and `<script src="marionette-kit.js"></script>`, and the gateway puts the kit inline. See [docs/SCREEN-KIT.md](docs/SCREEN-KIT.md).
+
 A screen can declare its own controls and cameras in a JSON block; anything it leaves out keeps the default, except that streams declared without views get one view each. The gateway refuses to start if the block is broken and keeps the previous screen if a saved edit breaks it; entries it cannot use (a control without an `id`, say) are dropped and named in the console and the diagnostics log. When a saved screen changes the layout, a value the control no longer accepts returns to its default and a hold whose button is gone is released (`reason: 'screen changed'`).
 
 ```html
