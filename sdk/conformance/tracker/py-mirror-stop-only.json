@@ -1,0 +1,510 @@
+{
+ "name": "A desktop mirror may only turn Stop on (Python)",
+ "description": "With the default stop-only policy a mirror's presses move nothing, and Stop comes off only from the phone.",
+ "options": {
+  "mirror": "stop-only",
+  "stop_action": "safety.estop"
+ },
+ "steps": [
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "deadman",
+    "action": "teleop.deadman",
+    "value": true,
+    "source": "mirror",
+    "receivedAt": 1793100000007.5
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "drive",
+    "action": "base.drive",
+    "value": {
+     "x": 1,
+     "y": 0
+    },
+    "live": true,
+    "source": "mirror",
+    "receivedAt": 1793100000015.0
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "scale",
+    "action": "teleop.translationScale",
+    "value": 3.0,
+    "live": true,
+    "source": "mirror",
+    "receivedAt": 1793100000022.5
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "reset-left",
+    "action": "arm.resetLeft",
+    "source": "mirror",
+    "receivedAt": 1793100000030.0
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "arm",
+    "action": "arm.select",
+    "value": "right",
+    "source": "mirror",
+    "receivedAt": 1793100000037.5
+   }
+  },
+  {
+   "note": "a mirror can't hold, drag, press or set",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "holds": {
+       "teleop.deadman": {
+        "down": false,
+        "presses": 0
+       }
+      },
+      "drags": {
+       "base.drive": {
+        "live": false,
+        "dropped": false,
+        "value": {
+         "x": 0,
+         "y": 0
+        }
+       }
+      },
+      "presses": {
+       "arm.resetLeft": 0
+      },
+      "values": {
+       "arm.select": "left",
+       "teleop.translationScale": 1
+      }
+     }
+    },
+    "any_stop": false
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "estop",
+    "action": "safety.estop",
+    "value": true,
+    "source": "mirror",
+    "receivedAt": 1793100000045.0
+   }
+  },
+  {
+   "note": "but it can turn Stop on",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "stop": true
+     }
+    },
+    "any_stop": true
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": true
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "estop",
+    "action": "safety.estop",
+    "value": false,
+    "source": "mirror",
+    "receivedAt": 1793100000052.5
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "note": "not off: not by its press, nor by the config the gateway sends after it",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "stop": true
+     }
+    },
+    "any_stop": true
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "estop",
+    "action": "safety.estop",
+    "value": false,
+    "source": "phone",
+    "sentAt": 1793100000057.0,
+    "receivedAt": 1793100000060.0,
+    "latencyMs": 2.5
+   }
+  },
+  {
+   "note": "the phone itself can",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "stop": false
+     }
+    },
+    "any_stop": false
+   }
+  }
+ ]
+}

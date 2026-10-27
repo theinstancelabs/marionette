@@ -1,0 +1,601 @@
+{
+ "name": "A lost gateway lets go of everything (Python)",
+ "description": "When the connection to the gateway drops, every phone is offline and lets go; Stop stays until the gateway says otherwise.",
+ "options": {
+  "mirror": "stop-only",
+  "stop_action": "safety.estop"
+ },
+ "steps": [
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     },
+     {
+      "id": "phone-2",
+      "name": "Phone 2",
+      "color": "#b04fc4",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     },
+     {
+      "id": "phone-2",
+      "name": "Phone 2",
+      "color": "#b04fc4",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-2",
+     "name": "Phone 2",
+     "color": "#b04fc4",
+     "connected": true
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "pose",
+    "version": 1,
+    "sessionId": "iphone-phone-1",
+    "seq": 1,
+    "monotonicTs": 0.016666666666666666,
+    "position": {
+     "x": 0.1,
+     "y": 0.0,
+     "z": 0.05
+    },
+    "rotation": {
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0.09983341664682817,
+     "w": 0.9950041652780258
+    },
+    "covariance": [
+     0.0025,
+     0.0025,
+     0.0025,
+     0.01,
+     0.01,
+     0.01
+    ],
+    "source": "arkit",
+    "trackingState": "normal",
+    "calibrationVersion": "guided-v2:1",
+    "heartbeat": true,
+    "phoneId": "phone-1",
+    "sentAt": 1793100000003.5,
+    "receivedAt": 1793100000007.5,
+    "latencyMs": 3.0
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "deadman",
+    "action": "teleop.deadman",
+    "value": true,
+    "source": "phone",
+    "sentAt": 1793100000012.0,
+    "receivedAt": 1793100000015.0,
+    "latencyMs": 2.5
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-1",
+    "sessionId": "iphone-phone-1",
+    "controlId": "drive",
+    "action": "base.drive",
+    "value": {
+     "x": 0.4,
+     "y": 0
+    },
+    "live": true,
+    "source": "phone",
+    "sentAt": 1793100000019.5,
+    "receivedAt": 1793100000022.5,
+    "latencyMs": 2.5
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-2",
+    "sessionId": "iphone-phone-2",
+    "controlId": "estop",
+    "action": "safety.estop",
+    "value": true,
+    "source": "phone",
+    "sentAt": 1793100000027.0,
+    "receivedAt": 1793100000030.0,
+    "latencyMs": 2.5
+   }
+  },
+  {
+   "lost": true
+  },
+  {
+   "note": "a lost gateway: nobody is connected, holding or dragging; Stop stays",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "connected": false,
+      "pose": null,
+      "holds": {
+       "teleop.deadman": {
+        "down": false,
+        "presses": 1
+       }
+      },
+      "drags": {
+       "base.drive": {
+        "live": false,
+        "dropped": false,
+        "value": {
+         "x": 0,
+         "y": 0
+        }
+       }
+      }
+     },
+     "phone-2": {
+      "connected": false,
+      "stop": true
+     }
+    },
+    "any_stop": true
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     },
+     {
+      "id": "phone-2",
+      "name": "Phone 2",
+      "color": "#b04fc4",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-1",
+     "name": "Phone 1",
+     "color": "#c98200",
+     "connected": true
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "config",
+    "version": 1,
+    "sessionId": "marionette-py00001",
+    "serverName": "Python fixtures",
+    "controls": [
+     {
+      "id": "deadman",
+      "type": "button",
+      "label": "Hold to move",
+      "action": "teleop.deadman",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "turn-left",
+      "type": "button",
+      "label": "Turn left",
+      "action": "base.turnLeft",
+      "hold": true,
+      "held": false
+     },
+     {
+      "id": "estop",
+      "type": "toggle",
+      "label": "Stop",
+      "action": "safety.estop",
+      "value": false
+     },
+     {
+      "id": "arm",
+      "type": "select",
+      "label": "Arm",
+      "action": "arm.select",
+      "value": "left",
+      "options": [
+       {
+        "label": "Left arm",
+        "value": "left"
+       },
+       {
+        "label": "Right arm",
+        "value": "right"
+       }
+      ]
+     },
+     {
+      "id": "scale",
+      "type": "slider",
+      "label": "Motion scale",
+      "action": "teleop.translationScale",
+      "value": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "unit": "×",
+      "live": false
+     },
+     {
+      "id": "drive",
+      "type": "joystick",
+      "label": "Drive",
+      "action": "base.drive",
+      "value": {
+       "x": 0,
+       "y": 0
+      },
+      "live": false
+     },
+     {
+      "id": "reset-left",
+      "type": "button",
+      "label": "Reset left arm",
+      "action": "arm.resetLeft"
+     },
+     {
+      "id": "calibration-start",
+      "type": "button",
+      "label": "Start calibration",
+      "action": "calibration.start"
+     }
+    ],
+    "cameraStreams": [],
+    "cameraViews": [],
+    "calibration": {
+     "status": "uncalibrated",
+     "epoch": 0
+    },
+    "phones": [
+     {
+      "id": "phone-1",
+      "name": "Phone 1",
+      "color": "#c98200",
+      "connected": true
+     },
+     {
+      "id": "phone-2",
+      "name": "Phone 2",
+      "color": "#b04fc4",
+      "connected": true
+     }
+    ],
+    "robots": [],
+    "gatewayId": "gw-test",
+    "auth": false,
+    "phone": {
+     "id": "phone-2",
+     "name": "Phone 2",
+     "color": "#b04fc4",
+     "connected": true
+    }
+   }
+  },
+  {
+   "note": "back on the same gateway, the configs say how things are",
+   "expect": {
+    "phones": {
+     "phone-1": {
+      "connected": true
+     },
+     "phone-2": {
+      "connected": true,
+      "stop": false
+     }
+    },
+    "any_stop": false
+   }
+  }
+ ]
+}
