@@ -251,7 +251,10 @@ video.close()
 It publishes its streams on every connect, so the gateway marks them `transport: webrtc` and viewers (the phone
 screens, the `/screen` mirror, the desktop viewer) ask the robot for video instead of waiting for JPEG frames. Each
 request gets its own aiortc peer connection whose track serves the newest frame at `fps`, H.264 preferred (VP8 as the
-fallback; `codec="vp8"` swaps them), with a complete offer. `close` or the gateway going away closes it. There are no
+fallback; `codec="vp8"` swaps them), with a complete offer. A frame is repeated for at most `stale_after` (1 s) after
+its push: a camera that stops pushing sends nothing more until it pushes again, so the screens (which call a picture
+live while its frames keep decoding) show it as stalled instead of frozen but live. Timestamps follow the clock across
+the gap. `close` or the gateway going away closes it. There are no
 STUN servers by default, since phones and robots meet on a LAN or a tailnet; pass `ice_servers` to add some. Keep
 sending JPEG frames too if some viewers can't do WebRTC.
 
