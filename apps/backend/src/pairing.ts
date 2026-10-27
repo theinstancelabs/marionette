@@ -36,6 +36,25 @@ export function sameCode(given: string | undefined, token: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 export const isLoopback = (address: string | undefined) => !!address && (address === '::1' || /^(::ffff:)?127\./.test(address));
+/** The host name in a `Host` header or an address, lower case, without brackets, port or trailing dot; undefined if it isn't one. */
+function hostName(host: string | undefined): string | undefined {
+  if (!host || /[/?#@\\\s]/.test(host)) return undefined;
+  try { return new URL(`http://${host}`).hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '') || undefined; } catch { return undefined; }
+}
+/**
+ * Whether a request's `Host` header names this computer: `localhost`, a loopback or unspecified address, its host
+ * name (with or without `.local`), one of its interface addresses, or one of `addresses` (what it advertises). A page
+ * whose DNS was rebound to 127.0.0.1 connects from loopback too, but under the name it was loaded from.
+ */
+export function isOwnHost(host: string | undefined, addresses: readonly string[] = []): boolean {
+  const name = hostName(host); if (!name) return false;
+  if (name === 'localhost' || name === '::1' || name === '0.0.0.0' || name === '::' || /^127\.\d+\.\d+\.\d+$/.test(name)) return true;
+  const machine = os.hostname().toLowerCase().replace(/\.$/, ''); const bare = machine.replace(/\.local$/, '');
+  // `<first label>.local` is the name this gateway advertises over Bonjour.
+  if ([machine, bare, `${bare}.local`, `${bare.split('.')[0]}.local`].includes(name)) return true;
+  const interfaces = Object.values(os.networkInterfaces()).flat().map(entry => entry?.address.toLowerCase().replace(/%.*$/, ''));
+  return interfaces.includes(name) || addresses.some(address => hostName(address) === name);
+}
 
 /** Five wrong codes in a minute from one address shut it out for a minute. */
 export function createLimiter(limit = 5, windowMs = 60_000) {

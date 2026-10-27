@@ -1,14 +1,18 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CLOSE_CODES, PROTOCOL_VERSION, parsePairingLink } from '@marionette/protocol';
-import { advertisedAddresses, createLimiter, isLoopback, pairing, pairingBanner, sameCode } from './pairing.js';
+import { advertisedAddresses, createLimiter, isLoopback, isOwnHost, pairing, pairingBanner, sameCode } from './pairing.js';
 import { connect, hello, open, phone, port, start, stopGateway, tempDir, waitFor } from './test-helpers.js';
 
 afterEach(stopGateway);
 const records = () => { const list: any[] = []; return { list, diagnostics: { write: (r: any)=>list.push(r), pose: ()=>{}, close: ()=>{} } }; };
 const status = (route: string, init?: RequestInit, host = '127.0.0.1') => fetch(`http://${host}:${port}${route}`, init).then(r=>r.status);
+/** A request from loopback that asks for `host`, as a browser page does after its DNS was rebound to 127.0.0.1. */
+const asHost = (route: string, host: string, origin?: string) => new Promise<number>((resolve, reject) => {
+  http.get({ host:'127.0.0.1', port, path:route, headers:{ Host:host, ...(origin ? { Origin:origin } : {}) } }, res => { res.resume(); resolve(res.statusCode!); }).on('error', reject); });
 // One of this computer's own network addresses: reaching the gateway through it is not loopback.
 const external = Object.values(os.networkInterfaces()).flat().filter(entry => entry && entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.')).map(entry => entry!.address).at(-1);
 
@@ -26,6 +30,23 @@ describe('pairing',()=>{
     expect(await status('/api/state')).toBe(200); expect(await status('/screen')).toBe(200);
     expect(['127.0.0.1','::1','::ffff:127.0.0.1','127.4.5.6'].every(isLoopback)).toBe(true); expect(['192.168.1.5','::ffff:10.0.0.1','100.64.0.5','fe80::1',''].some(isLoopback)).toBe(false);
     for (const c of [viewer,a]) c.ws.close(); });
+  it('asks a page whose DNS was rebound to 127.0.0.1 for the code: only clients naming this computer go without', async()=>{ const log=records(); const gw=await start({ auth:'on', token:'K7Q2M9XD', pairingTimeoutMs:150, diagnostics:log.diagnostics });
+    // What a browser sends from http://rebind.example:<port> once that name points at 127.0.0.1: its own Host, and an Origin to match.
+    const evil=`rebind.example:${port}`; const page={ Host:evil, Origin:`http://${evil}` };
+    const rebound=await open(page); hello(rebound,{ role:'robot', robotId:'evil' }); expect(await rebound.closed).toEqual({ code:4401, reason:'Pairing code required' }); expect(rebound.messages).toEqual([]);
+    const quiet=await open(page); expect((await quiet.closed).code).toBe(4401); expect(quiet.messages).toEqual([]);
+    for (const route of ['/api/pairing','/api/state','/api/config','/screen']) expect(await asHost(route, evil, page.Origin)).toBe(401);
+    expect(await asHost('/health', evil, page.Origin)).toBe(200); expect(await asHost('/api/pairing?token=K7Q2M9XD', evil, page.Origin)).toBe(200);
+    expect(gw.state.htmlConfig.source).toEqual({ kind:'default' }); expect(gw.state.robots.size).toBe(0);
+    expect(log.list.filter(r=>r.kind==='pairing' && r.host===evil)).toHaveLength(1);
+    // Local robots and consumers that ask for this computer by name still need no code.
+    for (const host of [`localhost:${port}`,`127.0.0.1:${port}`,`${os.hostname()}:${port}`,`[::1]:${port}`]) {
+      expect(await asHost('/api/pairing', host)).toBe(200);
+      const local=await open({ Host:host }); hello(local,{ role:'console' }); await waitFor(()=>!!local.configOf()); local.ws.close(); } });
+  it('knows this computer\'s own names', ()=>{ const machine=os.hostname().replace(/\.local$/i,'');
+    for (const host of ['localhost','LOCALHOST:8787','localhost.','127.0.0.1:8787','127.4.5.6','[::1]:8787','0.0.0.0:8787',machine,`${machine.toUpperCase()}.LOCAL:8787`,...(external ? [`${external}:8787`] : [])]) expect(isOwnHost(host)).toBe(true);
+    for (const host of [undefined,'','rebind.example:8787','localhost.rebind.example','127.0.0.1.rebind.example',`${machine}.rebind.example`,'evil@localhost','localhost/x','192.0.2.7']) expect(isOwnHost(host)).toBe(false);
+    expect(isOwnHost('robot.lab:8787',['robot.lab'])).toBe(true); expect(isOwnHost('robot.lab:8787',['192.0.2.7'])).toBe(false); });
   it.skipIf(!external)('asks everyone but this computer for the code by default', async()=>{ await start({ auth:'on', token:'K7Q2M9XD', pairingTimeoutMs:150 });
     const quiet=await open({}, '', external); expect((await quiet.closed).code).toBe(4401); expect(quiet.messages).toEqual([]);
     const paired=await open({}, '?token=K7Q2-M9XD', external); hello(paired,{ role:'console' }); await waitFor(()=>!!paired.configOf()); paired.ws.close();
