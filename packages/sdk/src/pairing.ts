@@ -36,7 +36,7 @@ export async function fetchPairing(address: string, options: { token?: string; t
       response = await fetch(http, { headers: { Accept: 'application/json', ...(code ? { Authorization: `Bearer ${normalizePairingCode(code)}` } : {}) }, signal: AbortSignal.timeout(options.timeoutMs ?? 2000) });
     } catch { continue; } // the next of a pairing link's hosts, if any
     if (response.status === 401) throw new PairingError(code ? `The gateway at ${address} refused the pairing code: check it, or wait a minute after several wrong ones.`
-      : `The gateway at ${address} needs its pairing code: give its pairing link, which carries it, or the code.`, 401);
+      : `The gateway at ${address} needs its pairing code: give its pairing link, which carries it.`, 401);
     if (response.status === 404) throw new PairingError(`The gateway at ${address} is too old to pair phones: update Marionette.`, 404);
     if (!response.ok) { failure = new PairingError(`The gateway at ${address} answered with an error (${response.status}).`, response.status); continue; }
     let body: unknown;

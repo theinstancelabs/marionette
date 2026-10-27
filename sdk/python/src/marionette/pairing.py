@@ -117,8 +117,7 @@ def fetch_pairing(address: str, *, token: str | None = None, timeout: float = 2.
                     f"The gateway at {address} refused the pairing code: check it, or wait a minute after several "
                     "wrong ones."
                     if code
-                    else f"The gateway at {address} needs its pairing code: give its pairing link, which carries it, "
-                    "or the code.",
+                    else f"The gateway at {address} needs its pairing code: give its pairing link, which carries it.",
                     401,
                 ) from exc
             if exc.code == 404:
