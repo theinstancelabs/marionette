@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CLOSE_CODES, gatewayLabel } from '@marionette/protocol';
 import { closeReason } from './address';
 import type { ConsoleEvent } from './events';
-import { CODES_KEY, connectPlan, forgetCode, httpUrl, parseCodes, rememberCode, savedCode, withToken, type ConnectPlan, type SavedCodes } from './pairing';
+import { CODES_KEY, answeredBy, configFrom, connectPlan, forgetCode, httpUrl, parseCodes, planCode, rememberCode, withToken, type ConnectPlan, type SavedCodes } from './pairing';
 import { rosterPhones } from './phones';
 import { RtcViewer } from './rtc';
 import { ViewerStore } from './store';
@@ -13,6 +13,8 @@ export type CodeRequest = { reason: string; sent?: 'typed' | 'saved' };
 
 const MAX_EVENTS = 400;
 const CONNECT_TIMEOUT_MS = 8_000;
+/** What a connection may hear before the gateway's config says which gateway it is; the rest is dropped. */
+const MAX_EARLY = 16;
 const READOUT_MS = 80;
 
 function readCodes(): SavedCodes { try { return parseCodes(localStorage.getItem(CODES_KEY)); } catch { return parseCodes(null); } }
@@ -62,73 +64,75 @@ export function useGateway(onConnected: (url: string) => void) {
   }, [rtc]);
 
   /**
-   * Opens every address of the plan at once; the first that delivers a message is the connection and the others
-   * close. When all of them are turned away for the pairing code (4401), the connect page asks for it, unless a code
-   * saved for this gateway under another address can be tried first.
+   * Opens every address of the plan at once; the first whose config arrives, from the gateway a pairing link names,
+   * is the connection and the others close. When all of them are turned away for the pairing code (4401), the connect
+   * page asks for it. A saved code only goes to the address that accepted it (see `connectPlan`).
    */
-  const attempt = useCallback((plan: ConnectPlan, retried: boolean) => {
+  const attempt = useCallback((plan: ConnectPlan) => {
     const id = ++run.current; const current = () => run.current === id;
     const tries = plan.urls.map(url => {
-      let ws: WebSocket | undefined; try { ws = new WebSocket(withToken(url, plan.code)); } catch { /* not a URL this browser opens */ }
+      const { code, saved } = planCode(plan, url);
+      let ws: WebSocket | undefined; try { ws = new WebSocket(withToken(url, code)); } catch { /* not a URL this browser opens */ }
       const closed: { code: number; reason: string } | undefined = ws ? undefined : { code: 1006, reason: '' };
-      return { url, ws, closed };
+      // What it heard before its config, and why it isn't used (it answered as another gateway than the link's).
+      return { url, code, saved, ws, closed, early: [] as unknown[], wrong: undefined as string | undefined };
     });
     attempts.current = tries.flatMap(t => t.ws ? [t.ws] : []);
-    let won = false; let savedUnderId = false;
+    let won = false;
     const timer = window.setTimeout(() => {
       if (!current() || won) return;
       stop(); setPhase('idle');
-      setError(`No answer from ${plan.label} after ${CONNECT_TIMEOUT_MS / 1000} seconds. Check the address and that the gateway is running.`);
+      setError(tries.find(t => t.wrong)?.wrong ?? `No answer from ${plan.label} after ${CONNECT_TIMEOUT_MS / 1000} seconds. Check the address and that the gateway is running.`);
     }, CONNECT_TIMEOUT_MS);
-    const askForCode = (reason: string) => {
+    const askForCode = (reason: string, t: typeof tries[number]) => {
       setPhase('idle'); setError(undefined);
-      setCodeRequest({ reason: reason || 'Pairing code required', ...(plan.code ? { sent: plan.saved ? 'saved' : 'typed' } : {}) });
+      setCodeRequest({ reason: reason || 'Pairing code required', ...(t.code ? { sent: t.saved ? 'saved' : 'typed' } : {}) });
     };
     const settle = () => {
       window.clearTimeout(timer); attempts.current = [];
+      // Another gateway than the link's answered: say so, rather than ask for a code that would go there too.
+      const wrong = tries.find(t => t.wrong);
+      if (wrong) { setPhase('idle'); setError(wrong.wrong); return; }
       const refused = tries.find(t => t.closed?.code === CLOSE_CODES.pairingRequired);
       if (!refused) { setPhase('idle'); setError(`Couldn't reach ${plan.label}. Check the address, the port, and that the gateway is running.`); return; }
       const reason = refused.closed!.reason;
-      if (plan.code) {
-        // A code turned down is forgotten; one sent while the address is shut out for too many wrong codes may be right.
-        if (/^wrong/i.test(reason)) writeCodes(forgetCode(readCodes(), plan.code));
-        askForCode(reason); return;
-      }
-      if (retried) { askForCode(reason); return; }
-      // A code saved for this gateway under another address: its open /health says which gateway it is.
-      fetch(httpUrl(refused.url, '/health')).then(response => response.json()).then((health: { gatewayId?: unknown }) => typeof health.gatewayId === 'string' ? health.gatewayId : undefined, () => undefined)
-        .then(gatewayId => {
-          if (!current()) return;
-          const saved = savedCode(readCodes(), { gatewayId });
-          if (saved) attempt({ ...plan, urls: [refused.url], code: saved, saved: true, gatewayId }, true); else askForCode(reason);
-        });
+      // A code turned down is forgotten; one sent while the address is shut out for too many wrong codes may be right.
+      if (refused.code && /^wrong/i.test(reason)) writeCodes(forgetCode(readCodes(), refused.code));
+      askForCode(reason, refused);
     };
-    const win = (t: typeof tries[number], ws: WebSocket) => {
+    const win = (t: typeof tries[number], ws: WebSocket, gatewayId: string | undefined) => {
       won = true; window.clearTimeout(timer);
       for (const other of tries) if (other !== t) other.ws?.close();
       attempts.current = []; socket.current = ws;
-      reset(); setUrl(t.url); setCode(plan.code); setCodeRequest(undefined); setError(undefined); setPhase('live');
+      reset(); setUrl(t.url); setCode(t.code); setCodeRequest(undefined); setError(undefined); setPhase('live');
       connectedRef.current(t.url);
-      if (plan.code) writeCodes(rememberCode(readCodes(), { url: t.url, gatewayId: plan.gatewayId }, plan.code));
+      // Saved for this address, and under the id of the gateway that answered here.
+      if (t.code) writeCodes(rememberCode(readCodes(), { url: t.url, gatewayId }, t.code));
     };
     for (const t of tries) {
       const ws = t.ws; if (!ws) continue;
       // A console that follows no phone sees every phone.
       ws.onopen = () => { if (current()) ws.send(JSON.stringify({ type: 'hello', version: 1, role: 'console' })); };
       ws.onmessage = event => {
-        if (!current()) return;
-        if (!won) win(t, ws); else if (socket.current !== ws) return;
+        if (!current() || t.wrong || (won && socket.current !== ws)) return;
         let message: unknown; try { message = JSON.parse(String(event.data)); } catch { return; }
+        if (!won) {
+          // Its config says which gateway answered; until then it only keeps what it hears.
+          const config = configFrom(message);
+          if (!config) { if (t.early.length < MAX_EARLY) t.early.push(message); return; }
+          t.wrong = answeredBy(plan, t.url, config.gatewayId);
+          if (t.wrong) { ws.close(); return; }
+          win(t, ws, config.gatewayId);
+          for (const early of t.early.splice(0)) store.receive(early);
+        }
         store.receive(message);
-        // Once the gateway says who it is, the code is saved under its id too, so its other addresses find it.
-        if (plan.code && !savedUnderId && store.config.gatewayId) { savedUnderId = true; writeCodes(rememberCode(readCodes(), { url: t.url, gatewayId: store.config.gatewayId }, plan.code)); }
       };
       ws.onclose = event => {
         if (!current()) return;
         if (won) {
           if (socket.current !== ws) return;
           socket.current = undefined; rtc.reset(); setPhase('idle');
-          if (event.code === CLOSE_CODES.pairingRequired) askForCode(event.reason);
+          if (event.code === CLOSE_CODES.pairingRequired) askForCode(event.reason, t);
           else setError(`Lost connection to ${gatewayLabel(t.url)}: ${closeReason(event.code, event.reason)}.`);
           return;
         }
@@ -144,7 +148,7 @@ export function useGateway(onConnected: (url: string) => void) {
     const plan = connectPlan(input, typedCode, readCodes());
     if ('error' in plan) { setError(plan.error); return; }
     stop(); setError(undefined); setUrl(plan.urls[0]); setPhase('connecting');
-    attempt(plan, false);
+    attempt(plan);
   }, [attempt, stop]);
 
   const simulate = useCallback(() => {
