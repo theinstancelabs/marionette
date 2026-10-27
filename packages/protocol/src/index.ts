@@ -692,7 +692,8 @@ export const linkQuality = (rttMs?: number): LinkEvent['quality'] => rttMs === u
 /**
  * Payload of the `robots` bridge event, which the bridge builds from `config.robots` and every `robot_state`:
  * each robot's latest state for every phone (`state`) and for this phone (`phoneState`), and `receivedAt`, the
- * page's `Date.now()` when either last arrived.
+ * page's `Date.now()` when either last arrived. A config from another gateway session (a restart) starts the view
+ * over, one for another phone clears `phoneState`, and a robot a config doesn't list reads as not connected.
  */
 export type RobotView = { id: string; name: string; connected: boolean; state?: { [key: string]: JsonValue }; phoneState?: { [key: string]: JsonValue }; everyMs?: number; receivedAt?: number };
 /** What a host (the app, the desktop mirror) supports, as `Marionette.features` lists it. */
@@ -727,11 +728,17 @@ export function isHtmlBridgeDisconnect(message: unknown): message is HtmlBridgeD
  */
 export function htmlBridgeScript(post: string, features: readonly HtmlBridgeFeature[] = []): string {
   return `(function(){if(window.Marionette){window.dispatchEvent(new Event('marionette-ready'));return;}
-var deliver=(${post});var types=${JSON.stringify(HTML_BRIDGE_EVENTS)};var listeners={};var last={};var robots={};var phoneId=null;
+var deliver=(${post});var types=${JSON.stringify(HTML_BRIDGE_EVENTS)};var listeners={};var last={};var robots={};var phoneId=null;var gatewaySession=null;
 var emit=function(type,payload){last[type]=payload;(listeners[type]||[]).slice().forEach(function(callback){try{callback(payload);}catch(e){}});};
 var robotView=function(){var out={};for(var id in robots){var r=robots[id];out[id]={id:r.id,name:r.name,connected:r.connected,state:r.state,phoneState:r.phoneState,everyMs:r.everyMs,receivedAt:r.receivedAt};}return out;};
 var robot=function(id){return robots[id]||(robots[id]={id:id,name:id,connected:true});};
-var fold=function(type,p){if(type==='config'&&p){phoneId=p.phone?p.phone.id:null;if(Array.isArray(p.robots)){p.robots.forEach(function(info){if(!info||typeof info.id!=='string')return;var r=robot(info.id);r.name=info.name||info.id;r.connected=!!info.connected;});emit('robots',robotView());}}
+/* A config from a restarted gateway (another session) starts the robots over: it knows nothing of those before it. One
+   for another phone drops what robots said to the last one. A robot the config doesn't list is not connected. */
+var fold=function(type,p){if(type==='config'&&p){var changed=false;
+if(typeof p.sessionId==='string'){if(gatewaySession!==null&&p.sessionId!==gatewaySession){robots={};changed=true;}gatewaySession=p.sessionId;}
+var next=p.phone?p.phone.id:null;if(next!==phoneId){phoneId=next;for(var k in robots)if(robots[k].phoneState!==undefined){robots[k].phoneState=undefined;changed=true;}}
+if(Array.isArray(p.robots)){var listed={};p.robots.forEach(function(info){if(!info||typeof info.id!=='string')return;listed[info.id]=true;var r=robot(info.id);r.name=info.name||info.id;r.connected=!!info.connected;});for(var j in robots)if(!listed[j])robots[j].connected=false;changed=true;}
+if(changed)emit('robots',robotView());}
 else if(type==='robot_state'&&p&&typeof p.robotId==='string'&&p.state&&typeof p.state==='object'){if(p.phoneId&&p.phoneId!==phoneId)return false;var r=robot(p.robotId);if(p.phoneId)r.phoneState=p.state;else r.state=p.state;if(typeof p.everyMs==='number')r.everyMs=p.everyMs;r.receivedAt=Date.now();emit('robots',robotView());}return true;};
 var primitive=function(v){var t=typeof v;return t==='string'||t==='boolean'||(t==='number'&&isFinite(v));};
 var clean=function(v){if(primitive(v))return v;if(v&&typeof v==='object'&&typeof v.x==='number'&&typeof v.y==='number'&&isFinite(v.x)&&isFinite(v.y))return{x:v.x,y:v.y};return undefined;};
