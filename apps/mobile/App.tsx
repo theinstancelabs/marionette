@@ -11,7 +11,7 @@ import { CLOSE_CODES, formatPairingCode, gatewayLabel, gatewayUrl, htmlBridgeScr
 type ArkitEvent = { generation?: number; transform?: number[]; trackingState?: string; state?: string; reason?: string; timestamp?: number; code?: string; message?: string };
 type ArkitBridge = { isSupported(): boolean; start(generation: number): Promise<void>; stop(): Promise<void>; addListener(name: 'onPose' | 'onTracking' | 'onError' | 'onWorldReset', listener: (event: ArkitEvent) => void): { remove(): void } };
 const arkit = (()=>{ try { return requireNativeModule<ArkitBridge>('MarionetteArKit'); } catch { return null; } })();
-/** A gateway advertising itself over Bonjour (`modules/discovery`), resolved to an IPv4 address. */
+/** A gateway advertising itself over Bonjour (`modules/discovery`), resolved to an IPv4 address; one per id and address. */
 type NearbyGateway = { id: string; name: string; host: string; port: number; auth: boolean };
 type NearbyStatus = 'browsing' | 'denied' | 'unavailable';
 type DiscoveryBridge = { start(): void; stop(): void; addListener(name: 'onChange', listener: (event: { status?: string; gateways?: unknown[] }) => void): { remove(): void } };
@@ -33,19 +33,28 @@ const CONNECT_TIMEOUT_MS = 8000;
 const RETRY_FIRST_MS = 500; const RETRY_MAX_MS = 5000; const RETRY_TIMEOUT_MS = 4000;
 // A gateway that pings (every second) and then goes quiet this long is gone, even while iOS still thinks the socket is open.
 const SILENCE_MS = 3500;
-const MAX_RECENT = 5; const MAX_CODES = 32;
+const MAX_RECENT = 5; const MAX_CODES = 32; const MAX_HOSTS = 8; const MAX_EARLY = 32;
 const FEATURES: HtmlBridgeFeature[] = ['live', 'robot_state', 'link', 'rtc', 'reconnect', 'orientation'];
 const bridgeScript = htmlBridgeScript('function(m){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(m));}', FEATURES);
 
 // Recent gateway addresses (most recent first), this phone's device id and the pairing codes gateways accepted, kept in
 // the app's documents folder. The gateway uses the device id to give a reconnecting phone the same name and color.
-// Codes are kept per gateway id (stable across a gateway's restarts and addresses) and per address (all a typed
-// address tells), oldest first so the oldest go when there are too many.
+// Codes are kept per address (all a typed address tells) and per gateway id, with the addresses where that gateway
+// accepted the code, oldest first so the oldest go when there are too many. A gateway's id is public (Bonjour, /health),
+// so a saved code is only ever sent to an address where it was accepted, never to any host that claims the id.
 const settingsFile = new File(Paths.document, 'marionette.json');
 type Codes = Record<string, string>;
-type Settings = { recent: string[]; deviceId: string; codes: { gateways: Codes; addresses: Codes } };
-const readCodes = (value: unknown): Codes => { const codes: Codes = {}; if (!value || typeof value !== 'object' || Array.isArray(value)) return codes;
-  for (const [key, code] of Object.entries(value).slice(-MAX_CODES)) if (key.length > 0 && key.length <= 128 && typeof code === 'string' && code.length > 0 && code.length <= 64) codes[key] = code; return codes; };
+type GatewayCode = { code: string; hosts: string[] };
+type Settings = { recent: string[]; deviceId: string; codes: { gateways: Record<string, GatewayCode>; addresses: Codes } };
+const isCode = (code: unknown): code is string => typeof code === 'string' && code.length > 0 && code.length <= 64;
+const isKey = (key: unknown): key is string => typeof key === 'string' && key.length > 0 && key.length <= 128;
+const entries = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? Object.entries(value).slice(-MAX_CODES) : []);
+const readCodes = (value: unknown): Codes => { const codes: Codes = {}; for (const [key, code] of entries(value)) if (isKey(key) && isCode(code)) codes[key] = code; return codes; };
+// Id-keyed codes from before the addresses were kept are dropped; the copy kept for the address still works there.
+const readGateways = (value: unknown): Record<string, GatewayCode> => { const gateways: Record<string, GatewayCode> = {};
+  for (const [id, entry] of entries(value)) { const { code, hosts } = (entry ?? {}) as Partial<GatewayCode>;
+    if (isKey(id) && isCode(code) && Array.isArray(hosts)) { const known = hosts.filter(isKey).slice(-MAX_HOSTS); if (known.length) gateways[id] = { code, hosts: known }; } }
+  return gateways; };
 function loadSettings(): Settings {
   let parsed: { recent?: unknown; deviceId?: unknown; codes?: unknown } = {};
   try { if (settingsFile.exists) parsed = JSON.parse(settingsFile.textSync()) as typeof parsed; } catch { /* A damaged file only loses the list. */ }
@@ -53,26 +62,48 @@ function loadSettings(): Settings {
   const deviceId = typeof parsed.deviceId === 'string' && /^[a-z0-9-]{8,64}$/.test(parsed.deviceId) ? parsed.deviceId : `iphone-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
   // Files from 1.0 have no codes.
   const saved = parsed.codes && typeof parsed.codes === 'object' ? parsed.codes as { gateways?: unknown; addresses?: unknown } : {};
-  const codes = { gateways: readCodes(saved.gateways), addresses: readCodes(saved.addresses) };
+  const codes = { gateways: readGateways(saved.gateways), addresses: readCodes(saved.addresses) };
   if (deviceId !== parsed.deviceId) saveSettings({ recent, deviceId, codes });
   return { recent, deviceId, codes };
 }
 function saveSettings(settings: Settings) { settingsFile.write(JSON.stringify(settings)).catch(() => { /* Remembering addresses and codes is a convenience; a failed write only loses them. */ }); }
 const settings = loadSettings();
-/** The code saved for a gateway, by its id when known (the address may have moved), else by address. */
-const savedCode = (label: string, gatewayId?: string): string | undefined => (gatewayId ? settings.codes.gateways[gatewayId] : undefined) ?? settings.codes.addresses[label];
+/**
+ * The code this phone may send unasked to the gateway at an address: the one the gateway `gatewayId` accepted there,
+ * else the one accepted at exactly that address. A gateway seen at a new address has to be given its code again.
+ */
+const savedCode = (label: string, gatewayId?: string): string | undefined => { const known = gatewayId ? settings.codes.gateways[gatewayId] : undefined;
+  return known?.hosts.includes(label) ? known.code : settings.codes.addresses[label]; };
+/** A gateway accepted `code` at `label`; `gatewayId` is the id its config gave, if any. */
 function rememberCode(label: string, gatewayId: string | undefined, code: string) {
-  const { gateways, addresses } = settings.codes; if (addresses[label] === code && (!gatewayId || gateways[gatewayId] === code)) return;
-  const put = (codes: Codes, key: string) => { delete codes[key]; codes[key] = code; for (const old of Object.keys(codes).slice(0, -MAX_CODES)) delete codes[old]; };
-  put(addresses, label); if (gatewayId) put(gateways, gatewayId); saveSettings(settings);
+  const { gateways, addresses } = settings.codes; const known = gatewayId ? gateways[gatewayId] : undefined;
+  if (addresses[label] === code && (!gatewayId || (known?.code === code && known.hosts.includes(label)))) return;
+  const put = <T,>(codes: Record<string, T>, key: string, value: T) => { delete codes[key]; codes[key] = value; for (const old of Object.keys(codes).slice(0, -MAX_CODES)) delete codes[old]; };
+  put(addresses, label, code);
+  if (gatewayId) {
+    // An address belongs to the gateway that last accepted a code there. A changed code starts the gateway's list over.
+    for (const [id, other] of Object.entries(gateways)) if (id !== gatewayId && other.hosts.includes(label)) { other.hosts = other.hosts.filter(host => host !== label); if (!other.hosts.length) delete gateways[id]; }
+    put(gateways, gatewayId, { code, hosts: [...(known?.code === code ? known.hosts.filter(host => host !== label) : []), label].slice(-MAX_HOSTS) });
+  }
+  saveSettings(settings);
 }
-function forgetCode(label: string, gatewayId?: string) { delete settings.codes.addresses[label]; if (gatewayId) delete settings.codes.gateways[gatewayId]; saveSettings(settings); }
+/** The gateway at `label` said `code` is wrong, so it is no longer sent there. (Elsewhere it fails, and goes, once.) */
+function forgetCode(label: string, code: string) {
+  const { gateways, addresses } = settings.codes; if (addresses[label] === code) delete addresses[label];
+  for (const [id, known] of Object.entries(gateways)) if (known.code === code && known.hosts.includes(label)) { known.hosts = known.hosts.filter(host => host !== label); if (!known.hosts.length) delete gateways[id]; }
+  saveSettings(settings);
+}
 
 /**
  * What the app connects to: one address (typed, recent or nearby), or every host of a pairing link, where the
- * first to answer wins. `label` becomes the address that answered; `gatewayId` is filled in from the config.
+ * first to answer wins. `label` becomes the address that answered.
+ * - `code` is one the operator typed or the link carried, sent to whichever address answers. Without it, the hello
+ *   carries the code saved for the address that answered, if any (`sent` is what the current connection's hello carried).
+ * - `gatewayId` is the id a link or Nearby advert claims, until a config gives the gateway's own.
+ * - `pinned` is the id of the gateway that first accepted the phone ('' if it has none). Every later config must
+ *   carry the same id, or the app leaves: a different gateway answered.
  */
-type Target = { label: string; urls: string[]; name?: string; code?: string; gatewayId?: string };
+type Target = { label: string; urls: string[]; name?: string; code?: string; gatewayId?: string; sent?: string; pinned?: string };
 type Screen = 'connect' | 'connecting' | 'live';
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -95,8 +126,9 @@ export default function App() {
   const established=useRef(false);
   // When the gateway last sent anything on this connection, and whether it pings at all (older gateways don't).
   const heardAt=useRef(0); const pinged=useRef(false);
-  // Whether the gateway has accepted this connection (sent this phone its config), and with it any pairing code.
-  const accepted=useRef(false);
+  // Whether the gateway has accepted this connection (sent this phone its config), and with it any pairing code. Until
+  // then the page hears nothing from it (`early` keeps it): on a reconnect it may turn out to be a different gateway.
+  const accepted=useRef(false); const early=useRef<unknown[]>([]);
   // The last value of every bridge event, so a freshly loaded document starts from the current state.
   const latest=useRef(new Map<HtmlBridgeEvent, unknown>());
   // Robot state is kept per robot and phone (or all phones) and all of it is replayed; `rtc` is never kept.
@@ -150,7 +182,7 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   /** Closes every socket and timer of the connection. */
-  const closeConnection=()=>{ attempt.current++; clearTimeout(attemptTimer.current); clearTimeout(retryTimer.current); for(const ws of racing.current)ws.close(); racing.current.clear(); const previous=socket.current; socket.current=undefined; previous?.close(); accepted.current=false; };
+  const closeConnection=()=>{ attempt.current++; clearTimeout(attemptTimer.current); clearTimeout(retryTimer.current); for(const ws of racing.current)ws.close(); racing.current.clear(); const previous=socket.current; socket.current=undefined; previous?.close(); accepted.current=false; early.current=[]; };
   /** Leaves the gateway and returns to the connect page, with a reason unless the operator chose to leave. */
   const disconnect=(reason?:string)=>{ releaseAll(); closeConnection(); stopTracking(); target.current=undefined; established.current=false; cutDrags.current.clear();
     configRef.current=undefined; htmlConfigRef.current=undefined; latest.current.clear(); robotStates.current.clear(); gatewaySession.current=undefined;
@@ -176,9 +208,11 @@ export default function App() {
   const attemptFailed=()=>{ const current=target.current; if(!current)return; if(established.current){ scheduleRetry(); return; }
     disconnect(`Couldn’t reach ${current.name??current.label}. Check the gateway is running and this phone is on the same network, and allowed Local Network access in Settings.`); };
   const opened=(ws:WebSocket,url:string)=>{ const current=target.current!; const label=gatewayLabel(url); const again=established.current;
-    socket.current=ws; established.current=true; heardAt.current=Date.now(); pinged.current=false; accepted.current=false; current.label=label;
-    // The session lets a reconnect inside the same ARKit world keep its calibration; the token is the pairing code.
-    send({type:'hello',version:PROTOCOL_VERSION,role:'phone',deviceId:settings.deviceId,sessionId:session.current,...(current.code?{token:current.code}:{})});
+    socket.current=ws; established.current=true; heardAt.current=Date.now(); pinged.current=false; accepted.current=false; early.current=[]; current.label=label;
+    // The session lets a reconnect inside the same ARKit world keep its calibration; the token is the pairing code:
+    // the one given for this target, else one saved for the address that answered (never for a claimed id alone).
+    current.sent=current.code??savedCode(label,current.gatewayId);
+    send({type:'hello',version:PROTOCOL_VERSION,role:'phone',deviceId:settings.deviceId,sessionId:session.current,...(current.sent?{token:current.sent}:{})});
     // Still reconnecting until the gateway accepts the phone (its first config): an open socket alone may be refused or dropped at once.
     setGateway(label); setAddress(label); if(again)return;
     setScreen('live'); setRecent(old=>{ const next=[label,...old.filter(item=>item!==label)].slice(0,MAX_RECENT); settings.recent=next; saveSettings(settings); return next; }); void startTracking(); };
@@ -195,44 +229,62 @@ export default function App() {
    * connect page with the code field and the gateway's reason. Only a wrong code is forgotten: an address shut out after
    * too many wrong codes (from any device behind it) turns the right code away too.
    */
-  const pairingRefused=(current:Target,why?:string)=>{ const name=current.name??current.label; const sent=current.code; const wrong=/^wrong pairing code/i.test(why??'');
-    if(sent&&wrong&&savedCode(current.label,current.gatewayId)===sent)forgetCode(current.label,current.gatewayId);
+  const pairingRefused=(current:Target,why?:string)=>{ const name=current.name??current.label; const sent=current.sent; const wrong=/^wrong pairing code/i.test(why??'');
+    if(sent&&wrong&&savedCode(current.label,current.gatewayId)===sent)forgetCode(current.label,sent);
     disconnect(wrong?`${name} didn’t accept that pairing code.`:why&&!/^pairing code required/i.test(why)?`${name} refused the connection: ${why.replace(/\.$/,'')}.`:undefined);
     setAddress(current.label); setCode(sent?formatPairingCode(sent):''); setCodeNote(`${name} needs its pairing code`); setCodeShown(true); };
-  const received=(data:unknown)=>{ heardAt.current=Date.now(); let m:unknown; try{ m=JSON.parse(String(data)); }catch{ return; } const type=m&&typeof m==='object'?(m as {type?:unknown}).type:undefined;
+  const receivedConfig=(m:unknown)=>{ const next=sanitizeConfig(m); const current=target.current; if(!next||!current)return;
+    // Once a gateway has accepted the phone, only that gateway may take over its screen again. A different one at the
+    // address (a restart elsewhere moved it, or a host copied the id) makes the app leave rather than drive on with it.
+    if(current.pinned!==undefined&&(next.gatewayId??'')!==current.pinned){ disconnect(`A different gateway answered at ${current.label}. Check it’s the one you want, then connect again.`); return; }
     // After the hello the gateway only sends this phone its own config. A hello slower than the gateway's 250 ms
     // console grace first gets console traffic (the gateway view and other phones' configs), so the latest config
     // that names a phone wins instead of the first, and a config without a phone never replaces one that has it.
-    if(type==='config'){ const next=sanitizeConfig(m); if(!next||(configRef.current?.phone&&!next.phone))return;
-      // A restarted gateway keeps no robot state from before, so neither does the replay.
-      if(gatewaySession.current&&gatewaySession.current!==next.sessionId)robotStates.current.clear(); gatewaySession.current=next.sessionId;
-      configRef.current=next; toHtml('config',next);
-      // The first phone config means the gateway accepted the phone, and with it the code: the page hears it's connected,
-      // the code is kept and the form cleared. Only then does the backoff start over, so a gateway that accepts sockets and
-      // drops them doesn't get a retry every 0.5 s.
-      const current=target.current; if(next.phone&&current&&!accepted.current){ accepted.current=true; retryMs.current=RETRY_FIRST_MS; if(next.gatewayId)current.gatewayId=next.gatewayId;
-        setReconnecting(undefined); toHtml('connection',{state:'connected',gateway:current.label} satisfies ConnectionEvent);
-        if(current.code)rememberCode(current.label,current.gatewayId,current.code); setCode(''); setCodeShown(false); setCodeNote(undefined); } }
+    if(configRef.current?.phone&&!next.phone)return;
+    // A restarted gateway keeps no robot state from before, so neither does the replay.
+    if(gatewaySession.current&&gatewaySession.current!==next.sessionId)robotStates.current.clear(); gatewaySession.current=next.sessionId;
+    configRef.current=next; toHtml('config',next);
+    if(!next.phone||accepted.current)return;
+    // The first phone config means the gateway accepted the phone, and with it the code: the page hears it's connected,
+    // the code is kept and the form cleared. Only then does the backoff start over, so a gateway that accepts sockets and
+    // drops them doesn't get a retry every 0.5 s.
+    accepted.current=true; retryMs.current=RETRY_FIRST_MS; current.gatewayId=next.gatewayId; if(current.pinned===undefined)current.pinned=next.gatewayId??'';
+    setReconnecting(undefined); toHtml('connection',{state:'connected',gateway:current.label} satisfies ConnectionEvent);
+    if(current.sent)rememberCode(current.label,next.gatewayId,current.sent); setCode(''); setCodeShown(false); setCodeNote(undefined);
+    for(const message of early.current.splice(0))relay(message); };
+  const relay=(m:unknown)=>{ const type=m&&typeof m==='object'?(m as {type?:unknown}).type:undefined;
     // The gateway sends its screen on every connection: the same document again must not reload the page.
-    else if(type==='html_config'){ if(validateHtmlConfig(m)){ const same=htmlConfigRef.current?.html===m.html; htmlConfigRef.current=m; if(same)return; releaseAll(); cutDrags.current.clear(); setHtmlConfig(m); setHtmlLoaded(false); setHtmlKey(key=>key+1); } }
+    if(type==='html_config'){ if(validateHtmlConfig(m)){ const same=htmlConfigRef.current?.html===m.html; htmlConfigRef.current=m; if(same)return; releaseAll(); cutDrags.current.clear(); setHtmlConfig(m); setHtmlLoaded(false); setHtmlKey(key=>key+1); } }
     else if(type==='status'){ if(validateStatus(m)&&(!m.phoneId||m.phoneId===configRef.current?.phone?.id))toHtml('status',m); }
     else if(type==='camera_frame'){ const config=configRef.current; if(validateCameraFrame(m)&&config&&selectedCameraView(config)?.streams.includes(m.cameraId))toHtml('camera_frame',m); }
     else if(type==='ping'){ if(!validatePing(m))return; pinged.current=true; send({type:'pong',version:PROTOCOL_VERSION,id:m.id,sentAt:m.sentAt,at:Date.now()}); toHtml('link',{rttMs:m.rttMs,quality:linkQuality(m.rttMs)} satisfies LinkEvent); }
     else if(type==='robot_state'){ if(!validateRobotState(m)||!m.robotId||(m.phoneId!==undefined&&m.phoneId!==configRef.current?.phone?.id))return; robotStates.current.set(`${m.robotId}\n${m.phoneId??''}`,m); inject('robot_state',m); }
     else if(type==='rtc'){ if(validateRtc(m))inject('rtc',m); } };
+  const received=(data:unknown)=>{ heardAt.current=Date.now(); let m:unknown; try{ m=JSON.parse(String(data)); }catch{ return; }
+    if(m&&typeof m==='object'&&(m as {type?:unknown}).type==='config'){ receivedConfig(m); return; }
+    // Until the gateway accepts the phone, what it sends (its screen first) waits for the config that says who it is.
+    if(!accepted.current){ if(early.current.length<MAX_EARLY)early.current.push(m); return; }
+    relay(m); };
   /** Connects to what the operator typed or picked: an address (with the code typed, or the one saved for it), or a pasted pairing link. */
   const connect=(input=address)=>{ const link=parsePairingLink(input); if(link){ connectLink(link); return; }
     const url=gatewayUrl(input); if(!url){ setError('That doesn’t look like an address. Type the IP the gateway printed, like 192.168.1.20.'); return; }
-    const label=gatewayLabel(url); const typed=codeShown&&input===address?normalizePairingCode(code):''; start({label,urls:[url],code:typed||savedCode(label)}); };
-  /** A pairing link (scanned, opened from the Camera app, or pasted) brings every address of the gateway, its code and its id. */
+    const label=gatewayLabel(url); const typed=codeShown&&input===address?normalizePairingCode(code):''; start({label,urls:[url],code:typed||undefined}); };
+  /**
+   * A pairing link (scanned, opened from the Camera app, or pasted) brings every address of the gateway, its code and
+   * its id. Without a code, each address that answers gets only a code saved for it.
+   */
   const connectLink=(link:PairingLink)=>{ const urls=link.hosts.map(host=>gatewayUrl(`${host}:${link.port}`)).filter((url):url is string=>!!url);
     if(!urls.length){ setError('That pairing link has no address this phone can use.'); return; } const label=gatewayLabel(urls[0]);
-    start({label,urls,name:link.name,gatewayId:link.gatewayId,code:link.code??savedCode(label,link.gatewayId)}); };
-  /** A nearby gateway connects with its saved code; one that needs a code the phone doesn't have asks for it first. */
-  const connectNearby=(g:NearbyGateway)=>{ const url=gatewayUrl(`${g.host}:${g.port}`); if(!url)return; const label=gatewayLabel(url); const saved=savedCode(label,g.id);
+    start({label,urls,name:link.name,gatewayId:link.gatewayId,code:link.code}); };
+  /**
+   * A nearby gateway connects with the code saved for its address. One that needs a code the phone hasn't used at that
+   * address asks for it first, even when another entry (or an earlier address) has the same name and id: anyone can
+   * advertise those.
+   */
+  const connectNearby=(g:NearbyGateway)=>{ const url=gatewayUrl(`${g.host}:${g.port}`); if(!url)return; const label=gatewayLabel(url);
     const typed=codeShown&&address===label?normalizePairingCode(code):'';
-    if(g.auth&&!saved&&!typed){ setAddress(label); setError(undefined); setCodeNote(`${g.name} needs its pairing code`); setCodeShown(true); return; }
-    start({label,urls:[url],name:g.name,gatewayId:g.id,code:typed||saved}); };
+    if(g.auth&&!typed&&!savedCode(label,g.id)){ setAddress(label); setCode(''); setError(undefined); setCodeNote(`${g.name} at ${label} needs its pairing code`); setCodeShown(true); return; }
+    start({label,urls:[url],name:g.name,gatewayId:g.id,code:typed||undefined}); };
   // Bridge messages only count from the document the gateway sent. The page cannot navigate away: top-frame
   // http(s) links open in Safari and everything else is refused; frames inside the page may load.
   const onHtmlMessage=(event:WebViewMessageEvent)=>{ const url=event.nativeEvent.url??''; if(url&&!url.startsWith('about:'))return; try { const message=JSON.parse(event.nativeEvent.data);
@@ -315,7 +367,7 @@ export default function App() {
       <View style={[styles.column,wide&&styles.columnWide,wide&&{paddingTop:short?48:108}]}>
         <Pressable style={({pressed})=>[styles.scan,pressed&&styles.pressed]} onPress={()=>{ setError(undefined); setScanning(true); }} accessibilityRole="button"><QrGlyph/><Text style={styles.secondaryText}>Scan QR code</Text></Pressable>
         {discovery&&<View style={styles.section}><View style={styles.sectionHead}><Text style={styles.sectionTitle}>Nearby</Text>{nearbyStatus==='browsing'&&!nearby.length&&<ActivityIndicator size="small" color={INK2}/>}</View>
-          {nearby.map(g=><NearbyRow key={g.id} gateway={g} needsCode={g.auth&&!savedFor(g)} onConnect={connectNearby}/>)}
+          {nearby.map(g=><NearbyRow key={`${g.id}@${g.host}:${g.port}`} gateway={g} needsCode={g.auth&&!savedFor(g)} onConnect={connectNearby}/>)}
           {!nearby.length&&<Text style={styles.sectionNote}>{nearbyStatus==='denied'?'Turn on Local Network for Marionette in Settings to see gateways on this network.':nearbyStatus==='unavailable'?'Can’t look for gateways on this network right now.':'Looking for gateways on this network…'}</Text>}
           {nearbyStatus==='denied'&&<Pressable onPress={()=>Linking.openSettings().catch(()=>{})} hitSlop={10} accessibilityRole="button"><Text style={[styles.textButton,styles.settingsLink]}>Open Settings</Text></Pressable>}
         </View>}
