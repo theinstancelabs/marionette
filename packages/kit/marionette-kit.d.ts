@@ -105,12 +105,19 @@ declare global {
       onState?(state: HoldState, control: Marionette.Control | undefined): void;
     };
     interface DragPart extends Part {
-      /** Streams a value, marked live, at most once a frame; the first one starts the drag. */
+      /**
+       * Streams a value, marked live, at most once a frame; the first one starts the drag. Ignored while the drag is cut
+       * (the kit let go of it, the gateway went or this page's phone changed), until end().
+       */
       update(value: Marionette.ControlValue): void;
-      /** Sends the final value (the last one if left out) and ends the drag. `quiet` ends it here only. */
+      /** The gesture is over: sends the final value (the last one if left out) and ends the drag. `quiet`, or a cut drag, sends nothing. */
       end(value?: Marionette.ControlValue, quiet?: boolean): void;
       isOpen(): boolean; state(): LiveState; letGo(quiet?: boolean): void;
     }
+    type DragOptions = Target & PartOptions & {
+      /** Called when the drag is cut while open (the kit let go, the gateway went or the phone changed), to show it let go. Call end() when the finger lifts anyway. */
+      onLetGo?(): void;
+    };
     interface SegmentsPart extends Part { el: HTMLElement; render(): void }
     type SegmentsOptions = Target & PartOptions & {
       /** Turns an option off (the selected one always stays on). Call render() when what it depends on changes. */
@@ -132,7 +139,7 @@ declare global {
     interface StopPart extends Part { button: HTMLButtonElement; banner?: HTMLElement; isOn(): boolean; press(): void }
     type StopOptions = {
       action?: string;
-      /** Defaults to a floating Stop button added to the page. */
+      /** Defaults to a floating Stop button added to the page. A sheet never covers it, wherever it is. */
       button?: HTMLButtonElement;
       /** An element for the banner: filled with the default banner if empty; a `[data-stop-reset]` button inside resets. */
       banner?: HTMLElement;
@@ -149,7 +156,10 @@ declare global {
     };
     interface CamerasPart extends Part { el: HTMLElement; render(): void }
     type CamerasOptions = PartOptions & {
-      /** The select that picks the view (default camera.view). */
+      /**
+       * The select that picks the view (default camera.view). The gateway sends a phone the JPEG frames of the view
+       * camera.view picks, so with another select only WebRTC panes get pictures for other views (the kit warns).
+       */
       action?: string;
       /** Text for a pane without a picture. */
       empty?(streamId: string, label: string, state: 'waiting' | 'unavailable'): string;
@@ -157,6 +167,7 @@ declare global {
       iceServers?: RTCIceServer[];
     };
     interface Sheet { readonly el: HTMLElement; readonly open: boolean; show(children?: Node | (Node | null | false)[]): Sheet; hide(): void }
+    /** `covers`: what the sheet makes inert (default: the whole body). Stop buttons and sheets inside are never covered. */
     type SheetOptions = { el?: HTMLElement; covers?: Element | Element[]; onHide?(): void };
     type CalibrationMode = 'intro' | 'capture' | 'captured' | 'validate' | 'validated';
     interface Calibration {
@@ -208,7 +219,7 @@ declare global {
       letGoOnLeave(target: Group | Part | ((quiet: boolean) => void)): () => void;
 
       hold(button: HTMLElement, options: HoldOptions): HoldPart;
-      drag(options: Target & PartOptions): DragPart;
+      drag(options: DragOptions): DragPart;
       segments(el: HTMLElement | null, options: SegmentsOptions): SegmentsPart;
       slider(input: HTMLInputElement | null, options: SliderOptions): SliderPart;
       stick(pad: HTMLElement | null, options: StickOptions): StickPart;

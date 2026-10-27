@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROTOCOL_VERSION } from '@marionette/protocol';
-import { page, type Page } from './page';
+import { page, phoneConfig, type Page } from './page';
 
 let p: Page;
 beforeEach(() => { vi.useFakeTimers(); });
@@ -157,6 +157,59 @@ describe('cameras', () => {
     // The gateway went away: drop the connection quietly; ask again once it is back.
     const sent = p.rtc().length; p.connect('reconnecting'); expect(p.rtc()).toHaveLength(sent); expect(FakePC.all.at(-1)!.closed).toBe(true);
     p.connect('connected'); expect(p.rtc().at(-1)).toMatchObject({ kind: 'request', stream: 'head' }); expect(p.rtc().at(-1).peer).not.toBe(again.peer);
+  });
+
+  // A playing WebRTC pane; `setup` adds the browser's frame APIs to the page's videos.
+  async function playing(setup: (w: any) => void) {
+    p = page({ body: '<figure id="cam"></figure>', setup: w => { w.RTCPeerConnection = FakePC; setup(w); } });
+    p.connect(); p.config({}, rtcStreams()); p.K.cameras(p.document.getElementById('cam'));
+    offer(p.rtc()[0].peer); await vi.advanceTimersByTimeAsync(100);
+    const pc = FakePC.all[0]; pc.state('connected'); pc.track();
+    const video = pane().querySelector('video')!; video.dispatchEvent(new p.window.Event('playing'));
+    return { pc, video };
+  }
+  const shown = () => ({ state: pane().dataset.state, empty: (pane().querySelector('.mk-empty') as HTMLElement).hidden, caption: pane().querySelector('figcaption')!.hidden });
+
+  it('shows a WebRTC picture as live only while new frames come and ICE is connected', async () => {
+    let callbacks: Array<() => void> = [];
+    const frames = () => { const list = callbacks; callbacks = []; for (const cb of list) cb(); };
+    const { pc, video } = await playing(w => { w.HTMLVideoElement.prototype.requestVideoFrameCallback = function (cb: () => void) { callbacks.push(cb); return callbacks.length; }; });
+    expect(shown()).toEqual({ state: 'live', empty: true, caption: false });
+    for (let i = 0; i < 6; i++) { vi.advanceTimersByTime(500); frames(); }
+    expect(shown().state).toBe('live');
+    // Frozen: 2 s without a frame and the pane waits from the next 1 s tick, the still picture covered (but kept, so
+    // frames can be seen to return).
+    vi.advanceTimersByTime(1900); expect(shown().state).toBe('live');
+    vi.advanceTimersByTime(1100); expect(shown()).toEqual({ state: 'waiting', empty: false, caption: true });
+    expect(pane().textContent).toContain('Waiting for head'); expect(video.hidden).toBe(false);
+    frames(); expect(shown()).toEqual({ state: 'live', empty: true, caption: false });
+    // ICE disconnected is not live, however fresh the frames, until it reconnects.
+    pc.state('disconnected'); expect(shown().state).toBe('waiting');
+    vi.advanceTimersByTime(500); frames(); expect(shown().state).toBe('waiting');
+    pc.state('connected'); expect(shown().state).toBe('live');
+  });
+
+  it('counts decoded frames on the 1 s tick where there is no requestVideoFrameCallback', async () => {
+    let decoded = 30;
+    await playing(w => { w.HTMLVideoElement.prototype.getVideoPlaybackQuality = () => ({ totalVideoFrames: decoded, droppedVideoFrames: 0 }); });
+    for (let i = 0; i < 4; i++) { decoded += 30; vi.advanceTimersByTime(1000); }
+    expect(shown().state).toBe('live');
+    vi.advanceTimersByTime(3000); expect(shown().state).toBe('waiting');
+    decoded += 30; vi.advanceTimersByTime(1000); expect(shown().state).toBe('live');
+  });
+
+  it('warns once when its own view picker would leave JPEG panes without frames', () => {
+    p = page({ features: ['live'], body: '<figure id="a"></figure><figure id="b"></figure>' }); p.connect();
+    const warn = vi.fn(); p.window.console.warn = warn;
+    const base = phoneConfig({}, rtcStreams());
+    const pick = { id: 'pick', type: 'select' as const, label: 'Cams', action: 'cams.pick', value: 'arms', options: [{ label: 'Head', value: 'head' }, { label: 'Arms', value: 'arms' }] };
+    p.receive('config', { ...base, controls: [...base.controls, pick] });
+    p.K.cameras(p.document.getElementById('a'));
+    expect(warn).not.toHaveBeenCalled();
+    const mine = p.K.cameras(p.document.getElementById('b'), { action: 'cams.pick' });
+    expect(mine.el.querySelectorAll('.mk-pane')).toHaveLength(2);
+    expect(warn).toHaveBeenCalledTimes(1); expect(String(warn.mock.calls[0])).toContain('camera.view');
+    vi.advanceTimersByTime(5000); expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('shows JPEG frames when the host has no rtc, and fresh frames only', () => {

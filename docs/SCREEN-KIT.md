@@ -58,6 +58,8 @@ The kit knows what this page is pressing or dragging, and what the gateway repor
 
 A dropped touch stays dropped until the operator lets go and touches it again. While the gateway is away (`connection` is `disconnected` or `reconnecting`) everything still touched reads as dropped, and it stays dropped after a reconnect until it is let go. `K.holdState(control)` and `K.liveState(control)` give the same states for your own headline.
 
+The kit doesn't rely on the host or the gateway for this. It cuts a touch when the connection drops, when this page's phone changes (a mirror that moves on to another phone), when the touch begins while the gateway is away, and when the kit lets go of it (see [Letting go](#letting-go)). A cut touch sends nothing more: no new samples, no repeat, and no release or final value for a touch the host already ended. It reads as `dropped` whatever a later config says, until the finger lifts; only a fresh touch counts again.
+
 ### hold
 
 ```js
@@ -67,7 +69,9 @@ const pad = K.hold(document.querySelector('#pad'), {
 });
 ```
 
-It sends `true` on press and `false` on release, to the control that was pressed even if the config changed in between. The app repeats the press while it is held. A press does nothing if the button is `disabled` or `aria-disabled="true"`, or if the layout has no such control. `onChange(pressed)` is called on press and release. Style it with `[data-state=held]` and friends.
+It sends `true` on press and `false` on release, to the control that was pressed even if the config changed in between. The app repeats the press while it is held. A press does nothing if the button is `disabled` or `aria-disabled="true"`, if it isn't on the page, or if the layout has no such control. `onChange(pressed)` is called on press and release. Style it with `[data-state=held]` and friends.
+
+A button taken off the page mid-press (a screen re-rendering with `replaceChildren` without `dispose()`) lets go at once: while anything is touched the kit watches the page, and it follows the pressing finger on the window too, not just on the button. A button moved within the page (a keyed re-order) stays pressed. Sliders and sticks do the same.
 
 ### slider, stick and drag
 
@@ -79,11 +83,22 @@ document.querySelector('#drive-cell').append(drive.el);
 
 - `slider(input, options)` streams every value while the thumb is dragged (marked `live`, at most once a frame), and sends the final value when it is let go. Pass `null` for a new `<input type="range">`. It takes `min`, `max`, `step` and the value from the control (now, or once the config arrives), follows the config while it isn't dragged or focused, and writes the formatted value into `out` (with the same `data-state`). `slider.finish()` ends a drag now.
 - `stick(pad, options)` turns an element (or a new one, with `null`) into a spring-return stick. A touch anywhere on it pushes the stick that far from the centre, and it follows the finger until let go, when it sends `{x: 0, y: 0}`. The arrow keys push it too. `x` is up the pad (forward) and `y` is to the left, each from −1 to 1, rounded to two decimals toward zero, never longer than 1 together (`K.stickLimit(x, y)` does the rounding). `aria-disabled="true"` turns it off.
-- `drag(options)` is a live value fed by your own touch handling, such as a thumb sliding on a pad to set a gripper: `update(value)` streams, `end(value?)` sends the final value (the last one if you leave it out).
+- `drag(options)` is a live value fed by your own touch handling, such as a thumb sliding on a pad to set a gripper: `update(value)` streams, `end(value?)` sends the final value (the last one if you leave it out). Call `end()` when the finger lifts. When the drag is cut (the kit lets go of it, the gateway goes or the phone changes), `update()` does nothing until `end()`, which then sends nothing, and `state()` reads `dropped`. `onLetGo()` tells your touch handling when that happens, so it can show the thumb let go:
+
+```js
+const pad = document.querySelector('#grip-pad');
+const grip = K.drag({ action: 'gripper.set', onLetGo: () => pad.classList.remove('sliding') });
+const at = e => K.clamp((e.clientX - pad.getBoundingClientRect().left) / pad.clientWidth, 0, 1);
+pad.addEventListener('pointerdown', e => { pad.setPointerCapture(e.pointerId); pad.classList.add('sliding'); grip.update(at(e)); });
+pad.addEventListener('pointermove', e => { if (pad.hasPointerCapture(e.pointerId)) grip.update(at(e)); });
+pad.addEventListener('pointerup', () => { pad.classList.remove('sliding'); grip.end(); });   // after onLetGo too
+```
 
 ### Letting go
 
 Every hold, slider, stick and drag lets go when the page loses focus or is hidden, when a sheet opens and when this phone's Stop turns on. Pass `letGoOnLeave: false` to a part to keep it out of that.
+
+A slider, stick or drag that is let go of mid-gesture sends its final value (for a stick, rest), and the rest of that gesture is ignored: it reads `dropped` until the finger lifts (for `drag()`, until `end()`), so a finger still sliding after Stop turns on, or behind a sheet, never starts it again. A slider then shows the gateway's value again.
 
 ```js
 const dock = K.group();                          // parts that are rebuilt together
@@ -103,7 +118,7 @@ const stop = K.stop({ banner: document.querySelector('#stop-banner') });
 stop.isOn();
 ```
 
-This is the floating round Stop button, above the page and every sheet. It is hidden when the layout has no `safety.estop` control. Pressing it turns a toggle Stop on (a plain Stop button just sends a press). Stop is this phone's own signal, which the consumer reads; Marionette itself stops nothing. While it is on, the button looks pressed in and the banner shows. An empty `banner` element gets the default banner ("Stop is on", "It stays on for this phone until you reset it.", **Reset**); a banner with your own content needs a `[data-stop-reset]` button. Pass `button` to use your own button, `onChange(on)` to follow it, and `letGo: false` to keep holds when Stop turns on. `--mk-stop-right` moves the button (the default screen moves it into its desktop column).
+This is the floating round Stop button, above the page and every sheet. It is hidden when the layout has no `safety.estop` control. Pressing it turns a toggle Stop on (a plain Stop button just sends a press). Stop is this phone's own signal, which the consumer reads; Marionette itself stops nothing. While it is on, the button looks pressed in and the banner shows. An empty `banner` element gets the default banner ("Stop is on", "It stays on for this phone until you reset it.", **Reset**); a banner with your own content needs a `[data-stop-reset]` button. Pass `button` to use your own button (a sheet never covers it, wherever it is on the page), `onChange(on)` to follow it, and `letGo: false` to keep holds when Stop turns on. `--mk-stop-right` moves the button (the default screen moves it into its desktop column).
 
 ## Status strip
 
@@ -156,7 +171,9 @@ const cams = K.cameras(document.querySelector('figure'), {
 });
 ```
 
-This shows one pane per stream in the view this phone picked with the `camera.view` select (or the first view), side by side and never cropped. With several streams a tap (or Enter) stacks them full width (`aria-expanded`). The element gets `data-panes` (the count, for layouts such as a large first pane) and `--panes`. Each pane is `.mk-pane[data-stream]` with `data-transport` (`jpeg` or `webrtc`) and `data-state` (`waiting`, `live` or `unavailable`). Call `cams.render()` when something your `empty` text depends on changes.
+This shows one pane per stream in the view this phone picked with the `camera.view` select (or the first view), side by side and never cropped. `action` picks the view with another select, but the gateway sends a phone only the JPEG frames of the view its `camera.view` control picks, so JPEG panes follow `camera.view` whatever `action` picks; only WebRTC panes can show another view. The kit warns in the console when a JPEG pane would go without frames that way. With several streams a tap (or Enter) stacks them full width (`aria-expanded`). The element gets `data-panes` (the count, for layouts such as a large first pane) and `--panes`. Each pane is `.mk-pane[data-stream]` with `data-transport` (`jpeg` or `webrtc`) and `data-state` (`waiting`, `live` or `unavailable`). Call `cams.render()` when something your `empty` text depends on changes.
+
+A pane is `live` only while its picture moves: a JPEG, or a decoded video frame, in the last 2 s (checked every second), and for WebRTC a connection whose ICE isn't `disconnected`. A frozen picture is covered by the waiting text until frames come again, so it never looks live. The kit counts video frames with `requestVideoFrameCallback` where the browser has it, else with the decoded frame count.
 
 A stream goes over **WebRTC** when the host lists `rtc` in `Marionette.features`, the page has `RTCPeerConnection`, and the gateway marks the stream `transport: 'webrtc'` (a robot publishes it). Otherwise the pane shows the stream's `camera_frame` JPEGs, as before. A WebRTC pane also shows JPEG frames for its stream until the video plays. The robot is the offerer and nothing trickles:
 
@@ -174,7 +191,7 @@ more.show([K.sheetTop('Close', 'More', '', () => more.hide()), body]);
 more.hide();
 ```
 
-A full-screen panel, at most 430 px wide. Only one sheet is open at a time. Opening one lets go of every hold and drag and makes the page behind it inert (everything in `<body>` except the kit's Stop, toasts and color line, or the elements you pass as `covers`). `sheetTop(left, title, count, onLeft)` is the top bar, with its right side clear for Stop.
+A full-screen panel, at most 430 px wide. Only one sheet is open at a time. Opening one lets go of every hold and drag and makes the page behind it inert: everything in `<body>` (or the elements you pass as `covers`) except Stop buttons, sheets, toasts and the color line. Where one of those sits inside another element, that element stays as it is and its other children are covered instead, so a Stop button in your header and a sheet element anywhere on the page stay usable. `sheetTop(left, title, count, onLeft)` is the top bar, with its right side clear for Stop.
 
 ## Calibration
 
@@ -187,7 +204,7 @@ K.on('status', m => { if (!calibration.handles(m) && m.message) K.toast(m.messag
 
 This is the default screen's whole guided calibration, quick origin and optional validation, in a sheet, with the same copy and drawings. The intro says what is in use and offers **Start calibration**, **Validate**, **Set origin here** and **Reset** (each only if the layout has its `calibration.*` control). The gateway drives the steps: the sheet follows `config.calibration` through the four captures (flat, forward, right, up) with a live drawing and meter, then **Calibrated**, and through the three validation moves to the results. A run started elsewhere (the desktop mirror, say) opens the sheet here too, once the operator has let go of everything.
 
-The gateway's replies to captures and checks show in the sheet. Replies to start, quick origin, reset and cancel show in the intro, or as a toast while no sheet is open. `handles(status)` says whether a status is one of these, so your own status handler can skip it. `summary()` gives the short state (`['Guided, validated ✓', 'ok']`), and `available()` says whether the layout has calibration at all.
+Pass `actions` to look for differently named calibration actions (`{ origin: 'rover.origin' }`); its replies are recognized by those names too. The gateway's replies to captures and checks show in the sheet. Replies to start, quick origin, reset and cancel show in the intro, or as a toast while no sheet is open. `handles(status)` says whether a status is one of these, so your own status handler can skip it. `summary()` gives the short state (`['Guided, validated ✓', 'ok']`), and `available()` says whether the layout has calibration at all.
 
 Pass `copy` to use your own words. It is merged over the defaults (`CALIBRATION_COPY` in `marionette-kit.js`), so you only name what changes:
 
@@ -296,4 +313,4 @@ The default screen (`apps/backend/src/sample-controls.html`) is a larger example
 
 ## Tests
 
-`npm --workspace @marionette/kit test` runs the kit's tests (vitest and jsdom). They load the real page bridge (`htmlBridgeScript` from `@marionette/protocol`) and the kit into jsdom the way the gateway sends a screen, and cover the hold and drag states, the stick math, letting go, robot staleness with fake timers, the WebRTC request, offer, answer, close and retry flow against a fake `RTCPeerConnection`, the JPEG fallback, the calibration sheet, and the default screen itself. `npm --workspace @marionette/kit run typecheck` checks the declarations against the protocol's types.
+`npm --workspace @marionette/kit test` runs the kit's tests (vitest and jsdom). They load the real page bridge (`htmlBridgeScript` from `@marionette/protocol`) and the kit into jsdom the way the gateway sends a screen, and cover the hold and drag states, cutting touches when the connection drops or the phone changes, letting go and ignoring the rest of that gesture, parts removed without `dispose()`, the stick math, what a sheet covers, robot staleness with fake timers, the WebRTC request, offer, answer, close and retry flow against a fake `RTCPeerConnection`, frozen and disconnected video, the JPEG fallback, the calibration sheet, and the default screen itself. `npm --workspace @marionette/kit run typecheck` checks the declarations against the protocol's types.

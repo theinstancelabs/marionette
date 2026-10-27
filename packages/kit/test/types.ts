@@ -26,7 +26,7 @@ const off = K.robot(robot => { if (robot && !robot.stale && !robot.offline) void
 K.on('status', status => { if (!calibration.handles(status) && status.message) K.toast(status.message); });
 K.on('touch', () => { void (K.holdState('deadman') === 'held' && K.liveState(K.control('base.drive')) === 'live'); });
 K.ready(bridge => { if (bridge.features?.includes('rtc')) bridge.rtc({ kind: 'request', stream: 'head', peer: 'head-1' }); });
-const grip = K.drag({ action: 'gripper.set' }); grip.update(0.4); grip.end();
+const grip = K.drag({ action: 'gripper.set', onLetGo: () => { void grip.state(); } }); grip.update(0.4); grip.end();
 const frames = K.segments(h('div'), { action: 'teleop.frame', disabled: value => value !== 'axol' }); frames.render();
 const group = K.group(); K.letGoOnLeave(group); group.add(scale); K.letGoOnLeave(quiet => { void quiet; });
 export const parts = [stop, pad, scale, drive, cams, off, K.controlRow({ id: 'horn', type: 'button', label: 'Horn', action: 'horn.honk' }, { group })];

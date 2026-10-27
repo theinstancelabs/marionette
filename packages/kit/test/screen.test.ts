@@ -12,7 +12,7 @@ afterEach(() => { if (p) { expect(p.errors).toEqual([]); p.close(); } vi.useReal
 
 describe('inlining', () => {
   it('replaces the two kit tags with the kit, and the kit never closes its own tag', () => {
-    expect(KIT_JS).not.toMatch(/<\/script/i); expect(KIT_CSS).not.toMatch(/<\/style/i);
+    expect(KIT_JS).not.toMatch(/<\/script|<!--/i); expect(KIT_CSS).not.toMatch(/<\/style|<!--/i);
     expect(SCREEN).toContain('<link rel="stylesheet" href="marionette-kit.css">'); expect(SCREEN).toContain('<script src="marionette-kit.js"></script>');
     const html = inlineKit(SCREEN);
     expect(html).not.toContain('<script src="marionette-kit.js"></script>'); expect(html).not.toContain('<link rel="stylesheet" href="marionette-kit.css">');
