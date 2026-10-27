@@ -133,6 +133,51 @@ def test_the_gateway_stops_when_the_python_process_that_ran_it_ends(how: str, ki
             os.kill(pid, signal.SIGKILL)
 
 
+FORKED = """import multiprocessing, subprocess, sys, time
+from marionette import gateway
+g = gateway.start(0, mdns=False, auth='off', home=sys.argv[1])
+if sys.argv[2] == 'fork':  # a forked worker, as multiprocessing's fork and process pools make
+    worker = multiprocessing.get_context('fork').Process(target=time.sleep, args=(60,), daemon=True)
+    worker.start()
+    held = worker.pid
+else:  # a child that holds the pipe without Python's fork hooks: only the gateway's watch on its parent sees it go
+    held = subprocess.Popen(['sleep', '60'], pass_fds=[g.process.stdin.fileno()]).pid
+print('gateway', g.port, g.pid, held, flush=True)
+time.sleep(60)
+"""
+
+
+@pytest.mark.parametrize("child", ["fork", "pass_fds"])
+def test_the_gateway_stops_when_its_parent_is_killed_though_a_child_of_the_parent_lives_on(child: str, tmp_path: Path) -> None:
+    parent = subprocess.Popen([sys.executable, "-c", FORKED, str(tmp_path), child], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines: queue.Queue[str] = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line) for line in parent.stdout], daemon=True).start()  # type: ignore[union-attr]
+    pids: list[int] = []
+    try:
+        while not pids:
+            line = lines.get(timeout=20)
+            if line.startswith("gateway "):
+                port, *pids = (int(word) for word in line.split()[1:4])
+        gateway_pid, held = pids
+        assert _listening(port) and not _gone(gateway_pid)
+        parent.send_signal(signal.SIGKILL)
+        parent.wait(5)
+        started = time.monotonic()
+        while not _gone(gateway_pid) and time.monotonic() - started < 4:
+            time.sleep(0.02)
+        took = time.monotonic() - started
+        assert _gone(gateway_pid) and not _listening(port), f"the gateway outlived its parent ({child})"
+        assert not _gone(held), "the parent's child should still be running"
+        # A forked worker drops its copy of the pipe at once; otherwise the gateway's once-a-second watch notices.
+        assert took < (1.5 if child == "fork" else 2.5), f"the gateway took {took:.2f} s to stop"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        for pid in pids:
+            if not _gone(pid):
+                os.kill(pid, signal.SIGKILL)
+
+
 def test_the_console_script() -> None:
     out = subprocess.run([sys.executable, "-m", "marionette.gateway", "--print-node"], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0 and Path(out.stdout.strip()).name.startswith("node")

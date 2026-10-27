@@ -10,7 +10,8 @@ with Node 20 or later from ``PATH``, or with the ``nodejs-wheel-binaries`` packa
 
 From Python, :func:`run` runs it in the foreground and :func:`start` in the background, returning a handle. Either
 way the gateway is tied to this process: it gets a pipe on its stdin that only this process holds, and stops when
-the pipe closes, so a robot that dies (even killed outright) never leaves a gateway holding its port.
+the pipe closes or its parent changes, so a robot that dies (even killed outright, even with forked workers still
+running) never leaves a gateway holding its port.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import signal
 import subprocess
 import sys
 import threading
+import weakref
 from collections.abc import Callable, Mapping
 from importlib import resources
 from pathlib import Path
@@ -122,11 +124,33 @@ def gateway_env(
     return out
 
 
+_running: weakref.WeakSet[subprocess.Popen[Any]] = weakref.WeakSet()
+"""The gateways this process started, whose stdin pipes a forked child must not keep open."""
+
+
+def _close_pipes_in_child() -> None:
+    """In a forked child (a multiprocessing worker, a process pool): drop this copy of each gateway's pipe, so the
+    gateway still stops when the process that started it ends. (The gateway also watches its parent, for children
+    started some other way.)"""
+    for process in list(_running):
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_close_pipes_in_child)
+
+
 def _spawn(env: Mapping[str, str], **options: Any) -> subprocess.Popen[Any]:
     """Node running the bundle as this process's child. Its stdin is a pipe only this process holds; with
     ``MARIONETTE_EXIT_WITH_PARENT`` the gateway stops when the pipe closes, which the operating system does when
-    this process ends, however it ends."""
-    return subprocess.Popen([find_node(), str(bundle_path())], env={**env, "MARIONETTE_EXIT_WITH_PARENT": "1"}, stdin=subprocess.PIPE, **options)
+    this process ends, however it ends, or when it sees its parent change."""
+    process = subprocess.Popen([find_node(), str(bundle_path())], env={**env, "MARIONETTE_EXIT_WITH_PARENT": "1"}, stdin=subprocess.PIPE, **options)
+    _running.add(process)
+    return process
 
 
 class GatewayProcess:
