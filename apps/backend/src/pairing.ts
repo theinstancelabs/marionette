@@ -98,16 +98,23 @@ export async function pairingBanner(info: Pairing): Promise<string> {
 
 /**
  * Advertises `_marionette._tcp` over Bonjour so the app can list the gateway under Nearby. Returns the stop function,
- * which resolves once the goodbye is sent (so phones drop the entry at once) or after a second.
+ * which resolves once the goodbye is sent (so phones drop the entry at once) or after a second. `mdns` is passed to
+ * the multicast DNS socket (tests use another `port`). A socket that can't be opened turns advertising off, with one
+ * warning: the gateway itself keeps running.
  */
-export function advertise(info: { name: string; port: number; gatewayId: string; auth: boolean }, warn: (message: string) => void): () => Promise<void> {
+export function advertise(info: { name: string; port: number; gatewayId: string; auth: boolean }, warn: (message: string) => void, mdns?: { port?: number }): () => Promise<void> {
   try {
-    const bonjour = new Bonjour(undefined, (error: Error) => warn(`Bonjour: ${error.message}`));
+    const bonjour = new Bonjour(mdns, (error: Error) => warn(`Bonjour: ${error.message}`));
+    let off = false;
+    // multicast-dns emits `error` when it can't bind UDP 5353 (taken without sharing, or not allowed), and bonjour-service
+    // doesn't listen for it: unhandled, it would be an uncaught exception.
+    const socket = (bonjour as unknown as { server?: { mdns?: NodeJS.EventEmitter } }).server?.mdns;
+    socket?.on('error', (error: Error) => { if (off) return; off = true; warn(`Bonjour advertising is off: ${error.message}`); bonjour.destroy(); });
     const name = info.name.slice(0, 63);
     // The service points at `<host>.local`, which this advertiser answers for itself: a bare host name doesn't resolve over mDNS.
     const host = `${os.hostname().split('.')[0] || 'marionette'}.local`;
     const service = bonjour.publish({ name, type: 'marionette', protocol: 'tcp', port: info.port, host, txt: { id: info.gatewayId, name, v: '1', auth: info.auth ? '1' : '0' } });
     service.on('error', (error: Error) => warn(`Bonjour: ${error.message}`));
-    return () => new Promise<void>(resolve => { const timer = setTimeout(resolve, 1000); bonjour.unpublishAll(() => { clearTimeout(timer); bonjour.destroy(); resolve(); }); });
+    return () => off ? Promise.resolve() : new Promise<void>(resolve => { off = true; const timer = setTimeout(resolve, 1000); bonjour.unpublishAll(() => { clearTimeout(timer); bonjour.destroy(); resolve(); }); });
   } catch (error) { warn(`Bonjour advertisement failed: ${(error as Error).message}`); return async () => {}; }
 }

@@ -1,11 +1,12 @@
+import dgram from 'node:dgram';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CLOSE_CODES, PROTOCOL_VERSION, parsePairingLink } from '@marionette/protocol';
-import { advertisedAddresses, createLimiter, isLoopback, isOwnHost, pairing, pairingBanner, sameCode } from './pairing.js';
-import { connect, hello, open, phone, port, start, stopGateway, tempDir, waitFor } from './test-helpers.js';
+import { advertise, advertisedAddresses, createLimiter, isLoopback, isOwnHost, pairing, pairingBanner, sameCode } from './pairing.js';
+import { connect, hello, open, phone, port, sleep, start, stopGateway, tempDir, waitFor } from './test-helpers.js';
 
 afterEach(stopGateway);
 const records = () => { const list: any[] = []; return { list, diagnostics: { write: (r: any)=>list.push(r), pose: ()=>{}, close: ()=>{} } }; };
@@ -47,6 +48,12 @@ describe('pairing',()=>{
     for (const host of ['localhost','LOCALHOST:8787','localhost.','127.0.0.1:8787','127.4.5.6','[::1]:8787','0.0.0.0:8787',machine,`${machine.toUpperCase()}.LOCAL:8787`,...(external ? [`${external}:8787`] : [])]) expect(isOwnHost(host)).toBe(true);
     for (const host of [undefined,'','rebind.example:8787','localhost.rebind.example','127.0.0.1.rebind.example',`${machine}.rebind.example`,'evil@localhost','localhost/x','192.0.2.7']) expect(isOwnHost(host)).toBe(false);
     expect(isOwnHost('robot.lab:8787',['robot.lab'])).toBe(true); expect(isOwnHost('robot.lab:8787',['192.0.2.7'])).toBe(false); });
+  it('turns Bonjour off with one warning when its socket can\'t be opened, instead of crashing', async()=>{
+    // Held without address reuse, the port can't be shared: what happens when something else owns UDP 5353.
+    const hog=dgram.createSocket({ type:'udp4', reuseAddr:false }); await new Promise<void>(resolve=>hog.bind(0,'0.0.0.0',resolve));
+    try { const warnings: string[]=[]; const stop=advertise({ name:'Bench', port:1, gatewayId:'gw-x', auth:true }, message=>warnings.push(message), { port:hog.address().port });
+      await waitFor(()=>warnings.length>0); await sleep(300); expect(warnings).toEqual([expect.stringMatching(/^Bonjour advertising is off: .*EADDRINUSE/)]); await stop(); }
+    finally { hog.close(); } });
   it.skipIf(!external)('asks everyone but this computer for the code by default', async()=>{ await start({ auth:'on', token:'K7Q2M9XD', pairingTimeoutMs:150 });
     const quiet=await open({}, '', external); expect((await quiet.closed).code).toBe(4401); expect(quiet.messages).toEqual([]);
     const paired=await open({}, '?token=K7Q2-M9XD', external); hello(paired,{ role:'console' }); await waitFor(()=>!!paired.configOf()); paired.ws.close();
