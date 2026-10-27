@@ -1,0 +1,28 @@
+{
+  "name": "@marionette/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Parts for Marionette robots and consoles in TypeScript: a reconnecting gateway client, a phone tracker, teleop math, a robot link and testing tools.",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@marionette/backend": "file:../../apps/backend",
+    "@marionette/protocol": "file:../protocol",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
