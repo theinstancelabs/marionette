@@ -107,6 +107,10 @@ class Drag:
     """The gateway ended the drag while the finger was still on it; it counts again after the finger lifts."""
     at: float = -math.inf
     """When the last sample arrived (tracker clock)."""
+    updates: int = 0
+    """New values so far: samples and final values, not the app's repeats of a resting finger. A robot that acts
+    on each value once (a slider used as a command, such as a gripper's closure) compares it with the count it last
+    acted on; the same value sent again counts too."""
 
     def fresh(self, now: float, timeout: float = 0.25) -> bool:
         """Live, not dropped, and its samples (or repeats) still arriving."""
@@ -674,12 +678,15 @@ class PhoneTracker:
             final = dict(STICK_REST) if stick else value
             if valid_value(control, final):
                 drag.value = copy.deepcopy(final)
+                drag.updates += 1
                 phone.values[action] = copy.deepcopy(final)
             return
         if drag.dropped or (renew and not drag.live) or not valid_value(control, value):
             return
         drag.live = True
         drag.at = now
+        if not renew:
+            drag.updates += 1
         drag.value = copy.deepcopy(value)
         phone.values[action] = copy.deepcopy(value)
 

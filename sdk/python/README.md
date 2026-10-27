@@ -100,7 +100,8 @@ everything else is read by control type, so the same tracker serves any screen. 
 
 - `value(action, default)`, `number(action, default, lo, hi)`, `choice(action, options, default)`, `flag(action)`;
 - `hold(action)` (`down`, `at`, `presses`) and `holding(action, now, timeout=0.6)`;
-- `drag(action)` (`value`, `live`, `dropped`, `at`) and `stick(action, now=None, timeout=0.25)`;
+- `drag(action)` (`value`, `live`, `dropped`, `at`, and `updates`: new values so far, not counting repeats) and
+  `stick(action, now=None, timeout=0.25)`;
 - `presses(action)` for plain buttons and holds alike;
 - `stop`; `connected`, `name`, `color`, `index` (2 for `phone-2`), `session`; `calibration` (`uncalibrated`,
   `capturing` or `captured`) and `epoch`;
@@ -140,7 +141,7 @@ def arm(phone): return phone.choice(ARM, ("left", "right"), "left")
 def frame(phone): return phone.choice(FRAME, ("axol", "head", "left", "right"), "axol")
 def scale(phone): return phone.number(SCALE, 1.0, 0.05, 4.0)
 def speed(phone): return phone.number(SPEED, 50.0, 0.0, 100.0) / 100.0
-def grip(phone): return phone.drag("gripper.set").value       # count changes with drag(...).at, or presses
+def grip(phone): return phone.drag("gripper.set").value       # act on each new one: drag(...).updates
 def base_command(phone, now):
     stick = phone.stick("base.drive", now)
     turns = [phone.hold(a) for a in ("base.turnLeft", "base.turnRight")]

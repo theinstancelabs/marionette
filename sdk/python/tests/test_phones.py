@@ -150,6 +150,26 @@ def test_slider_values_come_from_live_inputs(tracker: PhoneTracker, clock: Clock
     assert phone.value("gripper.set") == 0.7 and not phone.drag("gripper.set").live  # type: ignore[union-attr]
 
 
+def test_drag_updates_count_new_values_but_not_repeats(tracker: PhoneTracker) -> None:
+    def updates() -> int:
+        return tracker.get("phone-1").drag("gripper.set").updates  # type: ignore[union-attr]
+
+    assert updates() == 0
+    send(tracker, "gripper.set", 0.4, live=True)
+    send(tracker, "gripper.set", 0.4, live=True, renew=True)  # a resting finger
+    send(tracker, "gripper.set", 0.5, live=True)
+    assert updates() == 2
+    send(tracker, "gripper.set", 0.5)  # let go: the final value counts
+    send(tracker, "gripper.set", 1.0)  # a button sending a final value
+    send(tracker, "gripper.set", 1.0)  # the same value again counts too
+    assert updates() == 5 and tracker.get("phone-1").value("gripper.set") == 1.0  # type: ignore[union-attr]
+    send(tracker, "gripper.set", 7)  # off the slider: ignored
+    tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, "captured", values={"gripper.set": 0.2}))  # the gateway's echo
+    assert updates() == 5
+    tracker.apply(msg.input("phone-1", "gripper.set", 0.3, live=True, source="mirror"))  # stop-only: a mirror moves nothing
+    assert updates() == 5
+
+
 def test_the_drive_stick_and_a_dead_source(tracker: PhoneTracker, clock: Clock) -> None:
     phone = tracker.get("phone-1")
     assert phone.stick("base.drive", clock.now) == (0.0, 0.0)  # type: ignore[union-attr]
