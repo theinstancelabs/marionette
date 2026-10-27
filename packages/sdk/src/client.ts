@@ -38,7 +38,7 @@ export type GatewayClientOptions = {
   pingMs?: number;
   /** A connection that hears nothing for this long (ms, default 3500) is dropped and retried. */
   deadAfterMs?: number;
-  /** Reconnect backoff (ms): from 500, doubling to 5000. */
+  /** Reconnect backoff (ms): from 500, doubling to 5000. A refused pairing code waits longer: from 5000, doubling to 30 000. */
   minBackoffMs?: number; maxBackoffMs?: number;
   /** Frames wait while more than this many bytes (default 1 MB) are still unsent. */
   maxBufferedBytes?: number;
@@ -88,13 +88,18 @@ async function webSocketClass(given?: WebSocketConstructor): Promise<WebSocketCo
 }
 
 const OPEN = 1;
+/** After a refused pairing code (4401) the client waits from 5 s, doubling to 30 s. */
+const PAIRING_BACKOFF_MS = 5000;
+const PAIRING_MAX_BACKOFF_MS = 30_000;
 const detach = (socket: SocketLike) => { socket.onopen = null; socket.onmessage = null; socket.onclose = null; socket.onerror = () => {}; };
 
 /**
  * A reconnecting connection to a Marionette gateway, for Node (`ws`) and browsers. It says hello as a console or a
  * robot, answers the gateway's pings and pings it every second for the clock offset (`offsetMs`) and round trip
  * (`rttMs`), and reconnects with backoff (0.5 s doubling to 5 s) until `close()`, trying each host of a pairing link
- * in turn. A refused pairing code (4401) or a robot id in use (4409) is reported in `error`, and it keeps retrying.
+ * in turn. A refused pairing code (4401) or a robot id in use (4409) is reported in `error`, and it keeps retrying:
+ * after a refused code from 5 s doubling to 30 s, since the gateway shuts an address out after five wrong codes in a
+ * minute. A connection that succeeds starts the backoff over.
  *
  * Outgoing messages wait in an outbox while the socket is busy: newest only per key (robot state per phone, frames per
  * stream), small messages before camera frames. While disconnected, `send()` drops messages and returns false; send
@@ -278,14 +283,19 @@ export class GatewayClient extends Emitter<GatewayClientEvents> implements Async
     const was = this.connected; this.connected = false; this.outbox.clear(); this.closeCode = code;
     this.setError(this.describe(code, reason, was), code);
     if (was) this.emit('lost');
-    this.retry(was);
+    this.retry(was, code === CLOSE_CODES.pairingRequired);
   }
 
-  private retry(wasConnected: boolean): void {
+  private retry(wasConnected: boolean, refused = false): void {
     if (this.stopped) return;
     // A host that never answered gives way to the next one a pairing link lists.
     if (!wasConnected) this.hostIndex = (this.hostIndex + 1) % this.urls.length;
-    const delay = this.delay; this.delay = Math.min(this.delay * 2, this.maxBackoff);
+    let delay = this.delay;
+    if (refused) {
+      // The gateway shuts an address out for a minute after five wrong codes in a minute, and that would lock out
+      // every client on this computer, the ones with the right code too: stay well under it.
+      delay = Math.max(delay, PAIRING_BACKOFF_MS); this.delay = Math.min(delay * 2, Math.max(PAIRING_MAX_BACKOFF_MS, this.maxBackoff));
+    } else this.delay = Math.min(delay * 2, this.maxBackoff);
     this.retryTimer = setTimeout(() => void this.open(), delay);
   }
 
