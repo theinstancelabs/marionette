@@ -118,7 +118,7 @@ const stop = K.stop({ banner: document.querySelector('#stop-banner') });
 stop.isOn();
 ```
 
-This is the floating round Stop button, above the page and every sheet. It is hidden when the layout has no `safety.estop` control. Pressing it turns a toggle Stop on (a plain Stop button just sends a press). Stop is this phone's own signal, which the consumer reads; Marionette itself stops nothing. While it is on, the button looks pressed in and the banner shows. An empty `banner` element gets the default banner ("Stop is on", "It stays on for this phone until you reset it.", **Reset**); a banner with your own content needs a `[data-stop-reset]` button. Pass `button` to use your own button, `onChange(on)` to follow it, and `letGo: false` to keep holds when Stop turns on. `--mk-stop-right` moves the button (the default screen moves it into its desktop column).
+This is the floating round Stop button, above the page and every sheet. It is hidden when the layout has no `safety.estop` control. Pressing it turns a toggle Stop on (a plain Stop button just sends a press). Stop is this phone's own signal, which the consumer reads; Marionette itself stops nothing. While it is on, the button looks pressed in and the banner shows. An empty `banner` element gets the default banner ("Stop is on", "It stays on for this phone until you reset it.", **Reset**); a banner with your own content needs a `[data-stop-reset]` button. Pass `button` to use your own button (a sheet never covers it, wherever it is on the page), `onChange(on)` to follow it, and `letGo: false` to keep holds when Stop turns on. `--mk-stop-right` moves the button (the default screen moves it into its desktop column).
 
 ## Status strip
 
@@ -189,7 +189,7 @@ more.show([K.sheetTop('Close', 'More', '', () => more.hide()), body]);
 more.hide();
 ```
 
-A full-screen panel, at most 430 px wide. Only one sheet is open at a time. Opening one lets go of every hold and drag and makes the page behind it inert (everything in `<body>` except the kit's Stop, toasts and color line, or the elements you pass as `covers`). `sheetTop(left, title, count, onLeft)` is the top bar, with its right side clear for Stop.
+A full-screen panel, at most 430 px wide. Only one sheet is open at a time. Opening one lets go of every hold and drag and makes the page behind it inert: everything in `<body>` (or the elements you pass as `covers`) except Stop buttons, sheets, toasts and the color line. Where one of those sits inside another element, that element stays as it is and its other children are covered instead, so a Stop button in your header and a sheet element anywhere on the page stay usable. `sheetTop(left, title, count, onLeft)` is the top bar, with its right side clear for Stop.
 
 ## Calibration
 

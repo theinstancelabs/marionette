@@ -364,6 +364,34 @@ describe('stop, strip and toast', () => {
     const c = p.config(); p.receive('config', { ...c, controls: c.controls.filter(x => x.id !== 'estop') }); expect(stop.button.hidden).toBe(true);
   });
 
+  it('tells onChange once when Stop turns on while something is pressed', () => {
+    p = page({ body: '<button id="pad">Hold</button>' }); p.connect(); p.config();
+    const pad = p.document.getElementById('pad')!; p.K.hold(pad, { action: 'teleop.deadman' });
+    const changes: boolean[] = []; p.K.stop({ onChange: (on: boolean) => changes.push(on) });
+    p.pointer(pad, 'pointerdown'); p.config({ estop: { value: true } as never });
+    expect(changes).toEqual([false, true]); expect(p.actions().at(-1)).toEqual({ controlId: 'deadman', action: 'teleop.deadman', value: false });
+    p.config({ estop: { value: false } as never }); expect(changes).toEqual([false, true, false]);
+  });
+
+  it('keeps a screen’s own Stop button, and a sheet anywhere on the page, out of what a sheet covers', () => {
+    p = page({ body: '<main id="app"><header id="top"><span id="title">Rover</span><button id="stop">Stop</button></header><section id="body"><button id="pad">Hold</button></section><section id="panel" hidden></section></main><footer id="foot"></footer><p id="off" inert></p>' });
+    p.connect(); p.config();
+    const $ = (id: string) => p.document.getElementById(id)!; const inert = () => ['app', 'top', 'title', 'stop', 'body', 'panel', 'foot', 'off'].filter(id => $(id).hasAttribute('inert'));
+    const stop = p.K.stop({ button: $('stop') as HTMLButtonElement }); const more = p.K.sheet({ el: $('panel') });
+    more.show([p.K.h('button', { id: 'close' }, 'Close')]);
+    // Stop and the open sheet stay; everything around them along the way is covered.
+    expect(inert()).toEqual(['title', 'body', 'foot', 'off']);
+    p.pointer($('stop'), 'pointerdown'); expect(p.actions().at(-1)).toEqual({ controlId: 'estop', action: 'safety.estop', value: true });
+    more.hide(); expect(inert()).toEqual(['off']);
+    // The calibration sheet too, with the kit's own sheet element at the end of the body.
+    const calibration = p.K.calibration(); calibration.open();
+    expect(inert()).toEqual(['title', 'body', 'foot', 'off']); expect((p.document.querySelector('body > .mk-sheet') as HTMLElement).hasAttribute('inert')).toBe(false);
+    calibration.close(); expect(inert()).toEqual(['off']);
+    // Elements the screen names are covered the same way.
+    const named = p.K.sheet({ covers: [$('app')] }); named.show([]); expect(inert()).toEqual(['title', 'body', 'off']); named.hide();
+    stop.dispose(); more.show([]); expect(inert()).toEqual(['top', 'body', 'foot', 'off']);
+  });
+
   it('shows the phone, tracking, link and connection in the strip', () => {
     p = page({ body: '<header id="strip"></header>' });
     const strip = p.K.strip(p.document.getElementById('strip'));

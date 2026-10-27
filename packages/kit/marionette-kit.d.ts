@@ -139,7 +139,7 @@ declare global {
     interface StopPart extends Part { button: HTMLButtonElement; banner?: HTMLElement; isOn(): boolean; press(): void }
     type StopOptions = {
       action?: string;
-      /** Defaults to a floating Stop button added to the page. */
+      /** Defaults to a floating Stop button added to the page. A sheet never covers it, wherever it is. */
       button?: HTMLButtonElement;
       /** An element for the banner: filled with the default banner if empty; a `[data-stop-reset]` button inside resets. */
       banner?: HTMLElement;
@@ -164,6 +164,7 @@ declare global {
       iceServers?: RTCIceServer[];
     };
     interface Sheet { readonly el: HTMLElement; readonly open: boolean; show(children?: Node | (Node | null | false)[]): Sheet; hide(): void }
+    /** `covers`: what the sheet makes inert (default: the whole body). Stop buttons and sheets inside are never covered. */
     type SheetOptions = { el?: HTMLElement; covers?: Element | Element[]; onHide?(): void };
     type CalibrationMode = 'intro' | 'capture' | 'captured' | 'validate' | 'validated';
     interface Calibration {

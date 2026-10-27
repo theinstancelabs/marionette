@@ -396,6 +396,8 @@
   function stop(o) {
     o = o || {}; const action = o.action || ACTIONS.estop; const get = () => control(action);
     const button = o.button || document.body.appendChild(h('button', { class: 'mk-stop', type: 'button', 'aria-label': 'Stop', hidden: true }, 'Stop'));
+    // Stop is always one tap away: a sheet never covers it, wherever it sits on the page.
+    kept.add(button);
     const banner = o.banner;
     if (banner) {
       banner.classList.add('mk-banner'); if (!banner.hasAttribute('role')) banner.setAttribute('role', 'alert');
@@ -410,10 +412,13 @@
       const c = get(); const latched = isOn();
       button.hidden = !c; button.setAttribute('aria-pressed', String(latched)); if (banner) banner.hidden = !latched;
       if (latched === was) return;
-      // Turning Stop on lets go of everything, so resetting it never starts anything again by itself.
-      if (latched && was === false && o.letGo !== false) letGo();
-      was = latched; if (o.onChange) safely(o.onChange, latched);
+      // Turning Stop on lets go of everything, so resetting it never starts anything again by itself. Letting go renders
+      // every part, this one too, so the change is noted first and told once.
+      const before = was; was = latched;
+      if (latched && before === false && o.letGo !== false) letGo();
+      if (o.onChange) safely(o.onChange, latched);
     };
+    part.dispose = () => { kept.delete(button); };
     listen(part, button, 'pointerdown', e => { e.preventDefault(); press(); });
     listen(part, button, 'click', e => { if (e.detail === 0) press(); });
     if (reset) listen(part, reset, 'click', () => send(get(), false));
@@ -672,15 +677,27 @@
 
   /* ---------- Sheets: full-screen panels (calibration, a More sheet); one at a time ---------- */
   const sheets = new Set();
-  // What a sheet covers: everything on the page except kit overlays, unless the screen names it.
+  // Elements a sheet never covers, wherever they are: every Stop button and every sheet, plus the kit's overlays.
+  const kept = new Set();
+  const OVERLAYS = '.mk-stop,.mk-sheet,.mk-toast,.mk-rule';
+  const spared = n => kept.has(n) || n.matches(OVERLAYS + ',script,style,link,template');
+  const holdsSpared = n => !!n.querySelector(OVERLAYS) || [...kept].some(k => k !== n && n.contains(k));
+  // What a sheet covers: everything on the page (or what the screen names) but the kept elements. An element with a
+  // kept one inside stays as it is and its other children are covered instead, down to the kept one.
   function cover(list) {
-    const nodes = list ? [].concat(list) : Array.from(document.body.children).filter(n => !n.classList.contains('mk-sheet') && !n.matches('.mk-stop,.mk-toast,.mk-rule,script,style,link,template'));
-    return nodes.filter(n => n && !n.hasAttribute('inert')).map(n => { n.setAttribute('inert', ''); return n; });
+    const covered = [];
+    const visit = n => {
+      if (!n || n.nodeType !== 1 || spared(n)) return;
+      if (holdsSpared(n)) { for (const child of Array.from(n.children)) visit(child); return; }
+      if (!n.hasAttribute('inert')) { n.setAttribute('inert', ''); covered.push(n); }
+    };
+    for (const n of list ? [].concat(list) : Array.from(document.body.children)) visit(n);
+    return covered;
   }
   function sheet(o) {
     o = o || {};
     const el = o.el || document.body.appendChild(h('section', { class: 'mk-sheet', role: 'dialog', 'aria-modal': 'true', hidden: true }));
-    el.classList.add('mk-sheet');
+    el.classList.add('mk-sheet'); kept.add(el);
     let open = false, covered = [];
     const api = {
       el,
