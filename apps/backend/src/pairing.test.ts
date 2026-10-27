@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CLOSE_CODES, PROTOCOL_VERSION, parsePairingLink } from '@marionette/protocol';
@@ -7,7 +8,9 @@ import { connect, hello, open, phone, port, start, stopGateway, tempDir, waitFor
 
 afterEach(stopGateway);
 const records = () => { const list: any[] = []; return { list, diagnostics: { write: (r: any)=>list.push(r), pose: ()=>{}, close: ()=>{} } }; };
-const status = (route: string, init?: RequestInit) => fetch(`http://127.0.0.1:${port}${route}`, init).then(r=>r.status);
+const status = (route: string, init?: RequestInit, host = '127.0.0.1') => fetch(`http://${host}:${port}${route}`, init).then(r=>r.status);
+// One of this computer's own network addresses: reaching the gateway through it is not loopback.
+const external = Object.values(os.networkInterfaces()).flat().filter(entry => entry && entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.')).map(entry => entry!.address).at(-1);
 
 describe('pairing',()=>{
   it('keeps the gateway id and code in the identity file, and MARIONETTE_TOKEN fixes the code', async()=>{ const home=tempDir(); await start({ home });
@@ -23,6 +26,10 @@ describe('pairing',()=>{
     expect(await status('/api/state')).toBe(200); expect(await status('/screen')).toBe(200);
     expect(['127.0.0.1','::1','::ffff:127.0.0.1','127.4.5.6'].every(isLoopback)).toBe(true); expect(['192.168.1.5','::ffff:10.0.0.1','100.64.0.5','fe80::1',''].some(isLoopback)).toBe(false);
     for (const c of [viewer,a]) c.ws.close(); });
+  it.skipIf(!external)('asks everyone but this computer for the code by default', async()=>{ await start({ auth:'on', token:'K7Q2M9XD', pairingTimeoutMs:150 });
+    const quiet=await open({}, '', external); expect((await quiet.closed).code).toBe(4401); expect(quiet.messages).toEqual([]);
+    const paired=await open({}, '?token=K7Q2-M9XD', external); hello(paired,{ role:'console' }); await waitFor(()=>!!paired.configOf()); paired.ws.close();
+    expect(await status('/api/state', undefined, external)).toBe(401); expect(await status('/api/state?token=K7Q2M9XD', undefined, external)).toBe(200); expect(await status('/health', undefined, external)).toBe(200); });
   it('sends an unpaired socket nothing until a hello with the code, and closes it with 4401 for anything else or 3 s of silence', async()=>{ const log=records(); await start({ auth:'strict', token:'K7Q2M9XD', pairingTimeoutMs:150, diagnostics:log.diagnostics });
     const quiet=await open(); expect(await quiet.closed).toEqual({ code:CLOSE_CODES.pairingRequired, reason:'Pairing code required' }); expect(quiet.messages).toEqual([]);
     const eager=await open(); eager.ws.send(JSON.stringify({ type:'ping', version:PROTOCOL_VERSION, id:1, sentAt:1 })); expect((await eager.closed).code).toBe(4401); expect(eager.messages).toEqual([]);

@@ -17,8 +17,8 @@ export async function waitUntil(check: () => Promise<boolean>, timeoutMs = 1500)
 /** Pairing and Bonjour are off unless a test turns them on. */
 export async function start(options: GatewayOptions = {}) { const created=createServer(0, { auth:'off', mdns:false, home:testHome, ...options }); gateway=created; await new Promise<void>(r=>created.server.listen(0,r)); port=(created.server.address() as any).port; return created; }
 export type Client = { ws: WebSocket; messages: any[]; id?: string; session: string; statuses: (controlId?: string) => any[]; of: (type: string, phoneId?: string) => any[]; configOf: (phoneId?: string) => any; closed: Promise<{ code: number; reason: string }> };
-export async function open(headers: Record<string, string> = {}, query = ''): Promise<Client> {
-  const ws=new WebSocket(`ws://127.0.0.1:${port}/ws${query}`, { headers }); const messages:any[]=[]; ws.on('message',d=>messages.push(JSON.parse(d.toString())));
+export async function open(headers: Record<string, string> = {}, query = '', host = '127.0.0.1'): Promise<Client> {
+  const ws=new WebSocket(`ws://${host}:${port}/ws${query}`, { headers }); const messages:any[]=[]; ws.on('message',d=>messages.push(JSON.parse(d.toString())));
   const closed=new Promise<{ code: number; reason: string }>(resolve=>ws.once('close',(code,reason)=>resolve({ code, reason: reason.toString() })));
   await new Promise((resolve, reject)=>{ ws.once('open',resolve); ws.once('error',reject); }); ws.on('error',()=>{ /* a terminated socket may report ECONNRESET before close */ });
   const of = (type: string, phoneId?: string) => messages.filter(m=>m.type===type&&(phoneId===undefined||m.phoneId===phoneId));
