@@ -110,7 +110,10 @@ declare global {
        * (the kit let go of it, the gateway went or this page's phone changed), until end().
        */
       update(value: Marionette.ControlValue): void;
-      /** The gesture is over: sends the final value (the last one if left out) and ends the drag. `quiet`, or a cut drag, sends nothing. */
+      /**
+       * The gesture is over: sends the final value (the last one if left out) and ends the drag. `quiet` sends nothing. A
+       * cut drag sends only the final value its host waits for: the value the gateway ended it at, if any sample went out.
+       */
       end(value?: Marionette.ControlValue, quiet?: boolean): void;
       isOpen(): boolean; state(): LiveState; letGo(quiet?: boolean): void;
     }

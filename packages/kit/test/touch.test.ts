@@ -168,8 +168,8 @@ describe('a cut touch stays cut until the operator lets go', () => {
     p.pointer(stick.el, 'pointermove', { clientX: 100, clientY: 30 }); frame(); vi.advanceTimersByTime(1000);
     p.pointer(stick.el, 'pointermove', { clientX: 60, clientY: 40 }); frame();
     expect(p.actions()).toHaveLength(1); expect(knob(stick)).toBe('');
-    // The host ended it already, so the lift sends nothing either.
-    p.pointer(stick.el, 'pointerup'); expect(p.actions()).toHaveLength(1);
+    // The host ended it already: the lift sends only the rest it waits for to end its cut (it passes nothing on).
+    p.pointer(stick.el, 'pointerup'); expect(p.actions()).toEqual([{ controlId: 'drive', action: 'base.drive', value: { x: 0.5, y: 0 }, live: true }, { controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 } }]);
     p.config(); expect(stick.el.dataset.state).toBe('idle'); expect(p.K.busy()).toBe(false);
     p.pointer(stick.el, 'pointerdown', { clientX: 100, clientY: 30, pointerId: 2 }); frame();
     expect(p.actions().at(-1)).toEqual({ controlId: 'drive', action: 'base.drive', value: { x: 1, y: 0 }, live: true });
@@ -188,11 +188,13 @@ describe('a cut touch stays cut until the operator lets go', () => {
     p.connect('connected'); p.config({ sensitivity: { value: 2 } as never, 'speed-limit': { value: 60 } as never });
     slide(scale.el, 3); speed.update(80); frame(); vi.advanceTimersByTime(1000);
     expect(p.actions()).toHaveLength(2); expect([scale.el.dataset.state, speed.state()]).toEqual(['dropped', 'dropped']);
-    // Letting go sends nothing, and the slider shows the gateway's value again.
-    p.pointer(scale.el, 'pointerup', { pointerId: 3 }); speed.end();
-    expect(p.actions()).toHaveLength(2); expect(scale.el.value).toBe('2'); expect([scale.el.dataset.state, speed.state()]).toEqual(['idle', 'idle']);
+    // Letting go sends only the final values the host waits for: the last ones that went out, which the gateway ended
+    // the drags at, not the thumb's. The slider shows the gateway's value again.
+    p.pointer(scale.el, 'pointerup', { pointerId: 3 }); speed.end(90);
+    expect(p.actions().slice(2)).toEqual([{ controlId: 'sensitivity', action: 'teleop.translationScale', value: 2 }, { controlId: 'speed-limit', action: 'base.speedLimit', value: 60 }]);
+    expect(scale.el.value).toBe('2'); expect([scale.el.dataset.state, speed.state()]).toEqual(['idle', 'idle']);
     slide(scale.el, 1.5); speed.update(40); frame();
-    expect(p.actions().slice(2)).toEqual([{ controlId: 'sensitivity', action: 'teleop.translationScale', value: 1.5, live: true }, { controlId: 'speed-limit', action: 'base.speedLimit', value: 40, live: true }]);
+    expect(p.actions().slice(4)).toEqual([{ controlId: 'sensitivity', action: 'teleop.translationScale', value: 1.5, live: true }, { controlId: 'speed-limit', action: 'base.speedLimit', value: 40, live: true }]);
   });
 
   it('cuts what is touched when the page changes phone, and releases a hold quietly', () => {
@@ -207,7 +209,16 @@ describe('a cut touch stays cut until the operator lets go', () => {
     expect([pad.dataset.state, stick.el.dataset.state]).toEqual(['dropped', 'dropped']);
     p.pointer(stick.el, 'pointermove', { pointerId: 2, clientX: 60, clientY: 60 }); frame();
     p.pointer(pad, 'pointerup', { pointerId: 1 }); p.pointer(stick.el, 'pointerup', { pointerId: 2 });
-    expect(p.actions()).toHaveLength(sent); expect([pad.dataset.state, stick.el.dataset.state]).toEqual(['idle', 'idle']);
+    // The hold's release would go to the new phone, so none goes; the stick sends only the rest its host waits for.
+    expect(p.actions().slice(sent)).toEqual([{ controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 } }]); expect([pad.dataset.state, stick.el.dataset.state]).toEqual(['idle', 'idle']);
+  });
+
+  it('cuts what is touched when the page gets a phone after having none', () => {
+    p = page(); p.connect(); p.config({}, { phone: undefined, phones: [] }); const stick = stickOn();
+    p.pointer(stick.el, 'pointerdown', { clientX: 100, clientY: 30 }); frame(); const sent = p.actions().length; expect(sent).toBe(1);
+    p.config(); expect(stick.el.dataset.state).toBe('dropped');
+    p.pointer(stick.el, 'pointermove', { clientX: 60, clientY: 60 }); frame(); expect(p.actions()).toHaveLength(sent);
+    p.pointer(stick.el, 'pointerup'); expect(p.actions().slice(sent)).toEqual([{ controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 } }]);
   });
 
   it('never turns a press made while the gateway is away into a hold or a drag', () => {
@@ -226,6 +237,81 @@ describe('a cut touch stays cut until the operator lets go', () => {
     expect(p.actions()).toEqual([]); expect(changes).toEqual([true, false]); expect(letGo).toBe(1);
     p.config(); p.pointer(pad, 'pointerdown', { pointerId: 1 });
     expect(p.actions()).toEqual([{ controlId: 'deadman', action: 'teleop.deadman', value: true }]); expect(pad.dataset.state).toBe('pending');
+  });
+});
+
+// What the app (apps/mobile/App.tsx: `dropped`, `onHtmlMessage`) and the desktop mirror (apps/backend/src/preview.ts)
+// do with a page's drags: when the gateway goes, every drag a live sample went out for is cut; while cut, a control's
+// samples are dropped, and a final value (no `live`) ends the cut and is swallowed. A sample while the gateway is away
+// cuts its control too.
+function cuttingHost() {
+  const cut = new Set<string>(); const dragging = new Set<string>(); const gateway: any[] = []; let linked = true; let seen = 0;
+  const pump = () => {
+    for (const m of p.posted.slice(seen)) {
+      seen++; if (m.type !== 'action') continue;
+      if (m.live) { if (cut.has(m.controlId)) continue; if (!linked) { cut.add(m.controlId); continue; } dragging.add(m.controlId); gateway.push(m); continue; }
+      if (cut.delete(m.controlId)) continue;
+      dragging.delete(m.controlId); if (linked) gateway.push(m);
+    }
+  };
+  return {
+    gateway, cut, pump,
+    drop() { pump(); for (const id of dragging) cut.add(id); dragging.clear(); linked = false; p.connect('reconnecting'); },
+    back(patch: Record<string, unknown> = {}) { linked = true; p.connect('connected'); p.config(patch as never); },
+  };
+}
+
+describe('a cut drag tells its host when the finger lifts', () => {
+  it('so the first drag after the gateway comes back reaches it, for a stick, a slider and a drag()', () => {
+    p = page(); p.connect(); p.config(); const host = cuttingHost(); const stick = stickOn();
+    const out = p.document.createElement('span'); const scale = p.K.slider(null, { controlId: 'speed-limit', out }); p.document.body.append(scale.el);
+    const grip = p.K.drag({ controlId: 'sensitivity' });
+    p.pointer(stick.el, 'pointerdown', { clientX: 100, clientY: 30 }); p.pointer(scale.el, 'pointerdown', { pointerId: 2 }); slide(scale.el, 70); grip.update(2); frame(); host.pump();
+    expect(host.gateway.map(m => m.controlId)).toEqual(['drive', 'speed-limit', 'sensitivity']);
+    host.drop();
+    p.pointer(stick.el, 'pointermove', { clientX: 100, clientY: 60 }); slide(scale.el, 90); grip.update(3); frame(); host.pump();
+    host.back();
+    // The fingers lift after the gateway is back: the host swallows what they send and lets the controls go.
+    p.pointer(stick.el, 'pointerup'); p.pointer(scale.el, 'pointerup', { pointerId: 2 }); grip.end(); host.pump();
+    expect(host.cut.size).toBe(0); expect(host.gateway).toHaveLength(3); expect(scale.el.value).toBe('50'); expect(out.textContent).toBe('50%');
+    // The next drags go out, and what the slider shows is what the gateway got.
+    p.pointer(stick.el, 'pointerdown', { clientX: 30, clientY: 100, pointerId: 3 }); frame(); p.pointer(stick.el, 'pointerup', { pointerId: 3 });
+    p.pointer(scale.el, 'pointerdown', { pointerId: 4 }); slide(scale.el, 20); frame(); slide(scale.el, 10); p.pointer(scale.el, 'pointerup', { pointerId: 4 });
+    grip.update(1.5); frame(); grip.end(); host.pump();
+    expect(host.gateway.slice(3).map(({ controlId, value, live }) => [controlId, value, !!live])).toEqual([
+      ['drive', { x: 0, y: 1 }, true], ['drive', { x: 0, y: 0 }, false],
+      ['speed-limit', 20, true], ['speed-limit', 10, false],
+      ['sensitivity', 1.5, true], ['sensitivity', 1.5, false],
+    ]);
+    expect(scale.el.value).toBe('10'); expect(out.textContent).toBe('10%');
+  });
+
+  it('also when the finger lifts while the gateway is still away, and the slider then shows where the gateway ended it', () => {
+    p = page(); p.connect(); p.config(); const host = cuttingHost();
+    const out = p.document.createElement('span'); const scale = p.K.slider(null, { controlId: 'sensitivity', out }); p.document.body.append(scale.el); scale.el.focus();
+    p.pointer(scale.el, 'pointerdown'); slide(scale.el, 1.5); frame(); p.config({ sensitivity: { live: true, value: 1.5 } as never }); slide(scale.el, 2); frame(); host.pump();
+    host.drop(); slide(scale.el, 2.5); frame(); p.pointer(scale.el, 'pointerup'); scale.el.dispatchEvent(new p.window.Event('change')); host.pump();
+    // Let go while away: back to what the page last heard (1.5). The gateway ended the drag at 2, which the page hears
+    // once it is back, and the slider follows that although it still has focus.
+    expect(scale.el.value).toBe('1.5'); expect(p.document.activeElement).toBe(scale.el);
+    host.back({ sensitivity: { value: 2 } }); expect(scale.el.value).toBe('2'); expect(out.textContent).toBe('2.0×');
+    const before = host.gateway.length;
+    p.pointer(scale.el, 'pointerdown'); slide(scale.el, 1); frame(); slide(scale.el, 0.5); p.pointer(scale.el, 'pointerup'); scale.el.dispatchEvent(new p.window.Event('change')); host.pump();
+    expect(host.gateway.slice(before).map(m => m.value)).toEqual([1, 0.5]); expect(scale.el.value).toBe('0.5');
+    // Touched again and still focused: a config from elsewhere doesn't move it under the operator.
+    p.config({ sensitivity: { value: 3 } as never }); expect(scale.el.value).toBe('0.5');
+  });
+
+  it('but owes nothing when no sample had gone out, or the kit already sent the final value', () => {
+    p = page(); p.connect(); p.config(); p.K.stop(); const host = cuttingHost(); const stick = stickOn();
+    // A push still waiting for its frame when the gateway goes: nothing went out, so nothing is owed.
+    p.pointer(stick.el, 'pointerdown', { clientX: 100, clientY: 30 }); host.drop(); frame(); p.pointer(stick.el, 'pointerup'); host.pump();
+    expect(p.actions()).toEqual([]); host.back();
+    // Stop turned on mid-drag: the kit sent the final value then, so the gateway going later adds nothing at the lift.
+    p.pointer(stick.el, 'pointerdown', { clientX: 100, clientY: 30, pointerId: 2 }); frame(); p.config({ estop: { value: true } as never }); host.drop();
+    p.pointer(stick.el, 'pointerup', { pointerId: 2 }); host.pump();
+    expect(p.actions()).toEqual([{ controlId: 'drive', action: 'base.drive', value: { x: 1, y: 0 }, live: true }, { controlId: 'drive', action: 'base.drive', value: { x: 0, y: 0 } }]);
+    expect(host.cut.size).toBe(0);
   });
 });
 

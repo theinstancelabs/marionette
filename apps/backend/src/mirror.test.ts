@@ -87,4 +87,12 @@ describe('the /screen mirror bridge',()=>{
     M.sendAction('drive','base.drive',{ x:0, y:0 }); expect(actions(ws)).toHaveLength(before);
     M.sendAction('drive','base.drive',{ x:0.2, y:0 },{ live:true }); expect(actions(ws).at(-1)).toMatchObject({ controlId:'drive', value:{ x:0.2, y:0 }, live:true, phoneId:'phone-2' });
     vi.advanceTimersByTime(250); expect(actions(ws).filter(m=>m.renew).every(m=>m.phoneId==='phone-2')).toBe(true); expect(actions(ws).filter(m=>m.renew).length).toBeGreaterThan(0); });
+  it('cuts a drag when a phone appears after none, as the page\'s kit does, and names no phone before that', ()=>{ vi.useFakeTimers(); const { M } = mirrorPage('');
+    const ws = FakeSocket.all[0]; ws.open(); ws.receive({ type:'html_config', version:1, html:HTML }); ws.receive({ ...defaultConfig(), sessionId:'g' });
+    // No phone yet (the gateway's layout): what is sent names none, and the gateway says there is no phone to act as.
+    M.sendAction('drive','base.drive',{ x:0, y:0.5 },{ live:true }); expect(actions(ws)).toHaveLength(1); expect(actions(ws)[0]).not.toHaveProperty('phoneId');
+    // A phone arrives with the finger still on the stick: nothing more goes out for that drag, nor for its final value.
+    ws.receive(phoneConfig('phone-1')); M.sendAction('drive','base.drive',{ x:0, y:0.6 },{ live:true }); vi.advanceTimersByTime(1000);
+    M.sendAction('drive','base.drive',{ x:0, y:0 }); expect(actions(ws)).toHaveLength(1);
+    M.sendAction('drive','base.drive',{ x:0.2, y:0 },{ live:true }); expect(actions(ws).at(-1)).toMatchObject({ controlId:'drive', value:{ x:0.2, y:0 }, live:true, phoneId:'phone-1' }); });
 });

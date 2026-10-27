@@ -56,7 +56,8 @@
   // Hold buttons pressed here, and sliders, sticks and drags dragged here: control id → false (not yet reported by the
   // gateway), true (reported held or live during this touch) or CUT. A cut touch is over for the gateway: the
   // connection dropped or this page's phone changed during it, it began while the gateway was away, or the kit let go
-  // of it. Nothing more goes out for it and it reads as dropped, whatever the gateway says, until the operator lets go.
+  // of it. No sample, repeat or press goes out for it (only, when the finger lifts, the release or final value its host
+  // waits for), and it reads as dropped, whatever the gateway says, until the operator lets go.
   const CUT = 'cut';
   const pressed = new Map();
   const touching = new Map();
@@ -86,7 +87,7 @@
   const busy = () => pressed.size > 0 || touching.size > 0;
   function send(c, value) { const M = window.Marionette; if (c && M) M.sendAction(c.id, c.action, value); }
   // The host ends every hold and drag when the gateway goes or its phone changes. Whatever is still touched here is
-  // cut: it sends nothing more (a repeat or a new sample would start it again) until the operator lets go.
+  // cut: it sends no new sample or repeat (either would start it again) until the operator lets go.
   // `why` is 'connection' or 'phone'.
   function cutAll(why) { let any = false; for (const part of [...parts]) if (part.cut && safely(part.cut, why)) any = true; return any; }
 
@@ -239,12 +240,18 @@
   /* ---------- Live values: sliders and sticks stream while they are dragged ---------- */
   // The newest value goes out at most once a frame, marked live, and the host repeats the latest sample while the drag
   // is open; end() sends the final value, which ends it. The kit streams the values itself, the way the bridge's
-  // stream() does, so that cutting a drag also drops a sample still waiting for its frame. A cut drag sends nothing
-  // more and ignores update() until end() says the gesture is over; `onCut` hears it being cut.
+  // stream() does, so that cutting a drag also drops a sample still waiting for its frame. A cut drag sends no more
+  // samples and ignores update() until end() says the gesture is over; `onCut` hears it being cut.
+  //
+  // A host that cuts a drag (the app, the desktop mirror) drops every sample for that control until a final value
+  // (one without `live`) says the gesture is over; it swallows that final value too. So a cut drag whose samples went
+  // out still sends one final value when the gesture ends, or the host would swallow the next drag whole. It is the
+  // value the gateway ended the drag at (rest for a stick, the last value sent otherwise), so even a host that passed it
+  // on would tell the gateway nothing new.
   const sameValue = (a, b) => a === b || (!!a && !!b && typeof a === 'object' && typeof b === 'object' && a.x === b.x && a.y === b.y);
   const sendable = v => (typeof v === 'number' ? isFinite(v) : typeof v === 'string' || typeof v === 'boolean' || (!!v && typeof v === 'object' && typeof v.x === 'number' && typeof v.y === 'number'));
   function dragger(get, onCut) {
-    let c, state = 'idle', pending, sent, frame = 0;   // state: idle, open or CUT
+    let c, state = 'idle', pending, sent, owed = false, frame = 0;   // state: idle, open or CUT; owed: the host waits for a final value
     const stopFrame = () => { if (frame) cancelAnimationFrame(frame); frame = 0; pending = undefined; };
     const flush = () => { frame = 0; if (state !== 'open' || pending === undefined) return; sent = pending; pending = undefined; post(sent, true); };
     const final = value => { const v = value !== undefined ? value : pending !== undefined ? pending : sent; stopFrame(); post(v); };
@@ -255,7 +262,7 @@
         if (state === CUT || !sendable(value)) return;
         if (state === 'idle') {
           const x = get(); const M = window.Marionette; if (!x || !M || typeof M.stream !== 'function') return;
-          c = x; sent = undefined;
+          c = x; sent = undefined; owed = false;
           // Begun while the gateway is away: nothing goes out (a host could deliver it once the gateway is back).
           if (linkDown()) { cutHere(); touched(); return; }
           state = 'open'; touching.set(c.id, false); touched();
@@ -263,16 +270,19 @@
         if (sameValue(value, pending !== undefined ? pending : sent)) return;
         pending = value; if (!frame) frame = requestAnimationFrame(flush);
       },
-      // The gesture is over: the final value goes out (the last one if left out) unless quiet, or nothing if it was cut.
+      // The gesture is over: the final value goes out (the last one if left out) unless quiet. A cut drag sends only
+      // what it owes its host: the value the gateway ended it at, so the host stops dropping this control's samples.
       end(value, quiet) {
         if (state === 'idle') return;
-        if (state === 'open' && quiet !== true) final(value); else stopFrame();
-        state = 'idle'; touching.delete(c.id); touched();
+        if (state === 'open' && quiet !== true) final(value);
+        else { stopFrame(); if (owed) post(c.type === 'joystick' ? { x: 0, y: 0 } : sent); }
+        state = 'idle'; owed = false; touching.delete(c.id); touched();
       },
       // The kit let go mid-gesture: the final value goes out unless quiet, then nothing until end().
       letGo(value, quiet) { if (state !== 'open') return false; if (quiet !== true) final(value); cutHere(); touched(); return true; },
-      // The host already ended it (the gateway went, or the phone changed): nothing goes out, now or at the end.
-      cut() { if (state !== 'open') return false; cutHere(); return true; },
+      // The host already ended it (the gateway went, or the phone changed): nothing goes out until the gesture ends, and
+      // then only the final value the host waits for, if any sample went out.
+      cut() { if (state !== 'open') return false; owed = sent !== undefined; cutHere(); return true; },
       isOpen: () => state === 'open',
       isCut: () => state === CUT,
       id: () => (state === 'idle' ? undefined : c.id),
@@ -297,13 +307,15 @@
     // The range comes from the control, now or once the config arrives.
     const shape = c => { for (const key of ['min', 'max', 'step']) if (input.getAttribute(key) !== String(c[key])) input.setAttribute(key, c[key]); if (!input.getAttribute('aria-label')) input.setAttribute('aria-label', c.label); };
     if (c0 && c0.type === 'slider') { shape(c0); input.value = c0.value; }
-    const drag = dragger(get); const fmt = o.format || format; let pointer;
+    const drag = dragger(get); const fmt = o.format || format; let pointer, settled = false;
     const current = () => (drag.id() ? byId(drag.id()) : get()) || c0;
     const show = value => { if (o.out) setText(o.out, fmt(current(), value)); };
-    // Back to the gateway's value: after a cut drag the thumb shows nothing that wasn't sent.
-    const settle = () => { const c = get(); if (c && c.type === 'slider') { input.value = c.value; show(c.value); } };
+    // Back to the gateway's value: after a cut drag the thumb shows nothing that wasn't sent. Where the gateway ended the
+    // drag may only come later (after a reconnect), so a settled slider follows the config even with focus, until the
+    // operator touches it again.
+    const settle = () => { settled = true; const c = get(); if (c && c.type === 'slider') { input.value = c.value; show(c.value); } };
     const part = { el: input, out: o.out };
-    // The finger lifted (or a key press committed the value): the final value goes out, or nothing after a cut.
+    // The finger lifted (or a key press committed the value): the final value goes out, or after a cut only what the host waits for.
     part.finish = quiet => { pointer = undefined; const cut = drag.isCut(); drag.end(Number(input.value), quiet); if (cut) settle(); };
     // The kit let go mid-drag: the value so far is the final one, and the rest of the drag is ignored until the finger lifts.
     part.letGo = quiet => { drag.letGo(Number(input.value), quiet); };
@@ -318,9 +330,9 @@
       const state = liveState(current()); input.setAttribute('data-state', state); if (o.out) o.out.setAttribute('data-state', state);
     };
     // Values change with every config; follow them unless this slider is being dragged or has focus.
-    part.sync = () => { const c = get(); if (!c || c.type !== 'slider' || touching.has(c.id)) return; shape(c); if (document.activeElement === input) return; input.value = c.value; show(c.value); };
-    listen(part, input, 'pointerdown', e => { pointer = e.pointerId; });
-    listen(part, input, 'input', () => { if (drag.isCut()) return; const value = Number(input.value); drag.update(value); if (!drag.isCut()) show(value); });
+    part.sync = () => { const c = get(); if (!c || c.type !== 'slider' || touching.has(c.id)) return; shape(c); if (document.activeElement === input && !settled) return; input.value = c.value; show(c.value); };
+    listen(part, input, 'pointerdown', e => { pointer = e.pointerId; settled = false; });
+    listen(part, input, 'input', () => { if (drag.isCut()) return; settled = false; const value = Number(input.value); drag.update(value); if (!drag.isCut()) show(value); });
     for (const name of ['change', 'pointerup', 'pointercancel', 'touchend', 'touchcancel']) listen(part, input, name, () => part.finish());
     // Focus taken away mid-drag is the page letting go, not the finger.
     listen(part, input, 'blur', () => part.letGo());

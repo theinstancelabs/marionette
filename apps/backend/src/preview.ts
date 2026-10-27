@@ -18,9 +18,11 @@ export const MIRROR_FEATURES: readonly HtmlBridgeFeature[] = ['live', 'robot_sta
  * A drag the connection or a switch to another phone cuts stays cut until the
  * finger lifts: the page's stream is still open, but its samples are dropped and
  * its final value only ends it here, so it never starts streaming again by itself.
- * A sample or a press that couldn't be sent is never repeated later either. Every
- * action names the phone it was meant for (`phoneId`), so the gateway can drop one
- * still in flight when it moves the mirror to another phone.
+ * The phone changes for the page's kit and for this bridge alike, so the two cut the
+ * same drags: another phone, no phone any more, or a phone after none. A sample or a
+ * press that couldn't be sent is never repeated later either. Every action names the
+ * phone it was meant for (`phoneId`), so the gateway can drop one still in flight
+ * when it moves the mirror to another phone.
  */
 // `follow` is a phone id; `<` is escaped too, so nothing in it can close the inline script.
 const previewBridge = (follow: string, shown: number) => `(function(){var ws=null,config,ready=false,held={},dragging={},cut={},tracking='',stopped=false,pingId=0,awaiting=null,shown=${shown},follow=${JSON.stringify(follow).replace(/</g, '\\u003c')};
@@ -54,7 +56,7 @@ socket.onmessage=function(e){var m;try{m=JSON.parse(e.data);}catch(x){return;}
 if(m.type==='pong'){if(awaiting&&m.id===awaiting.id){var rtt=Math.round((performance.now()-awaiting.at)*10)/10;awaiting=null;receive('link',{rttMs:rtt,quality:rtt<60?'good':rtt<150?'fair':'poor'});}return;}
 if(m.type==='ping'){socket.send(JSON.stringify({type:'pong',version:1,id:m.id,sentAt:m.sentAt,at:Date.now()}));return;}
 if(m.type==='html_config'){if(hash(m.html)!==shown)location.reload();return;}
-if(m.type==='config'){if(config&&config.phone&&(!m.phone||m.phone.id!==config.phone.id)){cutAll();tracking='';}config=m;receive('config',m);
+if(m.type==='config'){if(config&&phoneOf(config)!==phoneOf(m)){cutAll();tracking='';}config=m;receive('config',m);
 /* The gateway's config for this connection: the page has the fresh one (holds, live drags, phone) before it hears it's connected. */
 if(!ready){ready=true;receive('connection',{state:'connected',gateway:location.host});}return;}
 if(m.type==='pose'&&tracking!==m.trackingState+m.source){tracking=m.trackingState+m.source;receive('tracking',{state:m.trackingState,source:m.source});}
