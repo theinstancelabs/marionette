@@ -184,16 +184,21 @@ export default function App() {
     setScreen('live'); setRecent(old=>{ const next=[label,...old.filter(item=>item!==label)].slice(0,MAX_RECENT); settings.recent=next; saveSettings(settings); return next; }); void startTracking(); };
   /** The open connection is gone. A refused pairing code leaves; anything else keeps the screen and ARKit running and retries in place. */
   const dropped=(ws:WebSocket,closeCode?:number,why?:string)=>{ if(socket.current!==ws)return; socket.current=undefined; ws.close(); const current=target.current; if(!current)return;
-    if(closeCode===CLOSE_CODES.pairingRequired){ pairingRefused(current); return; }
+    if(closeCode===CLOSE_CODES.pairingRequired){ pairingRefused(current,why); return; }
     if(closeCode===CLOSE_CODES.replaced){ disconnect(`Another connection from this phone took over ${current.label}.`); return; }
     for(const controlId of dragging.current.keys())cutDrags.current.add(controlId); releaseAll();
     const reason=why??'The connection dropped'; setReconnecting(reason); const previous=latest.current.get('connection') as ConnectionEvent|undefined;
     if(previous?.state!=='reconnecting'||previous.reason!==reason)toHtml('connection',{state:'reconnecting',gateway:current.label,reason} satisfies ConnectionEvent);
     toHtml('link',{quality:'unknown'} satisfies LinkEvent); scheduleRetry(); };
-  /** 4401: the gateway wants a pairing code, or a different one. Back to the connect page with the code field. */
-  const pairingRefused=(current:Target)=>{ const name=current.name??current.label;
-    if(current.code&&savedCode(current.label,current.gatewayId)===current.code)forgetCode(current.label,current.gatewayId);
-    disconnect(current.code?`${name} didn’t accept that pairing code.`:undefined); setAddress(current.label); setCode(current.code?formatPairingCode(current.code):''); setCodeNote(`${name} needs its pairing code`); setCodeShown(true); };
+  /**
+   * 4401: the gateway wants a pairing code, or a different one, or has shut this address out for a while. Back to the
+   * connect page with the code field and the gateway's reason. Only a wrong code is forgotten: an address shut out after
+   * too many wrong codes (from any device behind it) turns the right code away too.
+   */
+  const pairingRefused=(current:Target,why?:string)=>{ const name=current.name??current.label; const sent=current.code; const wrong=/^wrong pairing code/i.test(why??'');
+    if(sent&&wrong&&savedCode(current.label,current.gatewayId)===sent)forgetCode(current.label,current.gatewayId);
+    disconnect(wrong?`${name} didn’t accept that pairing code.`:why&&!/^pairing code required/i.test(why)?`${name} refused the connection: ${why.replace(/\.$/,'')}.`:undefined);
+    setAddress(current.label); setCode(sent?formatPairingCode(sent):''); setCodeNote(`${name} needs its pairing code`); setCodeShown(true); };
   const received=(data:unknown)=>{ heardAt.current=Date.now(); let m:unknown; try{ m=JSON.parse(String(data)); }catch{ return; } const type=m&&typeof m==='object'?(m as {type?:unknown}).type:undefined;
     // After the hello the gateway only sends this phone its own config. A hello slower than the gateway's 250 ms
     // console grace first gets console traffic (the gateway view and other phones' configs), so the latest config
