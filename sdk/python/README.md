@@ -14,6 +14,7 @@ what; it picks up the parts it needs:
 | `RobotLink` | A robot's own connection: its phone screen, its state, notices and JPEG frames. |
 | `marionette.video.VideoPublisher` | WebRTC video from numpy frames, straight to each viewer (`[video]` extra). |
 | `marionette.gateway` | The gateway itself, bundled, run from Python or as `marionette-gateway`. |
+| `fetch_pairing` | A gateway's QR code (its pairing link, as SVG), pairing code and addresses, for a robot to show on its own page or display. |
 | `marionette.testing` | Gateway message builders, the real gateway on a free port, and scriptable phones. |
 
 Frames are ROS REP-103 throughout: +X forward, +Y left, +Z up, metres.
@@ -76,6 +77,28 @@ own computer no code is needed.
 
 `marionette.address` has the address rules on their own: `gateway_url(text)`, `parse_pairing_link(text)`,
 `normalize_code(code)` and `format_code(code)`.
+
+### Showing the QR code
+
+A robot with its own page or display can show its gateway's QR code, so a phone pairs by scanning the robot:
+
+```python
+from marionette import PairingError, fetch_pairing
+
+try:
+    pairing = fetch_pairing("localhost:8787")      # blocking; in asyncio, await asyncio.to_thread(fetch_pairing, …)
+except PairingError as exc:
+    print(exc)                                     # a sentence for the operator; exc.status is 401, 404 or None
+else:
+    print(pairing.code, pairing.url)               # K7Q2-M9XD, marionette://pair?…
+    svg = pairing.qr_svg                           # the QR code; on a web page, show it as an image
+```
+
+`Pairing` holds `gateway_id`, `name`, `auth` (`on`, `off` or `strict`), `code` (None when pairing is off),
+`addresses`, `port`, `url` (the pairing link) and `qr_svg`; `to_json()` gives the gateway's own `/api/pairing` JSON to
+pass on to a page. The gateway answers its own computer without the code unless pairing is strict. For a gateway on
+another computer, give its pairing link, which carries the code, or `token=`. The address takes the same forms as
+`GatewayClient`, a pairing link's hosts are tried in turn, and `timeout` (2 s) is per host.
 
 ## Phones
 

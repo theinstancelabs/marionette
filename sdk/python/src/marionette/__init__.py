@@ -6,16 +6,18 @@
 - :mod:`marionette.teleop`: ``gate``, ``Clutch``, ``camera_frame``, ``JumpDetector``, ``PressTracker``, ``follow``, ``owners``.
 - :mod:`marionette.video`: ``VideoPublisher``, WebRTC video from numpy frames (``pip install "marionette-sdk[video]"``).
 - :mod:`marionette.gateway`: run the bundled gateway (``marionette-gateway``).
+- :func:`fetch_pairing`: a gateway's QR code and pairing code, for a robot to show on its own page or display.
 - :mod:`marionette.testing`: message builders, the real gateway on a free port, scriptable phones.
 """
 
 from .address import PairingLink, format_code, gateway_url, normalize_code, parse_pairing_link
 from .client import GatewayClient
+from .pairing import Pairing, PairingError, fetch_pairing
 from .phones import Drag, Hold, Phone, PhoneTracker, Pose
 from .robot import RobotLink
 from .teleop import Clutch, JumpDetector, PressTracker, camera_frame, follow, gate, owners
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "GatewayClient",
@@ -37,4 +39,7 @@ __all__ = [
     "normalize_code",
     "format_code",
     "PairingLink",
+    "fetch_pairing",
+    "Pairing",
+    "PairingError",
 ]

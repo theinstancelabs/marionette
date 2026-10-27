@@ -32,6 +32,20 @@ client.close();
 - It answers the gateway's pings, and pings the gateway every second: `offsetMs` is our clock minus the gateway's (from the fastest of the last 16 round trips), `rttMs` the last round trip, `gatewayNow()` the gateway's clock.
 - `send(message, { key })` goes through an outbox. Messages with the same key replace each other while they wait (newest only). By default robot state is keyed per phone and camera frames per stream, and everything else (notices included) is never coalesced. Small messages go before camera frames, and frames wait while more than 1 MB is unsent. While disconnected `send()` returns false and drops the message.
 
+### Showing the QR code
+
+A robot or page can show its gateway's QR code, so a phone pairs by scanning it:
+
+```ts
+import { PairingError, fetchPairing } from '@marionette/sdk';
+
+const pairing = await fetchPairing('localhost:8787');  // rejects with a PairingError: a sentence, and status 401, 404 or undefined
+pairing.code;   // 'K7Q2-M9XD' (absent when pairing is off)
+pairing.qrSvg;  // the QR code of pairing.url, the pairing link; on a page, show it as an image
+```
+
+It reads the gateway's `GET /api/pairing`: `gatewayId`, `name`, `auth`, `code`, `addresses`, `port`, `url` and `qrSvg`, checked. The gateway answers its own computer without the code unless pairing is strict. For a gateway on another computer, give its pairing link, which carries the code, or `{ token }`. The address takes the same forms as `GatewayClient`, a pairing link's hosts are tried in turn, and `timeoutMs` (2000) is per host. The Python SDK's `fetch_pairing` does the same.
+
 ## PhoneTracker and Phone
 
 Folds the gateway's `config`, `pose` and `input` messages into one `Phone` per id. It decides nothing.

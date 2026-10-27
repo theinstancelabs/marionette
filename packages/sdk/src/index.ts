@@ -8,5 +8,6 @@ export { Emitter } from './emitter.js';
 export { Phone, PhonePose, PhoneTracker, type CalibrationStatus, type ConformancePhone, type Drag, type Hold, type MirrorPolicy, type TrackerOptions } from './tracker.js';
 export { Clutch, JumpDetector, PressTracker, TELEOP_DEFAULTS, cameraFrame, follow, gate, owners, unwrapTurn, type ClutchOptions, type EngageOptions, type GateOptions, type JumpOptions, type OwnersOptions, type PoseLike } from './teleop.js';
 export { add, dot, expRotation, identity, matMul, matVec, matrixFromQuaternion, norm, quaternionFromMatrix, rotationVector, scale, sub, transpose, type Mat3, type Pose, type Vec3 } from './math.js';
+export { PairingError, fetchPairing, parsePairing, type Pairing } from './pairing.js';
 export { NOTICE_CONTROL_ID, RobotLink, type NoticeOptions, type RobotLinkEvents, type RobotLinkOptions, type ScreenResult } from './robot.js';
 export { gatewayUrl, parsePairingLink } from '@marionette/protocol';

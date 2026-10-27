@@ -150,7 +150,7 @@ Every action a phone sends is forwarded verbatim, including actions no control d
 
 **HTTP** (from another computer, add `?token=<code>` or `Authorization: Bearer <code>`, except for `/health`):
 - `GET /api/state` returns everything: the gateway config plus `phones[]` with each phone's config, latest pose, raw pose and link (`rttMs`, `quality`, whether the clock offset is known), `robots[]`, and the retained `robotStates`.
-- `GET /api/pairing` returns `{gatewayId, name, code, addresses, port, url, qrSvg}`: the pairing link and its QR code.
+- `GET /api/pairing` returns `{gatewayId, name, auth, code, addresses, port, url, qrSvg}`: the pairing link and its QR code. Both SDKs read it for you (`fetch_pairing` / `fetchPairing`), for a robot that shows the QR code on its own page or display.
 - `GET /health` returns `{ok, gatewayId, name, clients, phones, robots, poseCount}`.
 - `/screen?phone=phone-2` serves the phone screen in a desktop browser, acting as that phone.
 
