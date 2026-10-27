@@ -373,10 +373,12 @@ def test_a_desk_mirror_moves_nothing_but_stop_unless_mirrors_may_act() -> None:
                     mirror.send(json.dumps({**message, "live": True} if live else message))
 
                 wait_until(lambda: guarded() and allowed() and guarded().value("arm.select") == allowed().value("arm.select") == "left", 5, "the phone")
-                with websockets.sync.client.connect(gateway.url, max_queue=None) as mirror:
+                with websockets.sync.client.connect(gateway.url) as mirror:
                     mirror.send(json.dumps({"type": "hello", "version": 1, "role": "console", "follow": pid}))
                     while json.loads(mirror.recv(5)).get("type") != "config":
                         pass
+                    # Keep reading what the gateway sends the mirror, as a screen would.
+                    threading.Thread(target=lambda: [None for _ in mirror], daemon=True).start()
                     act(mirror, "arm", "arm.select", "right")
                     act(mirror, "grip", "gripper.set", 0.5, live=True)
                     act(mirror, "grip", "gripper.set", 1.0)  # let go
