@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
@@ -9,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import websockets.sync.client
 
 from helpers import yaw
 from marionette import GatewayClient, PhoneTracker, RobotLink
@@ -310,3 +312,73 @@ def test_quaternions_from_the_gateway_are_unit(gateway: Gateway) -> None:
         q = poses[-1]["rotation"]
         assert abs(np.linalg.norm([q["x"], q["y"], q["z"], q["w"]]) - 1) < 1e-9
         assert quaternion_to_matrix(q).shape == (3, 3)
+
+
+MIRRORED = """<!doctype html><html><body>
+<script type="application/json" id="marionette-config">
+{"controls": [
+  {"id": "estop", "type": "toggle", "label": "Stop", "action": "safety.estop", "value": false},
+  {"id": "arm", "type": "select", "label": "Arm", "action": "arm.select", "value": "left", "options": [{"label": "L", "value": "left"}, {"label": "R", "value": "right"}]},
+  {"id": "grip", "type": "slider", "label": "Grip", "action": "gripper.set", "value": 0, "min": 0, "max": 1, "step": 0.05},
+  {"id": "drive", "type": "joystick", "label": "Drive", "action": "base.drive", "value": {"x": 0, "y": 0}},
+  {"id": "deadman", "type": "button", "label": "Hold", "action": "teleop.deadman", "hold": true}
+ ]}
+</script></body></html>"""
+
+
+def test_a_desk_mirror_moves_nothing_but_stop_unless_mirrors_may_act() -> None:
+    """The gateway applies a desk mirror's changes and republishes the phone's config, and ends the mirror's drags when
+    it goes quiet: under stop-only none of that reaches the phone's record (the review's two reproductions)."""
+    with Gateway(html=MIRRORED) as gateway:
+        trackers = {"stop-only": PhoneTracker(mirror="stop-only"), "allow": PhoneTracker(mirror="allow")}
+        clients = [GatewayClient(gateway.url) for _ in trackers]
+        for client, tracker in zip(clients, trackers.values(), strict=True):
+            tracker.attach(client)
+            client.start()
+        seen: list[dict[str, Any]] = []
+        clients[0].on("message", lambda m: m.get("type") in ("input", "config") and seen.append(m))
+        try:
+            with SimPhone(gateway) as phone:
+                pid = phone.phone_id
+
+                def guarded() -> Any:
+                    return trackers["stop-only"].get(pid)
+
+                def allowed() -> Any:
+                    return trackers["allow"].get(pid)
+
+                def act(mirror: Any, control: str, action: str, value: Any, live: bool = False) -> None:
+                    message = {"type": "action", "version": 1, "sessionId": "desk", "controlId": control, "action": action, "value": value, "sentAt": time.time() * 1000}
+                    mirror.send(json.dumps({**message, "live": True} if live else message))
+
+                wait_until(lambda: guarded() and allowed() and guarded().value("arm.select") == allowed().value("arm.select") == "left", 5, "the phone")
+                with websockets.sync.client.connect(gateway.url, max_queue=None) as mirror:
+                    mirror.send(json.dumps({"type": "hello", "version": 1, "role": "console", "follow": pid}))
+                    while json.loads(mirror.recv(5)).get("type") != "config":
+                        pass
+                    act(mirror, "arm", "arm.select", "right")
+                    act(mirror, "grip", "gripper.set", 0.5, live=True)
+                    act(mirror, "grip", "gripper.set", 1.0)  # let go
+                    act(mirror, "drive", "base.drive", {"x": 0.5, "y": 0}, live=True)
+                    act(mirror, "grip", "gripper.set", 0.9, live=True)  # and the desk goes quiet: the gateway ends both drags
+                    ended = lambda: {m["action"] for m in seen if m["type"] == "input" and m.get("source") == "gateway"}  # noqa: E731
+                    wait_until(lambda: ended() >= {"gripper.set", "base.drive"}, 3, "the gateway's ends")
+                    wait_until(lambda: allowed().value("arm.select") == "right" and allowed().value("gripper.set") == 0.9, 2, "the mirror's changes, allowed")
+                    # The gateway republished the mirror's changes in the phone's config...
+                    mine = [m for m in seen if m["type"] == "config" and m.get("phone", {}).get("id") == pid]
+                    assert any(c["action"] == "arm.select" and c.get("value") == "right" for m in mine for c in m["controls"])
+                    assert any(c["action"] == "gripper.set" and c.get("value") == 0.9 for m in mine for c in m["controls"])
+                    # ...and none of it counts under stop-only.
+                    record = guarded()
+                    assert record.value("arm.select") == "left" and record.value("gripper.set") == 0 and record.stick("base.drive") == (0.0, 0.0)
+                    grip = record.drag("gripper.set")
+                    assert (grip.value, grip.live, grip.dropped, grip.updates) == (0, False, False, 0)
+                    assert allowed().drag("gripper.set").updates == 4  # two samples, the let-go and the gateway's end
+                    # The phone's own changes count, and a mirror's Stop on does too.
+                    phone.set("arm.select", "right")
+                    wait_until(lambda: guarded().value("arm.select") == "right", 2, "the phone's own change")
+                    act(mirror, "estop", "safety.estop", True)
+                    wait_until(trackers["stop-only"].any_stop, 2, "the mirror's Stop")
+        finally:
+            for client in clients:
+                client.stop()

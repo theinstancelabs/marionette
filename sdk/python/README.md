@@ -100,7 +100,8 @@ everything else is read by control type, so the same tracker serves any screen. 
 
 - `value(action, default)`, `number(action, default, lo, hi)`, `choice(action, options, default)`, `flag(action)`;
 - `hold(action)` (`down`, `at`, `presses`) and `holding(action, now, timeout=0.6)`;
-- `drag(action)` (`value`, `live`, `dropped`, `at`, and `updates`: new values so far, not counting repeats) and
+- `drag(action)` (`value`, `live`, `dropped`, `at`, and `updates`: new values the tracker took from inputs so far,
+  not counting repeats, configs, or anything a mirror did unless mirrors may act) and
   `stick(action, now=None, timeout=0.25)`;
 - `presses(action)` for plain buttons and holds alike;
 - `stop`; `connected`, `name`, `color`, `index` (2 for `phone-2`), `session`; `calibration` (`uncalibrated`,
@@ -125,9 +126,16 @@ The rules, each learned on a robot:
   `<id>@<old gateway session>` until `clear_stale_stops()`. So does a phone that vanishes from the roster with Stop on.
 - `clear_stale_stops()` forgets those, and turns Stop off on offline phones of this gateway (they can't turn it off
   themselves) until they come back.
-- A desktop mirror of a phone's screen (the gateway's `/screen`) acts as that phone. `mirror="stop-only"` (the
-  default) lets it turn Stop on and nothing else, not even turn Stop off through the config the gateway sends after
-  it; `"allow"` treats it like the phone; `"deny"` ignores it.
+- A desktop mirror of a phone's screen (the gateway's `/screen`) acts as that phone. `mirror="allow"` treats it like
+  the phone; `"stop-only"` (the default) lets it turn Stop on and nothing else; `"deny"` ignores it.
+- Unless mirrors may act, the configs the gateway republishes after a mirror's changes can't carry them either. A
+  phone's toggles, selects, sliders and sticks are only *seeded* from its config: the first time the tracker sees the
+  phone, after `lost_gateway()` or a gateway restart, after the phone left the roster, for a control new to the
+  screen (or now of another kind), and for a value that no longer suits its control. After that they follow the
+  phone's own inputs. A drag the gateway ends takes the gateway's value only if the tracker saw it live (otherwise it
+  was a mirror's): a slider keeps its value, a stick rests. A config may turn Stop on, but once the phone is known
+  only the phone itself turns it off.
+- The gateway's own inputs only end holds and drags.
 - A new phone starts from the screen's defaults (the gateway's own config, without `phone`), never from another
   phone's values; its own config brings its values.
 - Anything malformed is ignored.
