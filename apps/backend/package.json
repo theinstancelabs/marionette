@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
+    "bundle": "tsx scripts/bundle.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -23,6 +24,7 @@
     "@types/node": "^22.10.2",
     "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.5.13",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
