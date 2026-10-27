@@ -8,8 +8,9 @@
   The Axol phone screen. The gateway sends this document to the Marionette app, which shows
   it full screen and provides window.Marionette; the gateway also serves it at /screen for a
   desktop browser. The block below declares the controls and cameras; the consumer on Axol
-  reads them and the undeclared gripper.set and base.command actions, and sends robot state
-  back as status messages (see consumers/axol/README.md). Built on Marionette's default screen.
+  reads them, and sends robot state
+  back as status messages (see consumers/axol/README.md). Built on Marionette's default screen;
+  its sliders, drive stick and holds use the same streaming primitives.
 -->
 <script type="application/json" id="marionette-config">
 {
@@ -19,7 +20,13 @@
     { "id": "arm", "type": "select", "label": "Arm", "action": "arm.select", "value": "left", "options": [{ "label": "Left arm", "value": "left" }, { "label": "Right arm", "value": "right" }] },
     { "id": "cameras", "type": "select", "label": "Cameras", "action": "camera.view", "value": "head", "options": [{ "label": "Head", "value": "head" }, { "label": "Both wrists", "value": "wrists" }, { "label": "Left wrist", "value": "left" }, { "label": "Right wrist", "value": "right" }, { "label": "All three", "value": "all" }] },
     { "id": "scale", "type": "slider", "label": "Motion scale", "action": "teleop.translationScale", "value": 1, "min": 0.25, "max": 3, "step": 0.05, "unit": "×" },
-    { "id": "drive-speed", "type": "slider", "label": "Drive speed", "action": "base.speed", "value": 0.5, "min": 0.1, "max": 1, "step": 0.05 },
+    { "id": "grip", "type": "slider", "label": "Gripper", "action": "gripper.set", "value": 0, "min": 0, "max": 1, "step": 0.01 },
+    { "id": "drive", "type": "joystick", "label": "Drive", "action": "base.drive", "value": { "x": 0, "y": 0 } },
+    { "id": "turn-left", "type": "button", "label": "Turn left", "action": "base.turnLeft", "hold": true },
+    { "id": "turn-right", "type": "button", "label": "Turn right", "action": "base.turnRight", "hold": true },
+    { "id": "lift-up", "type": "button", "label": "Raise lift", "action": "lift.up", "hold": true },
+    { "id": "lift-down", "type": "button", "label": "Lower lift", "action": "lift.down", "hold": true },
+    { "id": "speed-limit", "type": "slider", "label": "Speed limit", "action": "base.speedLimit", "value": 50, "min": 0, "max": 100, "step": 1, "unit": "%" },
     { "id": "calibration-start", "type": "button", "label": "Start calibration", "action": "calibration.start", "tone": "accent" },
     { "id": "calibration", "type": "button", "label": "Capture calibration step", "action": "calibration.capture", "tone": "accent" },
     { "id": "capture-origin", "type": "button", "label": "Set origin here", "action": "calibration.captureOrigin", "tone": "accent" },
@@ -57,7 +64,7 @@ body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.4 var(--sans);font-v
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;touch-action:manipulation}
 button:disabled{cursor:default}
-button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible,.stick:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 [hidden]{display:none!important}
 .app{min-height:100vh;display:flex;flex-direction:column;padding-top:var(--top)}
 
@@ -148,11 +155,18 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 .key b{font-weight:400;font-size:15px}
 .key:active:not(:disabled){background:var(--paper2)}
 .key:disabled{border-color:var(--rule);color:var(--ink2);background:var(--paper2)}
-.key.on{background:var(--ink);color:var(--paper)}
+/* Hold buttons show what the gateway knows: filled once it reports the hold, red if it let go while still pressed. */
+.key.pending{background:var(--paper2)}
+.key.held{background:var(--ink);color:var(--paper)}
+.key.dropped{border-color:var(--red);color:var(--red)}
 /* Each mode's main setting, one line at the top of its dock. */
 .setting{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;height:40px;font-size:15px}
 .setting span{color:var(--ink2)}
 .setting output{min-width:3.4em;text-align:right;font-weight:500}
+/* A value being dragged: blue once the gateway hears it live, red if it stopped hearing it mid-drag. */
+.setting output.live,.row .val.live{color:var(--blue)}.setting output.dropped,.row .val.dropped{color:var(--red)}
+/* Motion scale is off while the hold-to-move pad is held. */
+.setting.locked{opacity:.4}
 
 /* The hold-to-move pad, with the grip gauge on its right: a vertical slide while held moves the grip. */
 .pad{display:flex;align-items:stretch;height:140px;border-radius:22px;border:2.5px solid var(--blue);background:#fff;color:var(--blue);touch-action:none;padding:0;text-align:center;overflow:hidden}
@@ -172,25 +186,34 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 .pad.held .gauge-bar i{background:#fff}
 .gauge.off{opacity:.45}
 
-/* Drive: turn buttons either side of the drive pad, lift buttons above them. */
+/* Drive: Marionette's spring-return stick between the turn buttons, lift buttons above them. */
 .drive-row{display:grid;grid-template-columns:74px minmax(0,1fr) 74px;gap:8px;height:152px}
 .turn{height:100%;border-radius:18px;border:1.5px solid var(--ink);background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:15px;font-weight:500;line-height:1.2;touch-action:none}
 .turn b{font-size:28px;font-weight:400;line-height:1}
 .turn span{max-width:54px}
-.turn.on{background:var(--ink);color:var(--paper)}
+.turn.pending{background:var(--paper2)}
+.turn.held{background:var(--ink);color:var(--paper)}
+.turn.dropped{border-color:var(--red);color:var(--red)}
 .turn:disabled{border-color:var(--rule);color:var(--ink2);background:var(--paper2)}
 .lift-btn{touch-action:none}
-.stick{position:relative;border-radius:22px;border:2.5px solid var(--blue);background:#fff;touch-action:none;overflow:hidden;cursor:grab}
-.stick.active{background:var(--blue-wash)}
-.stick .ring{position:absolute;left:50%;top:50%;height:60%;aspect-ratio:1;transform:translate(-50%,-50%);border-radius:50%;border:1.5px dashed var(--rule)}
-.stick .cross{position:absolute;left:50%;top:50%;width:60%;height:60%;transform:translate(-50%,-50%);background:linear-gradient(var(--rule),var(--rule)) center/1px 100% no-repeat,linear-gradient(var(--rule),var(--rule)) center/100% 1px no-repeat;opacity:.7}
-.stick .knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 4px #fff,0 2px 6px rgba(0,0,0,.25)}
-.stick .lab{position:absolute;font-size:12px;color:var(--ink2);line-height:1}
-.stick .lab.f{top:6px;left:0;right:0;text-align:center}.stick .lab.b{bottom:6px;left:0;right:0;text-align:center}
-.stick .lab.l{left:7px;top:50%;transform:translateY(-50%)}.stick .lab.r{right:7px;top:50%;transform:translateY(-50%)}
+.stick{position:relative;justify-self:center;height:100%;max-width:100%;aspect-ratio:1;border-radius:50%;background:#fff;border:1.5px solid var(--ink);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
+.stick.dragging{cursor:grabbing}
+.stick svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.stick .edge{position:absolute;font-size:12px;line-height:1;color:var(--ink2);pointer-events:none}
+.stick .edge.n{top:7%;left:50%;transform:translateX(-50%)}.stick .edge.s{bottom:7%;left:50%;transform:translateX(-50%)}
+.stick .edge.w{left:6%;top:50%;transform:translateY(-50%)}.stick .edge.e{right:6%;top:50%;transform:translateY(-50%)}
+/* The knob is 30% of the pad and travels 35% of it, so a full push moves it 35/30 of its own size. */
+.knob{position:absolute;left:35%;top:35%;width:30%;height:30%;border-radius:50%;background:#fff;border:2.5px solid var(--blue);box-shadow:0 2px 6px rgba(46,48,51,.18);transition:transform .2s cubic-bezier(.3,1.35,.6,1);pointer-events:none}
+.stick.dragging .knob{transition:none}
+.stick.pending .knob{background:var(--blue-wash)}
+.stick.live .knob{background:var(--blue)}
+.stick.dropped{border-color:var(--red)}.stick.dropped .knob{border-color:var(--red);background:#fff}
+.stick .vec{stroke:var(--blue)}.stick.dropped .vec{stroke:var(--red)}
+.stick .off-note{display:none;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font-size:15px;color:var(--ink2)}
 .stick.off{border-color:var(--rule);background:var(--paper2);cursor:default}
-.stick.off .knob,.stick.off .ring,.stick.off .cross,.stick.off .lab{display:none}
-.stick .off-note{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font-size:15px;color:var(--ink2)}
+.stick.off svg,.stick.off .edge,.stick.off .knob{display:none}
+.stick.off .off-note{display:block}
+.stick-row{display:flex;justify-content:center;height:160px;padding:4px 0 6px}
 
 /* Toast */
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(240px + var(--bottom));max-width:min(92vw,400px);padding:10px 14px;border-radius:10px;background:var(--ink);color:var(--paper);font-size:15px;line-height:1.35;z-index:5}
@@ -253,7 +276,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   body{background-color:#e9ebe6}
   .app{background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px}
 }
-@media (prefers-reduced-motion:reduce){.sheet{animation:none}.switch,.switch::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.sheet{animation:none}.switch,.switch::after,.knob{transition:none}}
 </style>
 </head>
 <body>
@@ -293,20 +316,8 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     </div>
     <div id="drive-dock" hidden>
       <div class="setting" id="drive-setting" hidden></div>
-      <div class="pair" id="lift-row">
-        <button type="button" class="key lift-btn" data-kind="lift" data-dir="1"><b aria-hidden="true">▲</b>Raise lift</button>
-        <button type="button" class="key lift-btn" data-kind="lift" data-dir="-1"><b aria-hidden="true">▼</b>Lower lift</button>
-      </div>
-      <div class="drive-row" id="drive-row">
-        <button type="button" class="turn" data-kind="turn" data-dir="1"><b aria-hidden="true">↺</b><span>Turn left</span></button>
-        <div class="stick" id="stick" role="application" aria-label="Drive pad. Drag from the middle to drive.">
-          <i class="cross"></i><i class="ring"></i>
-          <span class="lab f">Forward</span><span class="lab b">Back</span><span class="lab l">Left</span><span class="lab r">Right</span>
-          <i class="knob" id="knob"></i>
-          <span class="off-note" id="stick-off" hidden>No Jelly base</span>
-        </div>
-        <button type="button" class="turn" data-kind="turn" data-dir="-1"><b aria-hidden="true">↻</b><span>Turn right</span></button>
-      </div>
+      <div class="pair" id="lift-row"></div>
+      <div class="drive-row" id="drive-row"></div>
     </div>
   </footer>
 </div>
@@ -316,21 +327,21 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 <div class="toast" id="toast" role="status" hidden></div>
 <script>
 (() => {
+  // Every control is found by its action. The grip slider (0 open, 1 closed) is driven by the pad slide and the
+  // Open and Close buttons; the stick, turn and lift holds and the speed limit are the base's controls.
   const ACTION = {
-    deadman: 'teleop.deadman', estop: 'safety.estop', arm: 'arm.select', view: 'camera.view', scale: 'teleop.translationScale', speed: 'base.speed',
+    deadman: 'teleop.deadman', estop: 'safety.estop', arm: 'arm.select', view: 'camera.view', scale: 'teleop.translationScale', grip: 'gripper.set',
+    drive: 'base.drive', turnLeft: 'base.turnLeft', turnRight: 'base.turnRight', liftUp: 'lift.up', liftDown: 'lift.down', speedLimit: 'base.speedLimit',
     start: 'calibration.start', capture: 'calibration.capture', cancel: 'calibration.cancel',
     check: 'calibration.check', origin: 'calibration.captureOrigin', clear: 'calibration.reset',
   };
-  // Undeclared actions: the gateway relays them to the consumer as input and keeps no value for them.
-  // grip: 0 is open, 1 is closed. drive: "vx,vy,wz,lift" before the speed scale, which the consumer applies.
-  const GRIP = { id: 'grip', action: 'gripper.set' }, DRIVE = { id: 'drive', action: 'base.command' };
-  // Status messages the consumer on Axol sends this phone: robot state at 5 Hz, and one-off notices.
-  const FEEDBACK = 'axol.feedback', NOTICE = 'axol.notice', FEEDBACK_STALE_MS = 1500;
-  // Grip: at most 20 Hz; a 200 px slide is the full range; a few pixels of thumb wobble move nothing.
-  // After this phone sends a grip, feedback that predates it is not adopted for a moment.
-  const GRIP_EVERY_MS = 50, GRIP_FULL_PX = 200, GRIP_SLOP_PX = 6, GRIP_SETTLE_MS = 250;
-  // Drive: the command is the base's heartbeat while anything is pressed; the middle 8% of the pad is still.
-  const DRIVE_EVERY_MS = 100, DRIVE_DEAD = 0.08;
+  const DRIVE_HOLDS = [ACTION.turnLeft, ACTION.turnRight, ACTION.liftUp, ACTION.liftDown];
+  // Status messages the consumer on Axol sends this phone: robot state at 5 Hz, and one-off notices. Each Axol
+  // session stamps its feedback with its own sessionId, so two sessions answering within 2 s is a setup mistake.
+  const FEEDBACK = 'axol.feedback', NOTICE = 'axol.notice', FEEDBACK_STALE_MS = 1500, SESSION_OVERLAP_MS = 2000;
+  // Grip slide: 200 px is the full range and a few pixels of thumb wobble move nothing. After this phone sets
+  // the grip, feedback that predates it is not adopted for a moment.
+  const GRIP_FULL_PX = 200, GRIP_SLOP_PX = 6, GRIP_SETTLE_MS = 250;
   const STEPS = ['flat', 'forward', 'right', 'up'];
   const MOVES = ['forward', 'right', 'up'];
   // FLAT_DEG matches the gateway's FLAT_TOLERANCE_DEGREES.
@@ -373,13 +384,19 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   const dominant = v => { const [axis, value] = [['X', v.x], ['Y', v.y], ['Z', v.z]].reduce((a, b) => Math.abs(b[1]) > Math.abs(a[1]) ? b : a); return (value < 0 ? '-' : '+') + axis; };
 
   let storedMode; try { storedMode = window.localStorage.getItem('axol-mode'); } catch (x) { /* no storage in this web view */ }
-  const s = { config: undefined, pose: undefined, tracking: undefined, connection: undefined, sheet: undefined, reply: undefined, forwardAt: undefined, padHeld: false, rowsKey: '', mode: storedMode === 'drive' ? 'drive' : 'arm', feedback: undefined, fresh: false };
+  const s = { config: undefined, pose: undefined, tracking: undefined, connection: undefined, sheet: undefined, reply: undefined, forwardAt: undefined, padHeld: false, rowsKey: '', mode: storedMode === 'drive' ? 'drive' : 'arm', feedback: undefined, sessions: new Map(), watch: '' };
   const control = action => s.config && s.config.controls.find(c => c.action === action);
   const byId = id => s.config && s.config.controls.find(c => c.id === id);
   const send = (c, value) => { if (c) window.Marionette.sendAction(c.id, c.action, value); };
   const calibration = () => (s.config ? s.config.calibration : { status: 'uncalibrated' });
-  // Streams of undeclared actions only go out while connected, so a dropped gateway never piles up "not sent" notes.
-  const live = () => !!s.config && !!s.connection && s.connection.state === 'connected';
+  // Everything pressed or dragged on this screen, so a mode switch, Stop, the calibration sheet or leaving the page
+  // can let go of all of it. `quiet` lets go here without sending, when the host has already ended it (a lost gateway).
+  const letGos = new Set();
+  const letGoAll = quiet => { for (const letGo of [...letGos]) letGo(quiet === true); };
+  window.addEventListener('blur', () => letGoAll());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) letGoAll(); });
+  const disposeAll = group => { while (group.length) group.pop()(); };
+  const rowHolds = [], dockHolds = [], driveHolds = [], settingHolds = { 'arm-setting': [], 'drive-setting': [] };
 
   // Hold-to-act: true on press, false on release. The app repeats the press while it is held and the gateway drops a hold whose renewals stop.
   // The release goes to the control that was pressed, even if the config changed in between, and
@@ -390,40 +407,113 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   // arriving, while it is still pressed here; a repeat never restarts a hold, so the operator has to press again).
   // Without a gateway connection nothing is held, whatever the last config said.
   const holdState = c => !c || !pressed.has(c.id) ? 'idle' : s.connection && s.connection.state === 'disconnected' ? 'dropped' : c.held ? 'held' : pressed.get(c.id) ? 'dropped' : 'pending';
-  /** Returns a function that releases the hold, for a mode switch. */
+  /** Returns a function that releases the hold. */
   function holdable(node, getControl, onChange, group) {
     let held;
-    const press = e => { e.preventDefault(); if (held) return; const c = getControl(); if (!c) return; held = c; pressed.set(c.id, false); try { node.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the press still counts */ } send(c, true); renderHolds(); if (onChange) onChange(true); };
-    const release = () => { if (!held) return; const c = held; held = undefined; pressed.delete(c.id); send(c, false); renderHolds(); if (onChange) onChange(false); };
-    const onHidden = () => { if (document.hidden) release(); };
+    const press = e => { e.preventDefault(); if (held || node.disabled) return; const c = getControl(); if (!c) return; held = c; pressed.set(c.id, false); try { node.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the press still counts */ } send(c, true); renderHolds(); if (onChange) onChange(true); };
+    const release = quiet => { if (!held) return; const c = held; held = undefined; pressed.delete(c.id); if (quiet !== true) send(c, false); renderHolds(); if (onChange) onChange(false); };
     node.addEventListener('pointerdown', press);
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, release);
-    window.addEventListener('blur', release);
-    document.addEventListener('visibilitychange', onHidden);
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, () => release());
     node.addEventListener('contextmenu', e => e.preventDefault());
-    group.push(() => { release(); window.removeEventListener('blur', release); document.removeEventListener('visibilitychange', onHidden); });
+    letGos.add(release); group.push(() => { release(); letGos.delete(release); });
     return release;
   }
-  const disposeAll = group => { while (group.length) group.pop()(); };
-  const rowHolds = [], dockHolds = [];
+
+  /* ---------- Live values: sliders and the stick stream while they are dragged ---------- */
+  // Sliders and sticks being dragged here: control id → whether the gateway has reported the stream during this drag.
+  const touching = new Map();
+  // idle; pending (dragged, not yet reported live); live; or dropped (the gateway stopped hearing it while it is still
+  // dragged here; like a hold, it only counts again once the operator lets go).
+  const liveState = c => !c || !touching.has(c.id) ? 'idle' : s.connection && s.connection.state === 'disconnected' ? 'dropped' : c.live ? 'live' : touching.get(c.id) ? 'dropped' : 'pending';
+  // The bridge's stream sends the newest value at most once a frame, marked live; `end` sends the final value.
+  // The host repeats the latest sample every 50 ms while the stream is open, so a resting finger stays live.
+  function dragger(getControl) {
+    let stream, id;
+    return {
+      update(value) {
+        if (!stream) { const c = getControl(); if (!c) return; id = c.id; stream = window.Marionette.stream(c.id, c.action); touching.set(id, false); renderLive(); }
+        stream.update(value);
+      },
+      end(value, quiet) { if (!stream) return; if (quiet !== true) stream.end(value); stream = undefined; touching.delete(id); renderLive(); },
+      isOpen: () => !!stream,
+    };
+  }
+  // A slider streams while dragged; letting go (or a key press) sends the final value.
+  function liveRange(getControl, group, out) {
+    const c = getControl(); const drag = dragger(getControl);
+    const range = h('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: c.value, 'data-id': c.id, 'aria-label': c.label });
+    const finish = quiet => drag.end(Number(range.value), quiet);
+    range.addEventListener('input', () => { const value = Number(range.value); setText(out, format(getControl() || c, value)); drag.update(value); });
+    range.addEventListener('change', () => finish());
+    for (const name of ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'blur']) range.addEventListener(name, () => finish());
+    range.finish = finish; letGos.add(finish); group.push(() => { finish(); letGos.delete(finish); });
+    return range;
+  }
+  // Marionette's spring-return stick: where it is pushed, in operator axes, x up the pad (forward) and y to the left,
+  // each -1..1 and at most 1 together. A touch pushes it that far from the centre and it follows the finger until let go.
+  const KNOB_TRAVEL = 35 / 30 * 100;
+  const KEYS = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowLeft: [0, 1], ArrowRight: [0, -1] };
+  // Two decimals, rounded toward zero, so a full diagonal push never comes out longer than 1.
+  const toward0 = n => (Math.trunc(n * 100) / 100) || 0;
+  const limit = (x, y) => { const n = Math.hypot(x, y); return n > 1 ? { x: toward0(x / n), y: toward0(y / n) } : { x: toward0(x), y: toward0(y) }; };
+  function stick(getControl, group, { label, edges }) {
+    const c = getControl();
+    const face = svg('<svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="35" fill="none" stroke="#cfd3d6" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><path d="M50 3V97M3 50H97" stroke="#e6ebf2" vector-effect="non-scaling-stroke"/><line class="vec" x1="50" y1="50" x2="50" y2="50" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>');
+    const vec = face.querySelector('.vec'); const knob = h('span', { class: 'knob' });
+    const pad = h('div', { class: 'stick', tabindex: '0', role: 'group', 'aria-roledescription': 'stick', 'aria-label': label + '. Drag to push it, or hold the arrow keys. Let go to stop.', 'data-live': c.id },
+      face, (edges || []).map((word, i) => h('span', { class: 'edge ' + 'nswe'[i] }, word)), knob, h('span', { class: 'off-note' }, 'No Jelly base'));
+    const drag = dragger(getControl); let rect, pointer, pushed = false; const keys = new Set();
+    const show = v => {
+      knob.style.transform = v.x || v.y ? 'translate(' + (-v.y * KNOB_TRAVEL).toFixed(1) + '%,' + (-v.x * KNOB_TRAVEL).toFixed(1) + '%)' : '';
+      vec.setAttribute('x2', (50 - v.y * 35).toFixed(1)); vec.setAttribute('y2', (50 - v.x * 35).toFixed(1));
+    };
+    const push = v => { pushed = true; show(v); drag.update(v); };
+    const letGo = quiet => { if (!pushed) return; pushed = false; pointer = undefined; keys.clear(); pad.classList.remove('dragging'); show({ x: 0, y: 0 }); drag.end({ x: 0, y: 0 }, quiet); };
+    const at = e => limit((rect.top + rect.height / 2 - e.clientY) / (rect.height * 0.35), (rect.left + rect.width / 2 - e.clientX) / (rect.width * 0.35));
+    pad.addEventListener('pointerdown', e => {
+      e.preventDefault(); if (pointer !== undefined || pad.classList.contains('off')) return;
+      pointer = e.pointerId; rect = pad.getBoundingClientRect(); keys.clear(); pad.classList.add('dragging');
+      try { pad.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the drag still counts */ }
+      push(at(e));
+    });
+    pad.addEventListener('pointermove', e => { if (e.pointerId === pointer) push(at(e)); });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) pad.addEventListener(name, e => { if (e.pointerId === pointer) letGo(); });
+    const fromKeys = () => { let x = 0, y = 0; for (const key of keys) { x += KEYS[key][0]; y += KEYS[key][1]; } return limit(x, y); };
+    pad.addEventListener('keydown', e => { if (!KEYS[e.key] || pointer !== undefined || pad.classList.contains('off')) return; e.preventDefault(); if (e.repeat || keys.has(e.key)) return; keys.add(e.key); pad.classList.add('dragging'); push(fromKeys()); });
+    pad.addEventListener('keyup', e => { if (!keys.delete(e.key)) return; if (keys.size) push(fromKeys()); else letGo(); });
+    pad.addEventListener('blur', () => { if (keys.size) letGo(); });
+    pad.addEventListener('contextmenu', e => e.preventDefault());
+    letGos.add(letGo); group.push(() => { letGo(); letGos.delete(letGo); });
+    return pad;
+  }
+  // Every live control shows what the gateway knows, like the hold buttons.
+  function renderLive() {
+    if (!s.config) return;
+    for (const node of document.querySelectorAll('[data-live]')) { const state = liveState(byId(node.dataset.live)); for (const name of ['pending', 'live', 'dropped']) node.classList.toggle(name, state === name); }
+    renderHeadline();
+  }
 
   /* ---------- Robot feedback ---------- */
   // The latest axol.feedback values while they are fresh; the consumer sends them at 5 Hz.
   const feedback = () => s.feedback && Date.now() - s.feedback.at < FEEDBACK_STALE_MS ? s.feedback.values : undefined;
+  // Two Axol sessions on one gateway (a sim and the robot, say) answer this phone in turn; nothing they say can be trusted.
+  function twoSessions() { const now = Date.now(); for (const [id, at] of s.sessions) if (now - at > SESSION_OVERLAP_MS) s.sessions.delete(id); return s.sessions.size > 1; }
   const myName = () => (s.config && s.config.phone ? s.config.phone.name : '');
   // Another phone has this phone's arm: the consumer ignores this phone's grip, so the grip controls are off.
   const otherOwner = () => { const f = feedback(); return f && typeof f.owner === 'string' && f.owner && f.owner !== myName() ? f.owner : ''; };
   function armSide() { const f = feedback(); if (f && (f.arm === 'left' || f.arm === 'right')) return f.arm; const c = control(ACTION.arm); return c && c.type === 'select' ? c.value : ''; }
   const armText = () => (armSide() ? armSide() + ' arm' : 'arm');
-  function onFeedback(values) {
+  function onFeedback(message) {
+    const values = message.values || {};
+    s.sessions.set(typeof message.sessionId === 'string' ? message.sessionId : '', Date.now());
     s.feedback = { values, at: Date.now() };
     adoptGrip(values.grip);
     renderRobot(); renderHeadline(); renderDriveDock(); renderGripControls(); renderCamera();
   }
-  // Feedback that stops arriving turns into "No answer from Axol" without waiting for another message.
-  setInterval(() => { const fresh = !!feedback(); if (fresh === s.fresh) return; s.fresh = fresh; renderRobot(); renderHeadline(); renderGripControls(); }, 250);
+  // Feedback that stops arriving turns into "No answer from Axol", and a second session's warning clears, without waiting for another message.
+  setInterval(() => { const watch = !!feedback() + ':' + twoSessions(); if (watch === s.watch) return; s.watch = watch; renderRobot(); renderHeadline(); renderGripControls(); }, 250);
   function renderRobot() {
-    const f = feedback() || {}; const box = $('robot');
+    const f = (!twoSessions() && feedback()) || {}; const box = $('robot');
     const tags = [];
     if (f.mode === 'sim') tags.push(['Sim', 'sim']);
     if (f.hasLift === true) tags.push([typeof f.lift === 'number' && f.lift >= 0 ? 'Lift ' + Math.round(clamp(f.lift, 0, 1) * 100) + '%' + (f.liftMoving ? ', moving' : '') : 'Lift height unknown', f.liftMoving ? 'moving' : '']);
@@ -450,7 +540,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     $('estop-banner').hidden = !latched;
     $('stop').setAttribute('aria-pressed', String(latched));
   }
-  // Most urgent first: no gateway, a Stop, no answer from Axol, then what the current mode is doing.
+  // Most urgent first: no gateway, two Axol sessions, a Stop, no answer from Axol, then what the current mode is doing.
   function renderHeadline() {
     const c = s.config, t = s.tracking, conn = s.connection, f = feedback(), me = myName(); const pad = holdState(control(ACTION.deadman));
     let title = 'Connecting…', tone = '', note = '', bad = false;
@@ -458,16 +548,21 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     if (conn && conn.state === 'disconnected') say('Gateway lost', cap(conn.reason) || 'Reconnect to keep going.', true);
     else if (!c) say('Connecting…');
     else if (c.phone && c.phone.connected === false) say(c.phone.name + ' is offline', 'Showing its last state until it reconnects.', true);
+    else if (twoSessions()) say('Two Axol sessions are using this gateway', 'Stop one of them.', true, 'stopped');
     else if (stopOn()) say('Stopped', 'Reset Stop when it’s safe. Axol holds still until every Stop is off.', true, 'stopped');
     else if (f && (f.stopBy || f.state === 'stopped')) say(f.stopBy && f.stopBy !== me ? 'Stopped by ' + f.stopBy : 'Stopped', 'Axol holds still until every Stop is off.', true, 'stopped');
     else if (!f) say('No answer from Axol', 'Start Marionette in the Axol control panel.', true);
     else if (s.mode === 'drive') {
+      const stickState = liveState(control(ACTION.drive)); const holds = DRIVE_HOLDS.map(action => holdState(control(action)));
+      const lifting = holds.slice(2).some(x => x !== 'idle'), driving = stickState !== 'idle' || holds.slice(0, 2).some(x => x !== 'idle');
+      const confirmed = stickState === 'live' || holds.includes('held');
       if (f.baseFault) say('Base fault', 'Check Jelly, then try again.', true);
       else if (f.hasBase === false && f.hasLift === false) say('No base or lift', 'This Axol has no Jelly base or lift.');
+      else if (stickState === 'dropped' || holds.includes('dropped')) say('Drive dropped', 'The gateway stopped hearing it. Let go, then touch it again.', true);
       else if (f.driving && f.driver && f.driver !== me) say(f.driver + ' is driving', 'Axol follows whoever pressed last.');
-      else if (drivePressed()) say('Driving', 'Let go to stop.', false, 'moving');
+      else if (driving || lifting) say(driving ? 'Driving' : 'Moving the lift', confirmed ? 'Let go to stop.' : 'Waiting for the gateway.', false, 'moving');
       else if (f.hasBase === false) say('Lift ready', 'Hold Raise lift or Lower lift.');
-      else say('Ready to drive', 'Drag the pad to drive.');
+      else say('Ready to drive', 'Drag the stick to drive.');
     } else {
       const rough = t && t.state !== 'normal' ? (REASON_NOTES[t.reason] || REASON_NOTES[t.state] || 'The pose may be rough until tracking recovers.') : '';
       if (t && (t.message || t.state === 'unavailable')) say('No tracking', t.message || 'Hold the phone up so the camera sees the room.', true);
@@ -495,8 +590,8 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   /* ---------- Mode: Arm or Drive, this screen's own choice ---------- */
   function setMode(mode) {
     if (mode === s.mode) return;
-    // Nothing pressed in one mode carries over into the other.
-    padRelease(); endSlide(); releaseDrive();
+    // Nothing pressed or dragged in one mode carries over into the other.
+    letGoAll();
     s.mode = mode; try { window.localStorage.setItem('axol-mode', mode); } catch (x) { /* no storage in this web view */ }
     renderMode();
   }
@@ -504,7 +599,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   function renderMode() {
     for (const b of $('modes').children) b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode));
     $('arm-dock').hidden = s.mode !== 'arm'; $('drive-dock').hidden = s.mode !== 'drive';
-    renderRows(); renderHeadline(); renderDriveDock();
+    renderHeadline(); renderDriveDock();
   }
   // The arm select lives beside the mode switch so it is always in view.
   let armsKey = '';
@@ -540,8 +635,8 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     const f = feedback(); const have = f && typeof f.streams === 'string' ? f.streams.split(',') : undefined;
     // A pane rebuilt for a view switched back to has no picture yet, even if its stream was live a moment ago.
     for (const pane of cam.children) {
-      const img = pane.querySelector('img'); const live = !!img.getAttribute('src') && Date.now() - (frameAt[pane.dataset.stream] || 0) < 2000;
-      img.hidden = !live; pane.querySelector('.empty').hidden = live; pane.querySelector('figcaption').hidden = !live;
+      const img = pane.querySelector('img'); const fresh = !!img.getAttribute('src') && Date.now() - (frameAt[pane.dataset.stream] || 0) < 2000;
+      img.hidden = !fresh; pane.querySelector('.empty').hidden = fresh; pane.querySelector('figcaption').hidden = !fresh;
       const label = pane.dataset.label.toLowerCase(); setText(pane.querySelector('.empty'), have && have.indexOf(pane.dataset.stream) < 0 ? 'No ' + label + ' camera' : 'Waiting for the ' + label + ' camera');
     }
   }
@@ -560,7 +655,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 
   /* ---------- Rows: any other controls, calibration, the gateway ---------- */
   const PLACED = new Set(Object.values(ACTION));
-  function rowFor(c) {
+  function rowFor(c, group = rowHolds) {
     if (c.type === 'toggle') {
       const sw = h('button', { class: 'switch', role: 'switch', type: 'button', 'aria-checked': String(c.value), 'aria-label': c.label, 'data-id': c.id, onclick: () => send(c, sw.getAttribute('aria-checked') !== 'true') });
       return h('div', { class: 'row' }, h('span', {}, c.label), sw);
@@ -573,16 +668,15 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label)), field);
     }
     if (c.type === 'slider') {
-      const out = h('span', { class: 'val', 'data-out': c.id }, format(c, c.value));
-      const range = h('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: c.value, 'data-id': c.id, 'aria-label': c.label, oninput: e => setText(out, format(c, Number(e.target.value))), onchange: e => send(c, Number(e.target.value)) });
-      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), range);
+      const out = h('span', { class: 'val', 'data-out': c.id, 'data-live': c.id }, format(c, c.value));
+      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), liveRange(() => byId(c.id), group, out));
     }
+    if (c.type === 'joystick') return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label)), h('div', { class: 'stick-row' }, stick(() => byId(c.id), group, { label: c.label })));
     const btn = h('button', { type: 'button', class: 'row-btn wide' + (c.tone === 'danger' ? ' danger' : ''), 'data-hold': c.hold ? c.id : undefined }, c.label, c.hold ? h('small', {}, ' (hold)') : null);
-    if (c.hold) holdable(btn, () => byId(c.id), null, rowHolds); else btn.addEventListener('click', () => send(c));
+    if (c.hold) holdable(btn, () => byId(c.id), null, group); else btn.addEventListener('click', () => send(c));
     return h('div', { class: 'row' }, btn);
   }
-  // Drive speed reads as a share of Axol's top speed.
-  function format(c, value) { if (c.action === ACTION.speed) return Math.round(Number(value) * 100) + '%'; const digits = String(c.step).includes('.') ? String(c.step).split('.')[1].length : 0; return Number(value).toFixed(digits) + (c.unit || ''); }
+  function format(c, value) { const digits = String(c.step).includes('.') ? String(c.step).split('.')[1].length : 0; return Number(value).toFixed(digits) + (c.unit || ''); }
   function calibrationSummary() {
     const cal = calibration(); const check = cal.check;
     if (cal.status === 'capturing') return ['Calibrating', ''];
@@ -592,6 +686,15 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     if (check && check.passed === true) return [kind + ', validated ✓', 'ok'];
     if (check && check.passed === false) return [kind + ', validation failed', 'bad'];
     return [kind, ''];
+  }
+  // Values change with every config; update them in place so a drag in progress is not reset.
+  function syncValues(root, list) {
+    for (const x of list) {
+      const node = x && root.querySelector('[data-id="' + CSS.escape(x.id) + '"]'); if (!node) continue;
+      if (x.type === 'toggle') node.setAttribute('aria-checked', String(x.value));
+      if (x.type === 'select') { if (node.tagName === 'SELECT') { if (document.activeElement !== node) node.value = x.value; } else for (const b of node.children) b.setAttribute('aria-pressed', String(b.dataset.value === x.value)); }
+      if (x.type === 'slider' && document.activeElement !== node && !touching.has(x.id)) { node.value = x.value; setText(root.querySelector('[data-out="' + CSS.escape(x.id) + '"]'), format(x, x.value)); }
+    }
   }
   function renderRows() {
     const c = s.config; if (!c) return;
@@ -605,61 +708,58 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       if (hasCalibration) rows.append(h('button', { type: 'button', class: 'row link', id: 'calibration-row', onclick: () => openSheet() }, h('span', {}, 'Calibration'), h('span', { class: 'val', id: 'calibration-val' })));
       rows.append(h('div', { class: 'row' }, h('span', { class: 'mono', id: 'gateway-row' }), h('button', { type: 'button', class: 'row-btn', onclick: () => window.Marionette.disconnect() }, 'Disconnect')));
     }
-    // Values change with every config; update them in place so a drag in progress is not reset.
-    for (const x of listed) {
-      const node = rows.querySelector('[data-id="' + CSS.escape(x.id) + '"]'); if (!node) continue;
-      if (x.type === 'toggle') node.setAttribute('aria-checked', String(x.value));
-      if (x.type === 'select') { if (node.tagName === 'SELECT') { if (document.activeElement !== node) node.value = x.value; } else for (const b of node.children) b.setAttribute('aria-pressed', String(b.dataset.value === x.value)); }
-      if (x.type === 'slider' && document.activeElement !== node) { node.value = x.value; setText(rows.querySelector('[data-out="' + CSS.escape(x.id) + '"]'), format(x, x.value)); }
-    }
+    syncValues(rows, listed);
     const [summary, tone] = calibrationSummary(); const val = $('calibration-val');
     if (val) { setText(val, summary); val.className = 'val ' + tone; }
     setText($('gateway-row'), s.connection ? s.connection.gateway : '');
   }
 
-  // Each mode's main setting sits in its dock, in reach of the thumb: motion scale for the arm, speed for the base.
+  // Each mode's main setting sits in its dock, in reach of the thumb: motion scale for the arm, the speed limit for the base.
   function renderSettings() {
-    for (const [boxId, action] of [['arm-setting', ACTION.scale], ['drive-setting', ACTION.speed]]) {
-      const c = control(action); const box = $(boxId); box.hidden = !c || c.type !== 'slider'; if (box.hidden) continue;
+    for (const [boxId, action] of [['arm-setting', ACTION.scale], ['drive-setting', ACTION.speedLimit]]) {
+      const c = control(action); const box = $(boxId); const group = settingHolds[boxId];
+      box.hidden = !c || c.type !== 'slider';
+      if (box.hidden) { if (box.dataset.key) { disposeAll(group); box.replaceChildren(); box.dataset.key = ''; } continue; }
       const key = JSON.stringify([c.id, c.label, c.min, c.max, c.step, c.unit]);
       if (box.dataset.key !== key) {
-        box.dataset.key = key; const out = h('output', {});
-        box.replaceChildren(h('span', {}, c.label), h('input', { type: 'range', min: c.min, max: c.max, step: c.step, 'aria-label': c.label, oninput: e => setText(out, format(c, Number(e.target.value))), onchange: e => send(control(action), Number(e.target.value)) }), out);
+        disposeAll(group); box.dataset.key = key; const out = h('output', { 'data-out': c.id, 'data-live': c.id }, format(c, c.value));
+        box.replaceChildren(h('span', {}, c.label), liveRange(() => control(action), group, out), out);
       }
-      // Updated in place, and not while a drag is in progress.
-      const range = box.querySelector('input'); if (document.activeElement === range) continue;
-      range.value = c.value; setText(box.querySelector('output'), format(c, c.value));
+      syncValues(box, [c]);
     }
+    renderScaleLock();
+  }
+  // Changing the scale mid-move would rescale a motion in progress, so the slider is off while the pad is held.
+  function renderScaleLock() {
+    const box = $('arm-setting'); const range = box.querySelector('input'); if (!range) return;
+    if (s.padHeld && range.finish) range.finish();
+    range.disabled = s.padHeld; box.classList.toggle('locked', s.padHeld);
   }
 
   /* ---------- Arm dock: the hold-to-move pad and the grip ---------- */
-  // The grip this phone commands, 0 open to 1 closed. It follows the robot's commanded grip from
-  // feedback except during a slide, so a slide, a reload or a newly owned arm always starts from
-  // where the gripper is and never jumps it.
-  const grip = { value: 0, sent: undefined, sentAt: 0, timer: 0 };
+  // The grip this phone commands, 0 open to 1 closed. It follows the robot's commanded grip from feedback
+  // except during a slide, so a slide, a reload or a newly owned arm always starts from where the gripper
+  // is and never jumps it. The slide streams the grip slider; Open and Close send a final value.
+  const grip = { value: 0, sentAt: 0, drag: undefined };
   let slide; // { id, y, from, live } while a thumb is down on the pad
-  function setGrip(value) {
-    if (otherOwner()) return;
-    const v = Math.round(clamp(value, 0, 1) * 100) / 100;
-    if (v !== grip.value) { grip.value = v; renderGrip(); }
-    flushGrip();
+  const roundGrip = v => Math.round(clamp(v, 0, 1) * 100) / 100;
+  const showGrip = v => { if (v !== grip.value) { grip.value = v; renderGrip(); } };
+  const sliding = () => !!(grip.drag && grip.drag.isOpen());
+  function endSlide(quiet) { slide = undefined; if (sliding()) { grip.drag.end(grip.value, quiet === true); grip.sentAt = Date.now(); } }
+  letGos.add(endSlide);
+  function slideGrip(v) {
+    if (otherOwner()) { endSlide(); return; }
+    showGrip(v); grip.sentAt = Date.now();
+    if (!grip.drag) grip.drag = dragger(() => control(ACTION.grip));
+    grip.drag.update(v);
   }
-  // At most every 50 ms and only on change; the last value of a slide always goes out.
-  function flushGrip() {
-    clearTimeout(grip.timer); grip.timer = 0;
-    if (grip.value === grip.sent || !live()) return;
-    const wait = grip.sentAt + GRIP_EVERY_MS - Date.now();
-    if (wait > 0) { grip.timer = setTimeout(flushGrip, wait); return; }
-    grip.sent = grip.value; grip.sentAt = Date.now(); window.Marionette.sendAction(GRIP.id, GRIP.action, grip.value);
-  }
+  function setGrip(v) { if (otherOwner()) return; endSlide(); showGrip(v); grip.sentAt = Date.now(); send(control(ACTION.grip), v); }
   function adoptGrip(value) {
     if (typeof value !== 'number' || !(value >= 0 && value <= 1)) return;
-    // Not while the thumb is sliding, nor while this phone's own last grip may not have reached Axol yet.
-    if ((slide && slide.live) || grip.timer || Date.now() - grip.sentAt < GRIP_SETTLE_MS) return;
-    const v = Math.round(value * 100) / 100; grip.sent = v;
-    if (v !== grip.value) { grip.value = v; renderGrip(); }
+    // Not during a slide, not while this phone's own last grip may not have reached Axol yet, and not from two sessions at once.
+    if ((slide && slide.live) || sliding() || Date.now() - grip.sentAt < GRIP_SETTLE_MS || twoSessions()) return;
+    showGrip(roundGrip(value));
   }
-  const endSlide = () => { slide = undefined; };
   function slidable(pad) {
     pad.addEventListener('pointerdown', e => { if (!slide) slide = { id: e.pointerId, y: e.clientY, from: grip.value, live: false }; });
     pad.addEventListener('pointermove', e => {
@@ -667,7 +767,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       // A few pixels of wobble while the thumb rests on the pad move nothing. Past that the grip follows
       // the slide from where it was when the slide began: down closes, up opens.
       if (!slide.live) { if (Math.abs(e.clientY - slide.y) < GRIP_SLOP_PX) return; slide.live = true; slide.y = e.clientY; slide.from = grip.value; }
-      setGrip(slide.from + (e.clientY - slide.y) / GRIP_FULL_PX);
+      slideGrip(roundGrip(slide.from + (e.clientY - slide.y) / GRIP_FULL_PX));
     });
     for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) pad.addEventListener(name, e => { if (slide && e.pointerId === slide.id) endSlide(); });
   }
@@ -676,7 +776,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     setText($('grip-val'), Math.round(v * 100) + '%');
   }
   function renderGripControls() {
-    const off = !!otherOwner();
+    const off = !!otherOwner(); if (off && (slide || sliding())) endSlide();
     $('grip-open').disabled = off; $('grip-close').disabled = off;
     const gauge = $('gauge'); if (gauge) gauge.classList.toggle('off', off);
   }
@@ -692,7 +792,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
         const pad = h('button', { type: 'button', class: 'pad', id: 'pad', 'data-hold': deadman.id, 'aria-label': deadman.label + '. Slide down to close the gripper, up to open it.' },
           h('span', { class: 'pad-text' }, h('span', { id: 'pad-label' }), h('small', { id: 'pad-sub' })),
           h('span', { class: 'gauge', id: 'gauge', 'aria-hidden': 'true' }, h('small', {}, 'Open'), h('span', { class: 'gauge-bar' }, h('i', { id: 'gauge-fill' })), h('small', {}, 'Closed'), h('b', { id: 'grip-val' })));
-        padRelease = holdable(pad, () => control(ACTION.deadman), on => { s.padHeld = on; if (!on) endSlide(); renderHeadline(); if (!on) renderSheet(); }, dockHolds);
+        padRelease = holdable(pad, () => control(ACTION.deadman), on => { s.padHeld = on; if (!on) endSlide(); renderScaleLock(); renderHeadline(); if (!on) renderSheet(); }, dockHolds);
         slidable(pad);
         $('arm-dock').append(pad);
       }
@@ -713,60 +813,26 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     setText($('pad-label'), label); setText($('pad-sub'), sub);
   }
 
-  /* ---------- Drive dock: the drive pad, turn and lift ---------- */
-  // Pressed turn and lift buttons ('turn1' is left, 'lift-1' is down), and the drive pad's drag.
-  const drive = { keys: new Set(), stick: undefined, timer: 0, resets: [] };
-  const drivePressed = () => !!drive.stick || drive.keys.size > 0;
-  const two = n => (Math.round(n * 100) / 100 || 0).toFixed(2);
-  function driveCommand() {
-    const has = key => (drive.keys.has(key) ? 1 : 0); const st = drive.stick || { vx: 0, vy: 0 };
-    return [st.vx, st.vy, has('turn1') - has('turn-1')].map(two).join(',') + ',' + (has('lift1') - has('lift-1'));
-  }
-  function sendDrive(zero) { if (live()) window.Marionette.sendAction(DRIVE.id, DRIVE.action, zero === true ? '0,0,0,0' : driveCommand()); }
-  // While anything is pressed the command goes out every 100 ms, so Axol stops if the stream does; one zero follows the last release.
-  function driveChanged() {
-    if (drivePressed() && !drive.timer) { sendDrive(); drive.timer = setInterval(sendDrive, DRIVE_EVERY_MS); }
-    else if (!drivePressed() && drive.timer) { clearInterval(drive.timer); drive.timer = 0; sendDrive(true); }
-    renderDrive(); renderHeadline();
-  }
-  function releaseDrive() { if (!drivePressed()) return; drive.keys.clear(); drive.stick = undefined; for (const reset of drive.resets) reset(); driveChanged(); }
-  function driveKey(node) {
-    const key = node.dataset.kind + node.dataset.dir; let pointer;
-    node.addEventListener('pointerdown', e => { e.preventDefault(); if (pointer !== undefined || node.disabled) return; pointer = e.pointerId; try { node.setPointerCapture(pointer); } catch (x) { /* the press still counts */ } drive.keys.add(key); driveChanged(); });
-    const up = e => { if (e.pointerId !== pointer) return; pointer = undefined; drive.keys.delete(key); driveChanged(); };
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, up);
-    node.addEventListener('contextmenu', e => e.preventDefault());
-    drive.resets.push(() => { pointer = undefined; });
-  }
-  document.querySelectorAll('#drive-dock [data-kind]').forEach(driveKey);
-  const stick = $('stick');
-  // The drag is measured from where the thumb lands, so touching the pad never moves Axol.
-  // Screen up is forward (+vx) and screen left is left (+vy); full speed 30% of the pad's height from the start.
-  stick.addEventListener('pointerdown', e => { e.preventDefault(); if (drive.stick || stick.classList.contains('off')) return; try { stick.setPointerCapture(e.pointerId); } catch (x) { /* the press still counts */ } drive.stick = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, dy: 0, vx: 0, vy: 0 }; driveChanged(); });
-  stick.addEventListener('pointermove', e => {
-    const st = drive.stick; if (!st || e.pointerId !== st.id) return;
-    const reach = Math.min(stick.clientWidth, stick.clientHeight) * 0.3; let dx = e.clientX - st.x, dy = e.clientY - st.y; const length = Math.hypot(dx, dy);
-    if (length > reach) { dx *= reach / length; dy *= reach / length; }
-    const mag = Math.min(length / reach, 1); const out = mag < DRIVE_DEAD ? 0 : (mag - DRIVE_DEAD) / (1 - DRIVE_DEAD);
-    st.dx = dx; st.dy = dy; st.vx = mag ? -dy / reach * out / mag : 0; st.vy = mag ? -dx / reach * out / mag : 0;
-    renderDrive();
-  });
-  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) stick.addEventListener(name, e => { if (drive.stick && e.pointerId === drive.stick.id) { drive.stick = undefined; driveChanged(); } });
-  stick.addEventListener('contextmenu', e => e.preventDefault());
-  drive.resets.push(() => { drive.stick = undefined; });
-  window.addEventListener('blur', releaseDrive);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseDrive(); padRelease(); } });
-  function renderDrive() {
-    const st = drive.stick; $('knob').style.transform = st ? 'translate(' + st.dx.toFixed(1) + 'px,' + st.dy.toFixed(1) + 'px)' : '';
-    stick.classList.toggle('active', !!st);
-    for (const node of document.querySelectorAll('#drive-dock [data-kind]')) node.classList.toggle('on', drive.keys.has(node.dataset.kind + node.dataset.dir));
-  }
-  // What Axol has: no Jelly base means no drive pad or turning, no lift means no lift buttons. Until Axol says, everything shows.
+  /* ---------- Drive dock: the stick between the turn buttons, the lift buttons and the speed limit ---------- */
+  let driveKey = '';
   function renderDriveDock() {
+    if (!s.config) return;
+    const stickControl = control(ACTION.drive); const drive = stickControl && stickControl.type === 'joystick' ? stickControl : undefined;
+    const hold = action => { const c = control(action); return c && c.type === 'button' && c.hold ? c : undefined; };
+    const [left, right, up, down] = DRIVE_HOLDS.map(hold);
+    const key = JSON.stringify([drive && [drive.id, drive.label], [left, right, up, down].map(x => x && [x.id, x.label])]);
+    if (key !== driveKey) {
+      driveKey = key; disposeAll(driveHolds);
+      const button = (x, kind, glyph) => { if (!x) return h('span'); const btn = h('button', { type: 'button', class: kind, 'data-hold': x.id }, h('b', { 'aria-hidden': 'true' }, glyph), h('span', {}, x.label)); holdable(btn, () => byId(x.id), renderLive, driveHolds); return btn; };
+      $('lift-row').replaceChildren(button(up, 'key lift-btn', '▲'), button(down, 'key lift-btn', '▼'));
+      $('drive-row').replaceChildren(button(left, 'turn', '↺'), drive ? stick(() => byId(drive.id), driveHolds, { label: drive.label, edges: ['Forward', 'Back', 'Left', 'Right'] }) : h('span'), button(right, 'turn', '↻'));
+      renderHolds();
+    }
+    // What Axol has: no Jelly base means no stick or turning, no lift means no lift buttons. Until Axol says, everything shows.
     const f = s.feedback && s.feedback.values; const noBase = !!f && f.hasBase === false, noLift = !!f && f.hasLift === false;
-    $('lift-row').hidden = noLift; $('drive-row').hidden = noBase && noLift;
-    stick.classList.toggle('off', noBase); $('stick-off').hidden = !noBase;
-    for (const node of document.querySelectorAll('#drive-row .turn')) node.disabled = noBase;
+    $('lift-row').hidden = noLift || (!up && !down); $('drive-row').hidden = (noBase && noLift) || (!drive && !left && !right);
+    const pad = $('drive-row').querySelector('.stick'); if (pad) pad.classList.toggle('off', noBase);
+    for (const node of $('drive-row').querySelectorAll('.turn')) node.disabled = noBase;
   }
 
   /* ---------- Toasts for replies and notices that have no other home ---------- */
@@ -834,8 +900,8 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     }
     $('app').inert = !!mode;
     if (!mode) { sheet.hidden = true; sheet.replaceChildren(); sheetKey = ''; return; }
-    // The sheet covers the drive controls, so nothing stays pressed underneath it.
-    releaseDrive();
+    // The sheet covers the docks, so nothing stays pressed or dragged underneath it.
+    letGoAll();
     sheet.hidden = false;
     const key = JSON.stringify([mode, cal.status, cal.step, cal.check, cal.reference && cal.reference.epoch, s.reply, control(ACTION.check) && 1, control(ACTION.origin) && 1, control(ACTION.clear) && 1]);
     if (!force && key === sheetKey) { renderSheetLive(); return; }
@@ -981,9 +1047,10 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     renderMode();
     M.on('connection', c => {
       s.connection = c;
-      // Without the gateway nothing is held: drive and grip need a fresh press once it is back.
-      if (c.state !== 'connected') { releaseDrive(); clearTimeout(grip.timer); grip.timer = 0; }
-      renderStrip(); renderHeadline(); renderRows(); renderHolds();
+      // The host ends every hold and drag when the gateway goes, so they are let go here without sending,
+      // and each needs a fresh touch once it is back.
+      if (c.state !== 'connected') letGoAll(true);
+      renderStrip(); renderHeadline(); renderRows(); renderHolds(); renderLive();
     });
     M.on('tracking', t => { s.tracking = t; renderStrip(); renderHeadline(); if (s.sheet) renderSheetLive(); });
     M.on('camera_frame', m => {
@@ -995,9 +1062,12 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     M.on('pose', p => { s.pose = p; if (posePending || !s.sheet) return; posePending = true; requestAnimationFrame(() => { posePending = false; renderSheetLive(); }); });
     M.on('config', c => {
       const before = s.config ? s.config.calibration : undefined; const wasStopped = stopOn(); s.config = c; const cal = c.calibration;
-      // Turning Stop on lets go of the drive controls, so resetting it never starts the base again by itself.
-      if (!wasStopped && stopOn()) releaseDrive();
+      // Turning Stop on lets go of everything, so resetting it never starts the arm or base again by itself.
+      if (!wasStopped && stopOn()) letGoAll();
       for (const id of pressed.keys()) { const x = byId(id); if (x && x.held) pressed.set(id, true); }
+      for (const id of touching.keys()) { const x = byId(id); if (x && x.live) touching.set(id, true); }
+      // Until Axol answers, the grip starts from this phone's own last value.
+      if (!feedback()) { const g = control(ACTION.grip); if (g && g.type === 'slider') adoptGrip(g.value); }
       // Remember where the phone was when forward was captured, to measure the right step across it.
       if (before && before.step === 'forward' && cal.step === 'right' && s.pose) s.forwardAt = s.pose.position;
       if (cal.status !== 'capturing') s.forwardAt = undefined;
@@ -1006,11 +1076,11 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       if (before && before.check && before.check.step && cal.check && cal.check.passed !== undefined) s.sheet = 'validated';
       else if (before && before.check && before.check.step && !(cal.check && cal.check.step) && s.sheet === 'validate') s.sheet = undefined;
       if (before && (before.step !== cal.step || (before.check && before.check.step) !== (cal.check && cal.check.step))) s.reply = undefined;
-      renderStrip(); renderArms(); renderHeadline(); renderRows(); renderSettings(); renderDock(); renderCamera(); renderViews(); renderSheet();
+      renderStrip(); renderArms(); renderHeadline(); renderRows(); renderSettings(); renderDock(); renderDriveDock(); renderCamera(); renderViews(); renderSheet(); renderLive();
     });
     M.on('status', m => {
       // Robot state from the consumer on Axol: shown in the headline and tags, never as a toast.
-      if (m.controlId === FEEDBACK) { onFeedback(m.values || {}); return; }
+      if (m.controlId === FEEDBACK) { onFeedback(m); return; }
       if (m.controlId === NOTICE) { if (m.message) toast(m.message); return; }
       const c = s.config; const from = m.controlId && c && c.controls.find(x => x.id === m.controlId);
       // Every gateway reply says whether it did what was asked; a refusal is shown where the operator is looking.

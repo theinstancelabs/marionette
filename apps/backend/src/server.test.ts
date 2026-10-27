@@ -228,12 +228,16 @@ describe('feedback to phones',()=>{
 describe('the Axol screen',()=>{
   it('declares the controls, streams and views of the Axol contract', async()=>{ process.env.MARIONETTE_HTML_FILE=fileURLToPath(new URL('../../../consumers/axol/axol.html', import.meta.url));
     try { await start(); const viewer=await connect(); const config=viewer.configOf(); const byId=(id: string)=>config.controls.find((c: any)=>c.id===id);
-      expect(config.controls.map((c: any)=>[c.id,c.type,c.action])).toEqual([['deadman','button','teleop.deadman'],['estop','toggle','safety.estop'],['arm','select','arm.select'],['cameras','select','camera.view'],['scale','slider','teleop.translationScale'],['drive-speed','slider','base.speed'],
+      expect(config.controls.map((c: any)=>[c.id,c.type,c.action])).toEqual([['deadman','button','teleop.deadman'],['estop','toggle','safety.estop'],['arm','select','arm.select'],['cameras','select','camera.view'],
+        ['scale','slider','teleop.translationScale'],['grip','slider','gripper.set'],['drive','joystick','base.drive'],['turn-left','button','base.turnLeft'],['turn-right','button','base.turnRight'],['lift-up','button','lift.up'],['lift-down','button','lift.down'],['speed-limit','slider','base.speedLimit'],
         ...defaultConfig().controls.filter(c=>c.action.startsWith('calibration.')).map(c=>[c.id,c.type,c.action])]);
-      expect(byId('deadman').hold).toBe(true); expect(byId('estop').value).toBe(false);
+      for (const id of ['deadman','turn-left','turn-right','lift-up','lift-down']) expect(byId(id).hold).toBe(true);
+      expect([byId('lift-up').label,byId('lift-down').label]).toEqual(['Raise lift','Lower lift']); expect(byId('estop').value).toBe(false);
       expect(byId('arm')).toMatchObject({ value:'left', options:[{ value:'left' },{ value:'right' }] });
       expect(byId('cameras').value).toBe('head'); expect(byId('cameras').options.map((o: any)=>[o.value,o.label])).toEqual([['head','Head'],['wrists','Both wrists'],['left','Left wrist'],['right','Right wrist'],['all','All three']]);
-      expect(byId('scale')).toMatchObject({ value:1, min:0.25, max:3, step:0.05 }); expect(byId('drive-speed')).toMatchObject({ value:0.5, min:0.1, max:1, step:0.05 });
+      expect(byId('scale')).toMatchObject({ value:1, min:0.25, max:3, step:0.05, unit:'×' }); expect(byId('grip')).toMatchObject({ label:'Gripper', value:0, min:0, max:1, step:0.01 });
+      expect(byId('drive')).toMatchObject({ label:'Drive', value:{ x:0, y:0 } }); expect(byId('speed-limit')).toMatchObject({ label:'Speed limit', value:50, min:0, max:100, step:1, unit:'%' });
+      expect(config.controls.some((c: any)=>c.action==='base.command'||c.action==='base.speed')).toBe(false);
       expect(config.cameraStreams).toEqual([{ id:'head', label:'Head', url:'axol://head', status:'live' },{ id:'left', label:'Left wrist', url:'axol://left', status:'live' },{ id:'right', label:'Right wrist', url:'axol://right', status:'live' }]);
       expect(config.cameraViews.map((v: any)=>[v.id,v.label,v.streams])).toEqual([['head','Head',['head']],['wrists','Both wrists',['left','right']],['left','Left wrist',['left']],['right','Right wrist',['right']],['all','All three',['head','left','right']]]);
       // The streams come from Axol, so the gateway draws none of its own; a phone gets only the streams in its view.
@@ -241,6 +245,9 @@ describe('the Axol screen',()=>{
       for (const cameraId of ['head','left','right']) producer.ws.send(JSON.stringify({ type:'camera_frame', version:PROTOCOL_VERSION, sessionId:'axol', cameraId, dataUrl:'data:image/jpeg;base64,AAAA', capturedAt:Date.now() }));
       await waitFor(()=>viewer.of('camera_frame').length===3); await sleep(300);
       expect(viewer.of('camera_frame').every(m=>m.sessionId==='axol')).toBe(true); expect(a.of('camera_frame').map(m=>m.cameraId).sort()).toEqual(['left','right']);
+      // The pad slide streams the grip on its 0.01 grid, including values like 0.29 and 0.58 that are not exact in binary.
+      drag(a,'grip','gripper.set',0.29); await waitFor(()=>live(viewer.configOf('phone-1'),'grip')===true); drag(a,'grip','gripper.set',0.58); drag(a,'grip','gripper.set',0.58,{ final:true });
+      await waitFor(()=>live(viewer.configOf('phone-1'),'grip')===false); expect(value(viewer.configOf('phone-1'),'grip')).toBe(0.58); expect(a.statuses('grip')).toEqual([]);
       for (const c of [viewer,a,producer]) c.ws.close(); }
     finally { delete process.env.MARIONETTE_HTML_FILE; } });
 });
