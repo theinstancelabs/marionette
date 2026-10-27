@@ -288,7 +288,7 @@ Build a single node that owns all decisions:
 
 The phone screen is an HTML page served by the gateway, and the app has no native controls. To give the operator robot-specific controls:
 
-1. Copy `apps/backend/src/sample-controls.html` to `config/humanoid.html` and edit it. It uses the `window.Marionette` bridge, documented in the README. For a complete robot screen (arm, gripper, base, lift, cameras and robot feedback), see `consumers/axol/axol.html` and its README.
+1. Copy `apps/backend/src/sample-controls.html` to `config/humanoid.html` and edit it. It uses the `window.Marionette` bridge, documented in the README. For a complete robot screen on the screen kit (a hold-to-move pad, Stop, calibration, cameras over WebRTC and robot state), see `sdk/python/examples/sim_robot.html`; `docs/SCREEN-KIT.md` documents the kit. A robot can send its screen itself when it connects, so the screen lives and deploys with the robot.
 2. Declare your controls in the page, so they get per-phone values and hold liveness:
    ```html
    <script type="application/json" id="marionette-config">

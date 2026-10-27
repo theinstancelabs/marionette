@@ -9,7 +9,6 @@
   "scripts": {
     "dev:backend": "npm --workspace @marionette/backend run dev",
     "dev:viewer": "npm --workspace @marionette/viewer run dev",
-    "dev:axol": "MARIONETTE_HTML_FILE=consumers/axol/axol.html npm --workspace @marionette/backend run dev",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm --workspace @marionette/mobile run lint"
