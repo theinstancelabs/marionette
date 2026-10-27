@@ -108,6 +108,24 @@ describe('PhoneTracker', () => {
     expect(tracker.get('phone-2')!.stop).toBe(true); expect(tracker.anyStop()).toBe(true);
   });
 
+  it('takes values the gateway would keep: on a slider’s step grid, and one of a select’s options', () => {
+    const { tracker, phone } = setup();
+    tracker.apply(messages.config({ phone: 'phone-1', controls: [
+      { id: 'gain', type: 'slider', label: 'Gain', action: 'arm.gain', value: 0.5, min: 0, max: 1, step: 0.25 },
+      { id: 'mode', type: 'select', label: 'Mode', action: 'arm.mode', value: 'a', options: [] },
+      { id: 'pick', type: 'select', label: 'Pick', action: 'arm.pick', value: 'x', options: [{ label: 'X', value: 'x' }, { label: 'Y', value: 'y' }] }] }));
+    expect(phone().value('arm.gain')).toBe(0.5);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 0.3)); expect(phone().value('arm.gain')).toBe(0.5);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 1.0000001)); expect(phone().value('arm.gain')).toBe(0.5);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 0.75, { live: true })); expect(phone().value('arm.gain')).toBe(0.75);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 0.25 + 1e-9)); expect(phone().value('arm.gain')).toBe(0.25 + 1e-9); // on the grid within 1e-6 steps
+    // A select with no options takes nothing; one with options only those.
+    expect(phone().value('arm.mode')).toBeUndefined();
+    tracker.apply(messages.input('phone-1', 'arm.mode', 'anything')); expect(phone().value('arm.mode')).toBeUndefined();
+    tracker.apply(messages.input('phone-1', 'arm.pick', 'z')); expect(phone().value('arm.pick')).toBe('x');
+    tracker.apply(messages.input('phone-1', 'arm.pick', 'y')); expect(phone().value('arm.pick')).toBe('y');
+  });
+
   it('forgets phones that leave a complete roster, keeping one with Stop on', () => {
     const tracker = new PhoneTracker(); const roster = ['phone-1', 'phone-2', 'phone-3'].map(id => messages.phone(id));
     for (const phone of roster) tracker.apply(messages.config({ sessionId: 'gw', phones: roster, phone }));

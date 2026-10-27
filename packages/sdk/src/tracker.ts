@@ -156,7 +156,7 @@ export type ConformancePhone = {
 };
 
 type Kind = 'hold' | 'button' | 'toggle' | 'select' | 'slider' | 'joystick';
-type Control = { kind: Kind; options?: string[]; min?: number; max?: number };
+type Control = { kind: Kind; options?: string[]; min?: number; max?: number; step?: number };
 
 /**
  * Folds the gateway's `config`, `pose` and `input` messages into one `Phone` per id. It decides nothing: read
@@ -286,8 +286,8 @@ export class PhoneTracker {
       const kind: Kind | undefined = type === 'button' ? (control.hold === true ? 'hold' : 'button') : type === 'toggle' || type === 'select' || type === 'slider' || type === 'joystick' ? type : undefined;
       if (!kind) continue;
       this.layout.set(control.action, { kind,
-        ...(kind === 'select' && Array.isArray(control.options) ? { options: control.options.filter(isObject).map(option => option.value).filter((value): value is string => typeof value === 'string') } : {}),
-        ...(kind === 'slider' && finite(control.min) && finite(control.max) ? { min: control.min, max: control.max } : {}) });
+        ...(kind === 'select' ? { options: (Array.isArray(control.options) ? control.options : []).filter(isObject).map(option => option.value).filter((value): value is string => typeof value === 'string') } : {}),
+        ...(kind === 'slider' && finite(control.min) && finite(control.max) && finite(control.step) && control.step > 0 ? { min: control.min, max: control.max, step: control.step } : {}) });
     }
   }
 
@@ -402,8 +402,13 @@ export class PhoneTracker {
 function valid(control: Control, value: unknown): boolean {
   switch (control.kind) {
     case 'toggle': return typeof value === 'boolean';
-    case 'select': return typeof value === 'string' && (!control.options?.length || control.options.includes(value));
-    case 'slider': return finite(value) && (control.min === undefined || (value >= control.min - 1e-9 && value <= control.max! + 1e-9));
+    case 'select': return typeof value === 'string' && !!control.options?.includes(value);
+    case 'slider': {
+      // The gateway's rule: within the range and on the step grid.
+      const { min, max, step } = control;
+      if (!finite(value) || min === undefined || max === undefined || step === undefined || value < min || value > max) return false;
+      const steps = (value - min) / step; return Math.abs(steps - Math.round(steps)) < 1e-6;
+    }
     case 'joystick': return isStickInRange(value);
     default: return false;
   }
