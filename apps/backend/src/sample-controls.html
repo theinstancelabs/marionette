@@ -4,107 +4,34 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Marionette</title>
+<!--
+  Marionette's default phone screen, built on the screen kit (packages/kit, docs/SCREEN-KIT.md). The gateway puts
+  the kit inline and sends this document to the app, which shows it full screen and provides window.Marionette.
+  Every control is looked up in the gateway config by its action, so a custom config still renders: known actions
+  get their place (Stop, the hold pad, Drive base, calibration), and anything else becomes a row. Copy this file and
+  point MARIONETTE_HTML_FILE at it to make your own screen; preview it at http://localhost:8787/screen.
+-->
+<link rel="stylesheet" href="marionette-kit.css">
+<script src="marionette-kit.js"></script>
 <style>
-/*
-  Marionette's default phone screen. The gateway sends this document to the
-  app, which shows it full screen and provides window.Marionette. Every control
-  is looked up in the gateway config by its action, so a custom config still
-  renders: known actions get their place (Stop, the hold pad, calibration), and
-  anything else becomes a row. Copy this file and point MARIONETTE_HTML_FILE at
-  it to make your own screen; preview it at http://localhost:8787/screen.
-*/
-:root{
-  --paper:#fafaf6;--paper2:#f2f3ee;--grid:#e6ebf2;--ink:#2e3033;--ink2:#6b6f73;--rule:#cfd3d6;
-  --blue:#2f53b5;--red:#cf3f35;--green:#3f7d4e;--hi:#f6e36b;
-  --sans:"IBM Plex Sans",-apple-system,system-ui,sans-serif;
-  --hand:"Kalam","Noteworthy","Bradley Hand","Segoe Print",cursive;
-  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
-  --top:env(safe-area-inset-top,0px);--bottom:env(safe-area-inset-bottom,0px);
-}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html{background:var(--paper)}
-body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.4 var(--sans);font-variant-numeric:tabular-nums;
-  background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px;
-  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%}
-button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;touch-action:manipulation}
-button:focus-visible,input:focus-visible,select:focus-visible,.stick:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-[hidden]{display:none!important}
-.hand{font-family:var(--hand);color:var(--blue)}
 .app{min-height:100vh;display:flex;flex-direction:column;padding-top:var(--top)}
-
-/* Status strip */
-.strip{display:flex;align-items:center;gap:8px;min-height:74px;padding:0 96px 0 16px}
-.chip{display:inline-flex;align-items:center;gap:7px;height:32px;min-width:0;flex:0 1 auto;padding:0 12px;border-radius:16px;background:#fff;border:1px solid var(--rule);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--ink2)}
-.dot.good{background:var(--green)}.dot.warn{background:#c8a43a}.dot.bad{background:var(--red)}
-/* Which phone this is, in the color the viewer draws it in. */
-.chip.me{font-weight:600;flex:0 0 auto}.chip.me .dot{width:11px;height:11px}.chip.me.off{color:var(--ink2);font-weight:400}
-.rule{position:fixed;z-index:22;top:0;left:0;right:0;height:4px;pointer-events:none}
-.stop{position:fixed;z-index:20;top:calc(var(--top) + 5px);right:16px;width:64px;height:64px;border-radius:50%;background:var(--red);color:#fff;font-weight:600;font-size:16px;box-shadow:0 0 0 3px var(--paper),0 0 0 5px var(--red);touch-action:none}
-.stop:active{transform:scale(.96)}
-/* On: pressed in and darker, so it reads as latched on this phone even without the banner. */
-.stop[aria-pressed=true]{background:#a3271f;box-shadow:0 0 0 3px var(--paper),0 0 0 5px #a3271f,inset 0 3px 8px rgba(0,0,0,.35)}
-.banner{margin:14px 16px 0;padding:12px 14px;border:2px solid var(--red);border-radius:12px;background:#fff;display:flex;align-items:center;gap:12px}
-.banner b{display:block;color:var(--red);font-weight:600}
-.banner span{font-size:15px;color:var(--ink2)}
-.banner button{margin-left:auto;flex:none;height:44px;padding:0 16px;border-radius:10px;border:1.5px solid var(--red);color:var(--red);font-weight:600}
-
-/* Headline */
 .pad-x{padding:0 22px}
+
+/* Headline, and the robot this screen talks to */
 .state{font-size:34px;line-height:1.15;font-weight:600;letter-spacing:-.015em;margin:18px 0 0}
 .state.moving{color:var(--blue)}.state.stopped{color:var(--red)}
-.note{font-family:var(--hand);color:var(--blue);font-size:19px;line-height:1.3;margin:4px 0 0 2px}
-.note.bad{color:var(--red)}
+.robot{display:flex;align-items:center;gap:7px;margin:8px 0 0 2px;font-size:15px;color:var(--ink2)}
+.robot b{font-weight:600;color:var(--ink)}
 
-/* Pose */
+/* Pose, and what the stick sends */
 .pose{display:grid;grid-template-columns:repeat(3,1fr);margin-top:18px;border-top:1.5px solid var(--ink);border-bottom:1px solid var(--rule)}
 .pose>div{padding:10px 0 12px 2px}
 .pose small{display:block;font-size:14px;color:var(--ink2)}
 .pose b{font-size:26px;font-weight:500}
-.bar{display:block;height:4px;margin:8px 12px 0 0;border-radius:2px;background:var(--rule);position:relative}
-.bar i{position:absolute;top:0;bottom:0;border-radius:2px;left:50%;width:0}
-
-/* Camera */
-/* One pane per stream in the view this phone picked, side by side and never cropped. With
-   several streams, a tap stacks them full width. */
-.cam{position:relative;display:grid;grid-template-columns:repeat(var(--panes,1),minmax(0,1fr));gap:1.5px;margin:16px 0 0;border-radius:12px;border:1.5px solid var(--ink);background:var(--ink);overflow:hidden}
-.cam[role=button]{cursor:zoom-in}
-.cam.big{grid-template-columns:minmax(0,1fr);cursor:zoom-out}
-.pane{position:relative;min-width:0;aspect-ratio:16/9;background:var(--paper2)}
-.pane img{display:block;width:100%;height:100%;object-fit:contain;background:var(--ink)}
-.pane figcaption{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:7px}
-.cam[role=button]:not(.big) .pane figcaption{left:6px;bottom:6px;font-size:12px;padding:2px 6px}
-.pane .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:0 14px;color:var(--ink2);font-size:15px}
-
-/* Rows */
+.pose .mk-bar{margin:8px 12px 0 0}
+.pose.two{grid-template-columns:repeat(2,1fr);margin-top:16px}
+.cam{margin-top:16px}
 .rows{margin-top:10px}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:8px 0;border-bottom:1px solid var(--rule)}
-.row.stack{display:block}
-.row.stack .row-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.row .val{color:var(--ink2)}
-/* A value being dragged: blue once the gateway hears it live, red if it stopped hearing it mid-drag. */
-.row .val.live{color:var(--blue)}.row .val.dropped{color:var(--red)}
-.row.link{width:100%;text-align:left}
-.row.link .val::after{content:" ›";color:var(--ink2)}
-.ok{color:var(--green)!important}.bad{color:var(--red)!important}
-.seg{display:flex;border:1.5px solid var(--ink);border-radius:10px;overflow:hidden;background:#fff}
-.seg button{flex:1;min-height:42px;padding:0 10px;font-size:15px;border-left:1px solid var(--ink)}
-.seg button:first-child{border-left:0}
-.seg button[aria-pressed=true]{background:var(--ink);color:var(--paper)}
-.switch{position:relative;flex:none;width:52px;height:32px;border-radius:16px;background:var(--rule);transition:background .15s}
-.switch::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
-.switch[aria-checked=true]{background:var(--blue)}
-.switch[aria-checked=true]::after{transform:translateX(20px)}
-input[type=range]{width:100%;height:36px;margin:0;accent-color:var(--blue)}
-select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);border-radius:10px;background:#fff;padding:0 10px;color:var(--ink)}
-.row-btn{min-height:44px;padding:0 14px;border-radius:10px;border:1.5px solid var(--ink);background:#fff;font-weight:500}
-.row-btn.danger{border-color:var(--red);color:var(--red)}
-.row-btn.pending{background:var(--paper2)}
-.row-btn.held{background:var(--ink);color:var(--paper)}
-.row-btn.dropped,.hold.dropped{border-color:var(--red);color:var(--red)}
-.row-btn.wide{width:100%}
-.row-btn small{font-weight:400;color:var(--ink2)}
-.mono{font-family:var(--mono);font-size:15px}
 
 /* Drive base: a spring-return stick between the turn buttons, then what it sends and the speed limit */
 .drive{margin-top:18px;border-top:1.5px solid var(--ink);padding-top:12px}
@@ -112,314 +39,109 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 .drive-head h2{margin:0;font-size:20px;line-height:1.2;font-weight:600;letter-spacing:-.01em}
 .drive-state{font-size:15px;color:var(--ink2)}
 .drive-state.live{color:var(--blue);font-weight:600}.drive-state.dropped{color:var(--red);font-weight:600}
-.drive .note{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drive .mk-note{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .drive-grid{display:grid;grid-template-columns:64px minmax(0,220px) 64px;justify-content:space-between;gap:12px;margin-top:14px}
-.hold.turn{width:auto;height:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:14px;line-height:1.2;padding:0 4px}
-.hold.turn b{font-size:28px;font-weight:400;line-height:1}
-.stick{position:relative;aspect-ratio:1;border-radius:50%;background:#fff;border:1.5px solid var(--ink);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
-.stick.dragging{cursor:grabbing}
-.stick svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.stick .edge{position:absolute;font-size:13px;line-height:1;color:var(--ink2);pointer-events:none}
-.stick .edge.n{top:7%;left:50%;transform:translateX(-50%)}.stick .edge.s{bottom:7%;left:50%;transform:translateX(-50%)}
-.stick .edge.w{left:6%;top:50%;transform:translateY(-50%)}.stick .edge.e{right:6%;top:50%;transform:translateY(-50%)}
-/* The knob is 30% of the pad and travels 35% of it, so a full push moves it 35/30 of its own size. */
-.knob{position:absolute;left:35%;top:35%;width:30%;height:30%;border-radius:50%;background:#fff;border:2.5px solid var(--blue);box-shadow:0 2px 6px rgba(46,48,51,.18);transition:transform .2s cubic-bezier(.3,1.35,.6,1);pointer-events:none}
-.stick.dragging .knob{transition:none}
-.stick.pending .knob{background:#e9eef9}
-.stick.live .knob{background:var(--blue)}
-.stick.dropped .knob{border-color:var(--red);background:#fff}
-.stick .vec{stroke:var(--blue)}.stick.dropped .vec{stroke:var(--red)}
-.pose.two{grid-template-columns:repeat(2,1fr);margin-top:16px}
-.stick-row{display:flex;justify-content:center;padding:4px 0 6px}
-.stick-row .stick{width:min(200px,62%)}
 
-/* Dock */
+/* Dock: the hold-to-move pad and other hold buttons, filled once the gateway reports the hold, red if it let go */
 .spacer{flex:1;min-height:24px}
 .dock{position:sticky;bottom:0;display:flex;gap:10px;padding:14px 16px calc(14px + var(--bottom));background:linear-gradient(rgba(250,250,246,0),var(--paper) 28%)}
 .pad{flex:1;height:100px;border-radius:22px;border:2.5px solid var(--blue);background:#fff;color:var(--blue);display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:600;font-size:20px;touch-action:none}
 .pad small{font-weight:400;font-size:14px;color:var(--ink2);margin-top:2px}
-.pad.pending{background:#e9eef9}
-.pad.held{background:var(--blue);color:#fff}
-.pad.held small{color:#dfe6f7}
-.pad.dropped{border-color:var(--red);color:var(--red);background:#fff}
-.pad.muted{border-color:var(--rule);color:var(--ink2)}
+.pad[data-state=pending]{background:var(--blue-wash)}
+.pad[data-state=held]{background:var(--blue);color:#fff}
+.pad[data-state=held] small{color:#dfe6f7}
+.pad[data-state=dropped]{border-color:var(--red);color:var(--red);background:#fff}
 .hold{width:100px;height:100px;flex:none;border-radius:22px;border:1.5px solid var(--ink);background:#fff;font-weight:500;font-size:16px;touch-action:none;padding:0 6px}
-.hold.pending{background:var(--paper2)}
-.hold.held{background:var(--ink);color:var(--paper)}
-
-/* Toast */
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(132px + var(--bottom));max-width:min(92vw,400px);padding:10px 14px;border-radius:10px;background:var(--ink);color:var(--paper);font-size:15px;line-height:1.35;z-index:5}
-
-/* Full-screen sheets: calibration and validation */
-.sheet{position:fixed;top:0;bottom:0;left:50%;width:min(100%,430px);transform:translateX(-50%);z-index:10;display:flex;flex-direction:column;padding-top:var(--top);
-  background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px;animation:rise .22s ease-out}
-@keyframes rise{from{transform:translate(-50%,24px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
-.sheet-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;min-height:74px;padding:0 96px 0 18px}
-.sheet-top b{font-weight:600;text-align:center}
-.sheet-top b small{display:block;font-weight:400;font-size:14px;color:var(--ink2)}
-.sheet-top .left{justify-self:start;color:var(--blue);min-height:44px}
-.track{display:flex;gap:6px;padding:10px 20px 0}
-.track span{flex:1;font-size:14px;color:var(--ink2);padding-top:9px;border-top:3px solid var(--rule)}
-.track .done{border-color:var(--ink);color:var(--ink)}
-.track .fail{border-color:var(--red);color:var(--red)}
-.track .pass{border-color:var(--green);color:var(--green)}
-.track .cur{border-color:var(--blue);color:var(--ink);font-weight:600}
-.track .cur em{font-style:normal;background:linear-gradient(transparent 55%,var(--hi) 55%)}
-.ill{display:block;width:100%;max-width:340px;height:auto;margin:6px auto 0}
-.ill .line{fill:none;stroke-linecap:round;stroke-linejoin:round}
-.ill text{font-family:var(--hand);font-size:17px}
-.sheet-body{padding:0 22px;flex:1;overflow-y:auto}
-.title{font-size:31px;line-height:1.15;font-weight:600;letter-spacing:-.015em;margin:2px 0 8px}
-.body{font-size:17px;line-height:1.45;color:var(--ink2);margin:0;max-width:32ch}
-.meter{margin-top:20px}
-.meter-top{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;color:var(--ink2)}
-.meter-top b{font-size:28px;color:var(--ink);font-weight:500}
-.meter-bar{height:10px;border-radius:5px;background:var(--paper2);border:1px solid var(--rule);margin-top:8px;position:relative;overflow:hidden}
-.meter-bar i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--blue)}
-.meter-bar s{position:absolute;top:-2px;bottom:-2px;border-left:2px dashed var(--ink2)}
-.meter.ready .meter-bar i{background:var(--green)}
-.axes{margin-top:16px;display:grid;gap:10px}
-.axis{display:grid;grid-template-columns:96px 1fr 64px;align-items:center;gap:10px;font-size:15px;color:var(--ink2)}
-.axis b{font-weight:500;color:var(--ink);text-align:right}
-.axis .bar{margin:0;height:8px;border-radius:4px}
-.axis.lead{color:var(--ink)}
-.axis.lead span{background:linear-gradient(transparent 55%,var(--hi) 55%)}
-.reply{margin:16px 0 0;font-size:16px;line-height:1.4;color:var(--ink2)}
-.reply.bad{color:var(--red)}
-.results{list-style:none;margin:16px 0 0;padding:0}
-.results li{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule);font-size:16px}
-.sheet-foot{padding:12px 20px calc(16px + var(--bottom));display:grid;gap:10px}
-.cta{height:60px;border-radius:14px;background:var(--blue);color:#fff;font-weight:600;font-size:18px}
-.cta:disabled{background:var(--rule);color:var(--ink2)}
-.cta.quiet{background:#fff;color:var(--ink);border:1.5px solid var(--ink)}
-.links{display:flex;justify-content:center;gap:24px;padding:4px 0 2px}
-.links button{color:var(--blue);font-size:16px;min-height:40px}
-.links button.danger{color:var(--red)}
-.frame-status{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:12px 0;border-top:1.5px solid var(--ink);border-bottom:1px solid var(--rule);margin-top:14px;font-size:16px}
-.frame-status span{color:var(--ink2)}
+.hold[data-state=pending]{background:var(--paper2)}
+.hold[data-state=held]{background:var(--ink);color:var(--paper)}
+.hold[data-state=dropped]{border-color:var(--red);color:var(--red)}
+.hold.turn{width:auto;height:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:14px;line-height:1.2;padding:0 4px}
+.hold.turn b{font-size:28px;font-weight:400;line-height:1}
 
 /* Desktop preview: show a phone-width column */
-@media (min-width:600px){
-  html{background:#e9ebe6}
-  .app{max-width:430px;margin:0 auto;box-shadow:0 0 0 1px var(--rule)}
-  .stop{right:calc(50% - 215px + 16px)}
-  body{background-color:#e9ebe6}
-  .app{background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px}
+@media (hover:hover) and (pointer:fine) and (min-width:600px){
+  html,body{background-color:#e9ebe6}
+  .app{max-width:430px;margin:0 auto;box-shadow:0 0 0 1px var(--rule);background-color:var(--paper);background-image:var(--paper-grid);background-size:24px 24px}
+  :root{--mk-stop-right:calc(50% - 215px + 16px)}
 }
-@media (prefers-reduced-motion:reduce){.sheet{animation:none}.switch,.switch::after,.knob{transition:none}}
+/* A phone on its side, or an iPad: two columns. What the phone and the robot are doing on the left, with the pad
+   under it for the left thumb; the drive base and the settings on the right. */
+@media (hover:none) and (min-width:600px){
+  .app{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto auto 1fr;column-gap:12px;padding-left:var(--left);padding-right:var(--right)}
+  .app>.mk-strip,.app>.mk-banner{grid-column:1/-1}
+  .lead{grid-column:1;grid-row:3;align-self:start;position:sticky;top:0;max-height:100vh;overflow-y:auto;padding-bottom:calc(132px + var(--bottom))}
+  .side{grid-column:2;grid-row:3;padding-bottom:calc(24px + var(--bottom))}
+  .spacer{display:none}
+  .dock{position:fixed;left:var(--left);bottom:0;width:calc((100% - var(--left) - var(--right) - 12px) / 2)}
+  .drive-grid{justify-content:center;column-gap:28px}
+  :root{--mk-toast-bottom:calc(24px + var(--bottom))}
+}
+/* A phone on its side is short: the camera comes before the pose numbers, so it shows above the pad. */
+@media (hover:none) and (min-width:600px) and (max-height:500px){
+  .lead{display:flex;flex-direction:column}.lead .pose{order:1}
+  .state{font-size:26px;margin-top:4px}
+  .pose{margin-top:10px}.pose>div{padding:6px 0 8px 2px}.pose b{font-size:22px}
+  .cam{margin-top:10px}
+  .pad,.hold{height:76px}.hold{width:88px}
+  .dock{padding-top:8px;padding-bottom:calc(8px + var(--bottom))}
+  .lead{padding-bottom:calc(100px + var(--bottom))}
+}
 </style>
 </head>
 <body>
-<div class="rule" id="me-rule" hidden></div>
 <div class="app" id="app">
-  <header class="strip">
-    <span class="chip me" id="me-chip"><i class="dot" id="me-dot"></i><span id="me">Connecting…</span></span>
-    <span class="chip" id="tracking-chip"><i class="dot" id="tracking-dot"></i><span id="tracking">Starting tracking</span></span>
-  </header>
-  <div class="banner" id="estop-banner" role="alert" hidden>
-    <div><b>Stop is on</b><span>It stays on for this phone until you reset it.</span></div>
-    <button type="button" id="estop-reset">Reset</button>
-  </div>
-  <section class="pad-x">
+  <header id="strip"></header>
+  <div id="stop-banner" hidden></div>
+  <section class="pad-x lead">
     <h1 class="state" id="state">Connecting…</h1>
-    <p class="note" id="state-note"></p>
+    <p class="mk-note" id="state-note"></p>
+    <p class="robot" id="robot" hidden><i class="mk-dot" id="robot-dot"></i><span><b id="robot-name"></b><span id="robot-state"></span></span></p>
     <div class="pose" aria-label="Phone position in millimetres">
-      <div><small>forward</small><b id="pose-x">0</b><span class="bar"><i id="bar-x" style="background:var(--red)"></i></span></div>
-      <div><small>left</small><b id="pose-y">0</b><span class="bar"><i id="bar-y" style="background:var(--green)"></i></span></div>
-      <div><small>up</small><b id="pose-z">0</b><span class="bar"><i id="bar-z" style="background:var(--blue)"></i></span></div>
+      <div><small>forward</small><b id="pose-x">0</b><span class="mk-bar"><i id="bar-x" style="background:var(--red)"></i></span></div>
+      <div><small>left</small><b id="pose-y">0</b><span class="mk-bar"><i id="bar-y" style="background:var(--green)"></i></span></div>
+      <div><small>up</small><b id="pose-z">0</b><span class="mk-bar"><i id="bar-z" style="background:var(--blue)"></i></span></div>
     </div>
     <figure class="cam" id="cam" hidden></figure>
+  </section>
+  <section class="pad-x side">
     <section class="drive" id="drive" aria-label="Drive base" hidden></section>
     <div class="rows" id="rows"></div>
   </section>
   <div class="spacer"></div>
-  <footer class="dock" id="dock">
-  </footer>
+  <footer class="dock" id="dock"></footer>
 </div>
-<section class="sheet" id="sheet" hidden aria-modal="true" role="dialog"></section>
-<!-- Stop sits above the page and every sheet, so it is always one tap away. -->
-<button class="stop" id="stop" type="button" aria-label="Stop" hidden>Stop</button>
-<div class="toast" id="toast" role="status" hidden></div>
 <script>
 (() => {
+  const K = window.MarionetteKit; const { h, setText, control, byId } = K;
+  // Every control is found by its action, so a different layout still gets a working screen.
   const ACTION = {
     deadman: 'teleop.deadman', estop: 'safety.estop',
     start: 'calibration.start', capture: 'calibration.capture', cancel: 'calibration.cancel',
     check: 'calibration.check', origin: 'calibration.captureOrigin', clear: 'calibration.reset',
     drive: 'base.drive', turnLeft: 'base.turnLeft', turnRight: 'base.turnRight', speedLimit: 'base.speedLimit',
   };
-  const STEPS = ['flat', 'forward', 'right', 'up'];
-  const MOVES = ['forward', 'right', 'up'];
-  // FLAT_DEG matches the gateway's FLAT_TOLERANCE_DEGREES.
-  const MIN_MM = 30, TARGET_MM = 100, FLAT_DEG = 30;
-  // Like the gateway: calibration is a rough axis alignment, so limited tracking is fine.
-  const canCalibrate = (tracking, source) => source !== 'synthetic' && (tracking === 'normal' || tracking === 'limited');
-  const STEP_COPY = {
-    flat: { title: 'Hold it flat', body: 'In your hand is fine. Roughly flat, screen up, top edge pointing the way you want forward.', cta: 'Capture flat' },
-    forward: { title: 'Move it forward', body: 'Keep it roughly flat and move it straight ahead, about a hand’s length.', cta: 'Capture forward' },
-    right: { title: 'Back, then move right', body: 'Return to the flat spot, then move straight to your right.', cta: 'Capture right' },
-    up: { title: 'Back, then lift it', body: 'Return to the flat spot, then lift it straight up.', cta: 'Capture up' },
-  };
-  const MOVE_COPY = {
-    forward: { title: 'Move it forward', body: 'Bring it back to the flat spot, then move it straight ahead about 10 cm.' },
-    right: { title: 'Move it right', body: 'Back at the flat spot, then move it straight to your right about 10 cm.' },
-    up: { title: 'Lift it up', body: 'Back at the flat spot, then lift it straight up about 10 cm.' },
-  };
-  // Operator frame (ROS REP-103): +X forward, +Y left, +Z up. Validation expects these signs.
-  const EXPECTED = { forward: ['x', 1], right: ['y', -1], up: ['z', 1] };
-  const AXIS_WORDS = { '+X': 'forward', '-X': 'back', '+Y': 'left', '-Y': 'right', '+Z': 'up', '-Z': 'down' };
-  const TRACKING_WORDS = { normal: 'Tracking good', limited: 'Tracking limited', initializing: 'Starting tracking', relocalizing: 'Finding its place', unavailable: 'No tracking' };
   const REASON_NOTES = { excessiveMotion: 'move a little slower', insufficientFeatures: 'point the camera at something with texture', interrupted: 'tracking was interrupted', relocalizing: 'hold still for a moment', initializing: 'move the phone gently to start', synthetic: 'simulated motion, not a real pose' };
-
   const $ = id => document.getElementById(id);
-  const h = (tag, props = {}, ...children) => { const node = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (v === undefined || v === false) continue; if (k === 'class') node.className = v; else if (k.startsWith('on')) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v === true ? '' : v); } for (const child of children.flat()) if (child != null && child !== false) node.append(child); return node; };
-  const setText = (node, text) => { if (node && node.textContent !== text) node.textContent = text; };
-  const mm = v => Math.round(v * 1000);
-  const signed = n => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n);
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  const rotate = (q, v) => { const { x, y, z, w } = q; const ix = w * v.x + y * v.z - z * v.y, iy = w * v.y + z * v.x - x * v.z, iz = w * v.z + x * v.y - y * v.x, iw = -x * v.x - y * v.y - z * v.z; return { x: ix * w + iw * -x + iy * -z - iz * -y, y: iy * w + iw * -y + iz * -x - ix * -z, z: iz * w + iw * -z + ix * -y - iy * -x }; };
-  const conjugate = q => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
-  // Where the screen faces, in operator axes (Z is up). A calibrated pose's rotation is measured from the
-  // calibration's flat capture, so put that capture's own orientation back before comparing with gravity.
-  function screenDirection(p) {
-    const ref = calibration().reference; let v = { x: 0, y: 0, z: 1 };
-    if (ref && p.calibrationVersion === ref.mode + '-v2:' + ref.epoch) v = rotate(conjugate(ref.frame), rotate(ref.rotation, v));
-    return rotate(p.rotation, v);
-  }
-  const dominant = v => { const [axis, value] = [['X', v.x], ['Y', v.y], ['Z', v.z]].reduce((a, b) => Math.abs(b[1]) > Math.abs(a[1]) ? b : a); return (value < 0 ? '-' : '+') + axis; };
+  // A bar from the middle: fraction is -50..50 (% of the bar).
+  const fill = (bar, fraction) => { bar.style.left = (fraction < 0 ? 50 + fraction : 50) + '%'; bar.style.width = Math.abs(fraction) + '%'; };
 
-  const s = { config: undefined, pose: undefined, tracking: undefined, connection: undefined, sheet: undefined, reply: undefined, forwardAt: undefined, padHeld: false, rowsKey: '' };
-  const control = action => s.config && s.config.controls.find(c => c.action === action);
-  const byId = id => s.config && s.config.controls.find(c => c.id === id);
-  const send = (c, value) => { if (c) window.Marionette.sendAction(c.id, c.action, value); };
-  const calibration = () => (s.config ? s.config.calibration : { status: 'uncalibrated' });
+  K.strip($('strip'));
+  const stop = K.stop({ action: ACTION.estop, banner: $('stop-banner') });
+  const calibration = K.calibration();
+  K.cameras($('cam'));
 
-  // Hold-to-act: true on press, false on release. The app repeats the press while it is held and the gateway drops a hold whose renewals stop.
-  // The release goes to the control that was pressed, even if the config changed in between, and
-  // `dispose` releases before the button is removed so a rebuilt dock can never leave a hold behind.
-  // Hold buttons pressed on this screen: control id → whether the gateway has reported the hold during this press.
-  const pressed = new Map();
-  // idle; pending (pressed, not yet reported by the gateway); held; or dropped (the gateway let go, e.g. its repeats stopped
-  // arriving, while it is still pressed here; a repeat never restarts a hold, so the operator has to press again).
-  // Without a gateway connection nothing is held, whatever the last config said.
-  const holdState = c => !c || !pressed.has(c.id) ? 'idle' : s.connection && s.connection.state === 'disconnected' ? 'dropped' : c.held ? 'held' : pressed.get(c.id) ? 'dropped' : 'pending';
-  function holdable(node, getControl, onChange, group) {
-    let held;
-    const press = e => { e.preventDefault(); if (held) return; const c = getControl(); if (!c) return; held = c; pressed.set(c.id, false); try { node.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the press still counts */ } send(c, true); renderHolds(); if (onChange) onChange(true); };
-    const release = () => { if (!held) return; const c = held; held = undefined; pressed.delete(c.id); send(c, false); renderHolds(); if (onChange) onChange(false); };
-    node.addEventListener('pointerdown', press);
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, release);
-    node.addEventListener('contextmenu', e => e.preventDefault());
-    letGoOnLeave(release, group);
-  }
-  // Leaving the page (another app, a hidden tab) or rebuilding the control lets go, so nothing stays pressed or pushed.
-  function letGoOnLeave(letGo, group) {
-    const onHidden = () => { if (document.hidden) letGo(); };
-    window.addEventListener('blur', letGo); document.addEventListener('visibilitychange', onHidden);
-    group.push(() => { letGo(); window.removeEventListener('blur', letGo); document.removeEventListener('visibilitychange', onHidden); });
-  }
-  const disposeAll = group => { while (group.length) group.pop()(); };
-  const rowHolds = [], dockHolds = [], driveHolds = [];
-
-  /* ---------- Live values: sliders and sticks stream while they are dragged ---------- */
-  // Sliders and sticks being dragged here: control id → whether the gateway has reported the stream during this drag.
-  const touching = new Map();
-  // idle; pending (dragged, not yet reported live); live; or dropped (the gateway stopped hearing it while it is still
-  // dragged here; like a hold, it only counts again once the operator lets go).
-  const liveState = c => !c || !touching.has(c.id) ? 'idle' : s.connection && s.connection.state === 'disconnected' ? 'dropped' : c.live ? 'live' : touching.get(c.id) ? 'dropped' : 'pending';
-  // The bridge's stream sends the newest value at most once a frame, marked live; `end` sends the final value.
-  function dragger(getControl) {
-    let stream, id;
-    return {
-      update(value) {
-        if (!stream) { const c = getControl(); if (!c) return; id = c.id; stream = window.Marionette.stream(c.id, c.action); touching.set(id, false); renderLive(); }
-        stream.update(value);
-      },
-      end(value) { if (!stream) return; stream.end(value); stream = undefined; touching.delete(id); renderLive(); },
-    };
-  }
-
-  // A stick's value is where it is pushed, in operator axes: x up the pad (forward), y to the left, each -1..1 and at most 1 together.
-  const KNOB_TRAVEL = 35 / 30 * 100;
-  const KEYS = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowLeft: [0, 1], ArrowRight: [0, -1] };
-  // Two decimals, rounded toward zero, so a full diagonal push never comes out longer than 1.
-  const toward0 = n => (Math.trunc(n * 100) / 100) || 0;
-  const limit = (x, y) => { const n = Math.hypot(x, y); return n > 1 ? { x: toward0(x / n), y: toward0(y / n) } : { x: toward0(x), y: toward0(y) }; };
-  const signed2 = n => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n).toFixed(2);
-  function stick(getControl, group, { label, edges, onMove }) {
-    const c = getControl();
-    const face = svg('<svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="35" fill="none" stroke="#cfd3d6" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/><path d="M50 3V97M3 50H97" stroke="#e6ebf2" vector-effect="non-scaling-stroke"/><line class="vec" x1="50" y1="50" x2="50" y2="50" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>');
-    const vec = face.querySelector('.vec'); const knob = h('span', { class: 'knob' });
-    const pad = h('div', { class: 'stick', tabindex: '0', role: 'group', 'aria-roledescription': 'stick', 'aria-label': label + '. Drag to push it, or hold the arrow keys. Let go to stop.', 'data-live': c.id },
-      face, (edges || []).map((word, i) => h('span', { class: 'edge ' + 'nswe'[i] }, word)), knob);
-    const drag = dragger(getControl); let rect, pointer, pushed = false; const keys = new Set();
-    const show = v => {
-      knob.style.transform = v.x || v.y ? 'translate(' + (-v.y * KNOB_TRAVEL).toFixed(1) + '%,' + (-v.x * KNOB_TRAVEL).toFixed(1) + '%)' : '';
-      vec.setAttribute('x2', (50 - v.y * 35).toFixed(1)); vec.setAttribute('y2', (50 - v.x * 35).toFixed(1));
-      if (onMove) onMove(v);
-    };
-    const push = v => { pushed = true; show(v); drag.update(v); };
-    const letGo = () => { if (!pushed) return; pushed = false; pointer = undefined; keys.clear(); pad.classList.remove('dragging'); show({ x: 0, y: 0 }); drag.end({ x: 0, y: 0 }); };
-    // A touch anywhere on the pad pushes the stick that far from the centre, and it follows the finger until let go.
-    const at = e => limit((rect.top + rect.height / 2 - e.clientY) / (rect.height * 0.35), (rect.left + rect.width / 2 - e.clientX) / (rect.width * 0.35));
-    pad.addEventListener('pointerdown', e => {
-      e.preventDefault(); if (pointer !== undefined) return;
-      pointer = e.pointerId; rect = pad.getBoundingClientRect(); keys.clear(); pad.classList.add('dragging');
-      try { pad.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the drag still counts */ }
-      push(at(e));
-    });
-    pad.addEventListener('pointermove', e => { if (e.pointerId === pointer) push(at(e)); });
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) pad.addEventListener(name, e => { if (e.pointerId === pointer) letGo(); });
-    const fromKeys = () => { let x = 0, y = 0; for (const key of keys) { x += KEYS[key][0]; y += KEYS[key][1]; } return limit(x, y); };
-    pad.addEventListener('keydown', e => { if (!KEYS[e.key] || pointer !== undefined) return; e.preventDefault(); if (e.repeat || keys.has(e.key)) return; keys.add(e.key); pad.classList.add('dragging'); push(fromKeys()); });
-    pad.addEventListener('keyup', e => { if (!keys.delete(e.key)) return; if (keys.size) push(fromKeys()); else letGo(); });
-    pad.addEventListener('blur', () => { if (keys.size) letGo(); });
-    pad.addEventListener('contextmenu', e => e.preventDefault());
-    letGoOnLeave(letGo, group);
-    return pad;
-  }
-  // Every live control shows what the gateway knows, like the hold buttons.
-  function renderLive() {
-    if (!s.config) return;
-    for (const node of document.querySelectorAll('[data-live]')) { const state = liveState(byId(node.dataset.live)); for (const name of ['pending', 'live', 'dropped']) node.classList.toggle(name, state === name); }
-    const head = $('drive-state');
-    if (head) {
-      const state = liveState(control(ACTION.drive)); const turning = [ACTION.turnLeft, ACTION.turnRight].map(control).find(c => holdState(c) === 'held');
-      const [text, note] = { idle: turning ? [turning.label.replace(/^Turn/, 'Turning'), 'let go to stop turning'] : ['', 'touch the stick and drag, let go to stop'], pending: ['Sending…', 'waiting for the gateway'], live: ['Driving', 'let go to stop'], dropped: ['Dropped', 'let go and touch it again'] }[state];
-      setText(head, text); head.className = 'drive-state ' + (state === 'idle' && turning ? 'live' : state);
-      setText($('drive-note'), note); $('drive-note').className = 'note' + (state === 'dropped' ? ' bad' : '');
-    }
-    renderHeadline();
-  }
-
-  /* ---------- Status strip, Stop, headline ---------- */
-  // Stop is this phone's own signal: a toggle the consumer reads. Marionette itself stops nothing.
-  const stopOn = () => { const c = control(ACTION.estop); return !!c && c.value === true; };
-  function renderStrip() {
-    const conn = s.connection, t = s.tracking, me = s.config && s.config.phone; const live = !!conn && conn.state === 'connected';
-    // A desktop mirror can follow a phone that is not connected; say so beside its name.
-    setText($('me'), me ? me.name + (me.connected === false ? ' · offline' : '') : live ? conn.gateway : 'Connecting…');
-    $('me-chip').className = 'chip me' + (live && (!me || me.connected !== false) ? '' : ' off');
-    $('me-dot').className = 'dot' + (me ? '' : live ? ' good' : ' bad'); $('me-dot').style.background = me ? me.color : '';
-    const rule = $('me-rule'); rule.hidden = !me; rule.style.background = me ? me.color : '';
-    const offline = !!me && me.connected === false; const state = offline ? 'unavailable' : t ? t.state : 'initializing';
-    setText($('tracking'), offline ? 'No pose' : t && t.source === 'synthetic' ? 'Simulated motion' : TRACKING_WORDS[state] || state);
-    $('tracking-dot').className = 'dot ' + (state === 'normal' && (!t || t.source !== 'synthetic') ? 'good' : state === 'unavailable' ? 'bad' : 'warn');
-    $('stop').hidden = !control(ACTION.estop);
-    const latched = stopOn();
-    $('estop-banner').hidden = !latched;
-    $('stop').setAttribute('aria-pressed', String(latched));
-  }
+  /* ---------- Headline: most urgent first ---------- */
   // "the left arm", from whatever the arm control is set to.
-  function armWord() { const c = s.config && s.config.controls.find(x => x.action === 'arm.select'); const o = c && c.type === 'select' && c.options.find(x => x.value === c.value); return o ? 'the ' + o.label.toLowerCase() : 'the arm'; }
-  // Most urgent first: no gateway, this phone's Stop, no pose at all, then the pad, then rough tracking.
+  function armWord() { const c = control('arm.select'); const o = c && c.type === 'select' && c.options.find(x => x.value === c.value); return o ? 'the ' + o.label.toLowerCase() : 'the arm'; }
+  // No gateway, this phone's Stop, no pose at all, then the pad, then rough tracking.
   function renderHeadline() {
-    const c = s.config, t = s.tracking, conn = s.connection; const pad = holdState(control(ACTION.deadman)); const drive = liveState(control(ACTION.drive));
+    const c = K.config(), t = K.latest('tracking'), conn = K.latest('connection'); const pad = K.holdState(control(ACTION.deadman)); const drive = K.liveState(control(ACTION.drive));
     const rough = t && t.state !== 'normal' ? (REASON_NOTES[t.reason] || REASON_NOTES[t.state] || 'the pose may be rough until tracking recovers') : '';
     let title = c ? 'Ready' : 'Connecting…', tone = '', note = control(ACTION.deadman) ? 'hold the pad to move ' + armWord() : '', bad = false;
     if (conn && conn.state === 'disconnected') { title = 'Gateway lost'; note = conn.reason || 'reconnect to keep going'; bad = true; }
+    else if (conn && conn.state === 'reconnecting') { title = 'Reconnecting…'; note = conn.reason || 'everything was let go; touch it again once it’s back'; bad = true; }
     else if (c && c.phone && c.phone.connected === false) { title = c.phone.name + ' is offline'; note = 'showing its last state until it reconnects'; bad = true; }
-    else if (stopOn()) { title = 'Stopped'; tone = 'stopped'; note = 'reset Stop when it’s safe to carry on'; bad = true; }
+    else if (stop.isOn()) { title = 'Stopped'; tone = 'stopped'; note = 'reset Stop when it’s safe to carry on'; bad = true; }
     else if (t && (t.message || t.state === 'unavailable')) { title = 'No tracking'; note = t.message || 'the pose can’t be trusted until tracking returns'; bad = true; }
     else if (pad === 'dropped') { title = 'Hold dropped'; note = 'the gateway stopped hearing the pad; let go and press again'; bad = true; }
     else if (drive === 'dropped') { title = 'Drive dropped'; note = 'let go of the stick and touch it again'; bad = true; }
@@ -428,431 +150,102 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     else if (t && t.state !== 'normal') { title = t.state === 'initializing' ? 'Starting up' : 'Tracking ' + (t.state === 'limited' ? 'limited' : t.state); note = rough; }
     else if (c && c.calibration.status === 'capturing') { title = 'Calibrating'; note = 'finish or cancel it in the calibration sheet'; }
     setText($('state'), title); $('state').className = 'state ' + tone;
-    setText($('state-note'), note); $('state-note').className = 'note' + (bad ? ' bad' : '');
+    setText($('state-note'), note); $('state-note').className = 'mk-note' + (bad ? ' mk-bad' : '');
   }
-  const stop = $('stop');
-  // A toggle Stop turns on; a plain Stop button (on a custom layout) just sends a press.
-  const pressStop = () => { const c = control(ACTION.estop); if (!c) return; if (c.type !== 'toggle') send(c); else if (c.value !== true) send(c, true); };
-  stop.addEventListener('pointerdown', e => { e.preventDefault(); pressStop(); });
-  stop.addEventListener('click', e => { if (e.detail === 0) pressStop(); });
-  $('estop-reset').addEventListener('click', () => send(control(ACTION.estop), false));
+  // The robot whose screen this is (or the first one connected): its name, and whether it still answers.
+  K.robot(r => {
+    $('robot').hidden = !r; if (!r) return;
+    setText($('robot-name'), r.name); setText($('robot-state'), r.offline ? ' · offline' : r.stale ? ' · not answering' : '');
+    $('robot-dot').className = 'mk-dot ' + (r.offline ? 'mk-bad' : r.stale ? 'mk-warn' : 'mk-good');
+  });
 
-  /* ---------- Pose and camera ---------- */
+  /* ---------- Pose, in millimetres in the operator frame ---------- */
   function renderPose() {
-    const p = s.pose; const v = p ? p.position : { x: 0, y: 0, z: 0 };
-    for (const axis of ['x', 'y', 'z']) {
-      const n = mm(v[axis]); setText($('pose-' + axis), signed(n));
-      const fraction = clamp(n / 250, -1, 1) * 50; const bar = $('bar-' + axis);
-      bar.style.left = (fraction < 0 ? 50 + fraction : 50) + '%'; bar.style.width = Math.abs(fraction) + '%';
-    }
-    if (s.sheet) renderSheetLive();
+    const p = K.latest('pose'); const v = p ? p.position : { x: 0, y: 0, z: 0 };
+    for (const axis of ['x', 'y', 'z']) { const n = K.mm(v[axis]); setText($('pose-' + axis), K.signed(n)); fill($('bar-' + axis), K.clamp(n / 250, -1, 1) * 50); }
   }
-  // The camera view this phone picked with the camera.view control (head cam, arm cams, …).
-  function cameraView() {
-    const c = s.config; if (!c) return undefined;
-    const pick = c.controls.find(x => x.action === 'camera.view'); const views = c.cameraViews || [];
-    return views.find(v => pick && v.id === pick.value) || views[0];
-  }
-  const frameAt = {}; let camKey = '';
-  function renderCamera() {
-    const c = s.config; const view = cameraView(); const cam = $('cam');
-    cam.hidden = !view; if (!view) return;
-    const key = view.id + ':' + view.streams.join(',');
-    if (key !== camKey) {
-      camKey = key; cam.style.setProperty('--panes', view.streams.length);
-      // Several streams side by side are small; a tap (or Enter) stacks them full width.
-      const many = view.streams.length > 1; if (!many) cam.classList.remove('big');
-      for (const [name, value] of [['role', 'button'], ['tabindex', '0'], ['aria-label', 'Cameras, tap to show them larger or smaller']]) { if (many) cam.setAttribute(name, value); else cam.removeAttribute(name); }
-      if (many) cam.setAttribute('aria-expanded', String(cam.classList.contains('big'))); else cam.removeAttribute('aria-expanded');
-      cam.replaceChildren(...view.streams.map(id => { const stream = c.cameraStreams.find(x => x.id === id); const label = stream ? stream.label : id;
-        return h('div', { class: 'pane', 'data-stream': id }, h('img', { alt: label + ' camera', hidden: true }), h('div', { class: 'empty' }, 'Waiting for ' + label.toLowerCase()), h('figcaption', { hidden: true }, label)); }));
-    }
-    // A pane rebuilt for a view switched back to has no picture yet, even if its stream was live a moment ago.
-    for (const pane of cam.children) { const img = pane.querySelector('img'); const live = !!img.getAttribute('src') && Date.now() - (frameAt[pane.dataset.stream] || 0) < 2000; img.hidden = !live; pane.querySelector('.empty').hidden = live; pane.querySelector('figcaption').hidden = !live; }
-  }
-  const toggleCameras = () => { const cam = $('cam'); if (cam.getAttribute('role') !== 'button') return; cam.setAttribute('aria-expanded', String(cam.classList.toggle('big'))); };
-  $('cam').addEventListener('click', toggleCameras);
-  $('cam').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCameras(); } });
-  setInterval(renderCamera, 1000);
+  let posePending = false;
+  K.on('pose', () => { if (posePending) return; posePending = true; requestAnimationFrame(() => { posePending = false; renderPose(); }); });
 
   /* ---------- Rows: every control without a fixed place ---------- */
   const PLACED = new Set([ACTION.deadman, ACTION.estop, ACTION.start, ACTION.capture, ACTION.cancel, ACTION.check, ACTION.origin, ACTION.clear]);
   // With a drive stick, the turn buttons and the speed limit join it in the Drive base section; without one they are ordinary controls.
-  const driveGroup = () => { const stickControl = control(ACTION.drive); if (!stickControl || stickControl.type !== 'joystick') return [];
+  const driveGroup = () => { const stick = control(ACTION.drive); if (!stick || stick.type !== 'joystick') return [];
     const turn = action => { const c = control(action); return c && c.type === 'button' && c.hold ? c : undefined; }; const speed = control(ACTION.speedLimit);
-    return [stickControl, turn(ACTION.turnLeft), turn(ACTION.turnRight), speed && speed.type === 'slider' ? speed : undefined]; };
+    return [stick, turn(ACTION.turnLeft), turn(ACTION.turnRight), speed && speed.type === 'slider' ? speed : undefined]; };
   const inDrive = c => driveGroup().includes(c);
   // The dock takes the deadman pad and up to two other hold buttons; any more get rows.
-  const dockedHoldControls = () => s.config.controls.filter(c => c.type === 'button' && c.hold && c.action !== ACTION.deadman && !inDrive(c)).slice(0, 2);
-  const inDock = c => dockedHoldControls().includes(c);
-  function rowFor(c, group = rowHolds) {
-    if (c.type === 'toggle') {
-      const sw = h('button', { class: 'switch', role: 'switch', type: 'button', 'aria-checked': String(c.value), 'aria-label': c.label, 'data-id': c.id, onclick: () => send(c, sw.getAttribute('aria-checked') !== 'true') });
-      return h('div', { class: 'row' }, h('span', {}, c.label), sw);
-    }
-    if (c.type === 'select') {
-      const field = c.options.length <= 3
-        ? h('div', { class: 'seg', role: 'group', 'aria-label': c.label, 'data-id': c.id }, c.options.map(o => h('button', { type: 'button', 'data-value': o.value, 'aria-pressed': String(o.value === c.value), onclick: () => send(c, o.value) }, o.label)))
-        : h('select', { 'data-id': c.id, 'aria-label': c.label, onchange: e => send(c, e.target.value) }, c.options.map(o => h('option', { value: o.value }, o.label)));
-      if (field.tagName === 'SELECT') field.value = c.value;
-      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label)), field);
-    }
-    if (c.type === 'slider') {
-      // Every value goes out live while the thumb is dragged; letting go (or a key press) sends the final one.
-      const out = h('span', { class: 'val', 'data-out': c.id, 'data-live': c.id }, format(c, c.value));
-      const drag = dragger(() => byId(c.id)); const finish = () => drag.end(Number(range.value));
-      const range = h('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: c.value, 'data-id': c.id, 'aria-label': c.label, oninput: e => { const value = Number(e.target.value); setText(out, format(c, value)); drag.update(value); }, onchange: finish });
-      for (const name of ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'blur']) range.addEventListener(name, finish);
-      letGoOnLeave(finish, group);
-      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), range);
-    }
-    if (c.type === 'joystick') {
-      const out = h('span', { class: 'val', 'data-live': c.id }, 'at rest');
-      const pad = stick(() => byId(c.id), group, { label: c.label, onMove: v => setText(out, v.x || v.y ? 'up ' + signed2(v.x) + ', left ' + signed2(v.y) : 'at rest') });
-      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), h('div', { class: 'stick-row' }, pad));
-    }
-    const btn = h('button', { type: 'button', class: 'row-btn wide' + (c.tone === 'danger' ? ' danger' : ''), 'data-hold': c.hold ? c.id : undefined }, c.label, c.hold ? h('small', {}, ' (hold)') : null);
-    if (c.hold) holdable(btn, () => byId(c.id), null, group); else btn.addEventListener('click', () => send(c));
-    return h('div', { class: 'row' }, btn);
-  }
-  // Values change with every config; update them in place so a drag in progress is not reset.
-  function syncValues(root, list) {
-    for (const x of list) {
-      const node = x && root.querySelector('[data-id="' + CSS.escape(x.id) + '"]'); if (!node) continue;
-      if (x.type === 'toggle') node.setAttribute('aria-checked', String(x.value));
-      if (x.type === 'select') { if (node.tagName === 'SELECT') { if (document.activeElement !== node) node.value = x.value; } else for (const b of node.children) b.setAttribute('aria-pressed', String(b.dataset.value === x.value)); }
-      if (x.type === 'slider' && document.activeElement !== node && !touching.has(x.id)) { node.value = x.value; setText(root.querySelector('[data-out="' + CSS.escape(x.id) + '"]'), format(x, x.value)); }
-    }
-  }
-  function format(c, value) { const digits = String(c.step).includes('.') ? String(c.step).split('.')[1].length : 0; return Number(value).toFixed(digits) + (c.unit || ''); }
-  function calibrationSummary() {
-    const cal = calibration(); const check = cal.check;
-    if (cal.status === 'capturing') return ['Calibrating', ''];
-    if (cal.status !== 'captured') return ['Not calibrated', ''];
-    const kind = cal.reference && cal.reference.mode === 'quick' ? 'Quick origin' : 'Guided';
-    if (check && check.step) return [kind + ', validating', ''];
-    if (check && check.passed === true) return [kind + ', validated ✓', 'ok'];
-    if (check && check.passed === false) return [kind + ', validation failed', 'bad'];
-    return [kind, ''];
-  }
+  const dockedHolds = () => K.config().controls.filter(c => c.type === 'button' && c.hold && c.action !== ACTION.deadman && !inDrive(c)).slice(0, 2);
+  const rowParts = K.group(); let rowsKey = '';
   function renderRows() {
-    const c = s.config; if (!c) return;
-    const listed = c.controls.filter(x => !PLACED.has(x.action) && !inDock(x) && !inDrive(x));
-    const hasCalibration = !!control(ACTION.start) || !!control(ACTION.origin);
-    const key = JSON.stringify([listed.map(x => [x.id, x.type, x.label, x.options, x.min, x.max, x.step]), hasCalibration]);
-    const rows = $('rows');
-    if (key !== s.rowsKey) {
-      s.rowsKey = key; disposeAll(rowHolds); rows.replaceChildren();
-      if (hasCalibration) rows.append(h('button', { type: 'button', class: 'row link', id: 'calibration-row', onclick: () => openSheet() }, h('span', {}, 'Calibration'), h('span', { class: 'val', id: 'calibration-val' })));
-      for (const x of listed) rows.append(rowFor(x));
-      rows.append(h('div', { class: 'row' }, h('span', { class: 'mono', id: 'gateway-row' }), h('button', { type: 'button', class: 'row-btn', onclick: () => window.Marionette.disconnect() }, 'Disconnect')));
+    const c = K.config(); if (!c) return;
+    const docked = dockedHolds(); const listed = c.controls.filter(x => !PLACED.has(x.action) && !docked.includes(x) && !inDrive(x));
+    const key = JSON.stringify([listed.map(x => [x.id, x.type, x.label, x.options, x.min, x.max, x.step]), calibration.available()]);
+    if (key !== rowsKey) {
+      rowsKey = key; rowParts.dispose();
+      $('rows').replaceChildren(...(calibration.available() ? [calibration.row({ group: rowParts })] : []), ...listed.map(x => K.controlRow(x, { group: rowParts })),
+        h('div', { class: 'mk-row' }, h('span', { class: 'mk-mono', id: 'gateway-row' }), h('button', { type: 'button', class: 'mk-btn', onclick: () => window.Marionette.disconnect() }, 'Disconnect')));
     }
-    syncValues(rows, listed);
-    const [summary, tone] = calibrationSummary(); const val = $('calibration-val');
-    if (val) { setText(val, summary); val.className = 'val ' + tone; }
-    setText($('gateway-row'), s.connection ? s.connection.gateway : '');
+    const conn = K.latest('connection'); setText($('gateway-row'), conn ? conn.gateway : '');
   }
 
   /* ---------- Drive base: the stick between the turn buttons, what it sends, and the speed limit ---------- */
-  let driveKey = '';
-  const readCell = (word, id, color) => h('div', {}, h('small', {}, word), h('b', { id }, '0.00'), h('span', { class: 'bar' }, h('i', { id: id + '-bar', style: 'background:' + color })));
-  function showDrive(v) {
-    for (const [id, n] of [['drive-x', v.x], ['drive-y', v.y]]) {
-      setText($(id), signed2(n)); const bar = $(id + '-bar'); const fraction = clamp(n, -1, 1) * 50;
-      bar.style.left = (fraction < 0 ? 50 + fraction : 50) + '%'; bar.style.width = Math.abs(fraction) + '%';
-    }
-  }
+  const driveParts = K.group(); let driveKey = '';
+  const readCell = (word, id, color) => h('div', {}, h('small', {}, word), h('b', { id }, '0.00'), h('span', { class: 'mk-bar' }, h('i', { id: id + '-bar', style: 'background:' + color })));
+  function showDrive(v) { for (const [id, n] of [['drive-x', v.x], ['drive-y', v.y]]) { setText($(id), K.signed2(n)); fill($(id + '-bar'), K.clamp(n, -1, 1) * 50); } }
   function renderDrive() {
-    if (!s.config) return;
+    if (!K.config()) return;
     const [drive, left, right, speed] = driveGroup(); const section = $('drive');
     const key = JSON.stringify([drive && [drive.id, drive.label], [left, right].map(x => x && [x.id, x.label]), speed && [speed.id, speed.label, speed.min, speed.max, speed.step, speed.unit]]);
     if (key !== driveKey) {
-      driveKey = key; disposeAll(driveHolds); section.replaceChildren(); section.hidden = !drive;
+      driveKey = key; driveParts.dispose(); section.replaceChildren(); section.hidden = !drive;
       if (drive) {
-        const turn = (x, glyph) => { if (!x) return h('span'); const btn = h('button', { type: 'button', class: 'hold turn', 'data-hold': x.id }, h('b', { 'aria-hidden': 'true' }, glyph), x.label); holdable(btn, () => byId(x.id), renderLive, driveHolds); return btn; };
+        const turn = (x, glyph) => (x ? K.hold(h('button', { type: 'button', class: 'hold turn' }, h('b', { 'aria-hidden': 'true' }, glyph), x.label), { controlId: x.id, group: driveParts }).el : h('span'));
         section.append(
           h('div', { class: 'drive-head' }, h('h2', {}, 'Drive base'), h('span', { class: 'drive-state', id: 'drive-state', role: 'status' })),
-          h('p', { class: 'note', id: 'drive-note' }),
-          h('div', { class: 'drive-grid' }, turn(left, '↺'), stick(() => control(ACTION.drive), driveHolds, { label: drive.label, edges: ['forward', 'back', 'left', 'right'], onMove: showDrive }), turn(right, '↻')),
+          h('p', { class: 'mk-note', id: 'drive-note' }),
+          h('div', { class: 'drive-grid' }, turn(left, '↺'), K.stick(null, { action: ACTION.drive, group: driveParts, label: drive.label, edges: ['forward', 'back', 'left', 'right'], onMove: showDrive }).el, turn(right, '↻')),
           h('div', { class: 'pose two', 'aria-label': 'What the stick is sending, from −1 to 1' }, readCell('forward', 'drive-x', 'var(--red)'), readCell('left', 'drive-y', 'var(--green)')),
-          speed ? rowFor(speed, driveHolds) : null);
+          speed ? K.controlRow(speed, { group: driveParts }) : '');
         showDrive({ x: 0, y: 0 });
       }
     }
-    syncValues(section, [speed]);
-    renderLive();
+    renderDriveState();
+  }
+  function renderDriveState() {
+    const head = $('drive-state'); if (!head) return;
+    const state = K.liveState(control(ACTION.drive)); const turning = [ACTION.turnLeft, ACTION.turnRight].map(control).find(c => K.holdState(c) === 'held');
+    const [text, note] = { idle: turning ? [turning.label.replace(/^Turn/, 'Turning'), 'let go to stop turning'] : ['', 'touch the stick and drag, let go to stop'], pending: ['Sending…', 'waiting for the gateway'], live: ['Driving', 'let go to stop'], dropped: ['Dropped', 'let go and touch it again'] }[state];
+    setText(head, text); head.className = 'drive-state ' + (state === 'idle' && turning ? 'live' : state);
+    setText($('drive-note'), note); $('drive-note').className = 'mk-note' + (state === 'dropped' ? ' mk-bad' : '');
   }
 
   /* ---------- Dock: the hold-to-move pad and other hold buttons ---------- */
-  let dockKey = '';
+  const dockParts = K.group(); let dockKey = '';
+  const PAD_TEXT = { pending: ['Holding…', 'waiting for the gateway'], held: ['Holding', 'release to let go'], dropped: ['Hold dropped', 'let go and press again'] };
   function renderDock() {
-    const c = s.config; if (!c) return;
-    const deadman = control(ACTION.deadman); const holds = dockedHoldControls();
-    const key = JSON.stringify([deadman && deadman.id, holds.map(x => [x.id, x.label])]);
-    const dock = $('dock');
+    if (!K.config()) return;
+    const deadman = control(ACTION.deadman); const holds = dockedHolds(); const dock = $('dock');
+    const key = JSON.stringify([deadman && [deadman.id, deadman.label], holds.map(x => [x.id, x.label])]);
     if (key !== dockKey) {
-      dockKey = key; disposeAll(dockHolds); dock.querySelectorAll('.pad,.hold').forEach(node => node.remove());
+      dockKey = key; dockParts.dispose(); dock.replaceChildren();
       if (deadman) {
-        const pad = h('button', { type: 'button', class: 'pad', id: 'pad', 'data-hold': deadman.id }, h('span', { id: 'pad-label' }), h('small', { id: 'pad-sub' }));
-        holdable(pad, () => control(ACTION.deadman), on => { s.padHeld = on; renderHeadline(); if (!on) renderSheet(); }, dockHolds);
-        dock.append(pad);
+        const label = h('span'), sub = h('small');
+        const showPad = state => { const [main, small] = PAD_TEXT[state] || [deadman.label, 'release to let go']; setText(label, main); setText(sub, small); };
+        dock.append(K.hold(h('button', { type: 'button', class: 'pad' }, label, sub), { action: ACTION.deadman, group: dockParts, onState: showPad }).el);
       }
-      for (const x of holds) { const btn = h('button', { type: 'button', class: 'hold', 'data-hold': x.id }, x.label); holdable(btn, () => byId(x.id), null, dockHolds); dock.append(btn); }
+      for (const x of holds) dock.append(K.hold(h('button', { type: 'button', class: 'hold' }, x.label), { controlId: x.id, group: dockParts }).el);
     }
     dock.hidden = !deadman && !holds.length;
-    renderHolds();
-  }
-  // Every hold button shows what the gateway knows: filled once it reports the hold, red if it let go while still pressed here.
-  const PAD_TEXT = { pending: ['Holding…', 'waiting for the gateway'], held: ['Holding', 'release to let go'], dropped: ['Hold dropped', 'let go and press again'] };
-  function renderHolds() {
-    if (!s.config) return;
-    for (const node of document.querySelectorAll('[data-hold]')) {
-      const state = holdState(byId(node.dataset.hold));
-      for (const name of ['pending', 'held', 'dropped']) node.classList.toggle(name, state === name);
-      node.setAttribute('aria-pressed', String(state !== 'idle'));
-    }
-    const deadman = control(ACTION.deadman); if (!$('pad') || !deadman) return;
-    const [label, sub] = PAD_TEXT[holdState(deadman)] || [deadman.label, 'release to let go'];
-    setText($('pad-label'), label); setText($('pad-sub'), sub);
-  }
-
-  /* ---------- Toasts for gateway replies that have no other home ---------- */
-  let toastTimer;
-  function toast(text) { const node = $('toast'); setText(node, text); node.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { node.hidden = true; }, 2600); }
-
-  /* ---------- Calibration and validation sheet ---------- */
-  // A drawn table seen from the operator's side: f is forward (into the page), r is right, u is up; 1 unit ≈ 1.4 mm.
-  const P = (f, r, u) => [160 + r + 0.55 * f, 160 - 0.42 * f - u];
-  const pt = (f, r, u) => P(f, r, u).map(n => n.toFixed(1)).join(' ');
-  const poly = corners => 'M' + corners.map(c => pt(...c)).join(' L') + ' Z';
-  const phoneShape = (f, r, u) => poly([[f + 40, r - 20, u], [f + 40, r + 20, u], [f - 40, r + 20, u], [f - 40, r - 20, u]]);
-  const screenShape = (f, r, u) => poly([[f + 31, r - 15, u], [f + 31, r + 15, u], [f - 33, r + 15, u], [f - 33, r - 15, u]]);
-  // A short speaker slot marks the top edge, the one that should point forward.
-  const slotShape = (f, r, u) => 'M' + pt(f + 36, r - 6, u) + ' L' + pt(f + 36, r + 6, u);
-  function arrow(from, to, color, label, labelAt) {
-    const [x1, y1] = P(...from), [x2, y2] = P(...to); const a = Math.atan2(y2 - y1, x2 - x1); const head = 10;
-    const wing = d => [x2 - head * Math.cos(a + d), y2 - head * Math.sin(a + d)].map(n => n.toFixed(1)).join(' ');
-    const [lx, ly] = labelAt ? P(...labelAt) : [x2 + 6, y2 - 4];
-    return `<path class="line" stroke="${color}" stroke-width="2.4" d="M${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)} M${wing(0.45)} L${x2.toFixed(1)} ${y2.toFixed(1)} L${wing(-0.45)}"/>` + (label ? `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="${color}">${label}</text>` : '');
-  }
-  const TARGET = { forward: [70, 0, 0], right: [0, 70, 0], up: [0, 0, 70] };
-  function scene(kind) {
-    const table = `<path class="line" stroke="#9aa1a6" stroke-width="1.4" d="${poly([[-70, -110, 0], [-70, 110, 0], [115, 110, 0], [115, -110, 0]])}"/>`;
-    let marks = '';
-    if (kind === 'flat') marks = arrow([40, 0, 0], [100, 0, 0], 'var(--red)', 'forward', [104, -6, 0]) + arrow([0, -20, 0], [0, -84, 0], 'var(--green)', 'left', [0, -124, 6]) + arrow([0, 0, 0], [0, 0, 84], 'var(--blue)', 'up', [0, 8, 86]);
-    else {
-      const target = TARGET[kind];
-      marks = `<path class="line" stroke="#6b6f73" stroke-width="1.4" stroke-dasharray="4 5" d="${phoneShape(...target)}"/>`;
-      if (kind === 'up') marks = `<path class="line" stroke="#cfd3d6" stroke-width="1.2" stroke-dasharray="2 4" d="${phoneShape(0, 0, 0)}"/>` + marks;
-      marks += arrow([0, 0, 0], kind === 'up' ? [0, 0, 56] : kind === 'right' ? [0, 52, 0] : [52, 0, 0], 'var(--blue)', kind, kind === 'up' ? [0, -54, 60] : kind === 'right' ? [-14, 76, 0] : [60, 26, 0]);
-    }
-    const note = kind === 'flat' ? 'top edge points forward, screen up' : '';
-    return `<svg class="ill" viewBox="0 0 340 230" role="img" aria-label="${kind}">
-      <defs><filter id="pencil"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="1" seed="3"/><feDisplacementMap in="SourceGraphic" scale="1.6"/></filter></defs>
-      <g filter="url(#pencil)">${table}</g>
-      <g id="live-phone"><path class="line" id="live-body" stroke="#2e3033" stroke-width="2" fill="#fff" d="${phoneShape(0, 0, 0)}"/><path id="live-screen" fill="#e9edf2" d="${screenShape(0, 0, 0)}"/><path class="line" id="live-slot" stroke="#2e3033" stroke-width="2" d="${slotShape(0, 0, 0)}"/></g>
-      <g filter="url(#pencil)">${marks}</g>
-      ${note ? `<text x="20" y="220" fill="#6b6f73" style="font-size:15px">${note}</text>` : ''}
-    </svg>`;
-  }
-  function placePhone(f, r, u) { const body = $('live-body'); if (!body) return; body.setAttribute('d', phoneShape(f, r, u)); $('live-screen').setAttribute('d', screenShape(f, r, u)); $('live-slot').setAttribute('d', slotShape(f, r, u)); }
-
-  function sheetMode() {
-    const cal = calibration();
-    if (cal.status === 'capturing') return 'capture';
-    if (cal.check && cal.check.step) return 'validate';
-    return s.sheet;
-  }
-  function openSheet(mode = 'intro') { s.sheet = mode; s.reply = undefined; renderSheet(true); }
-  function closeSheet() { s.sheet = undefined; s.reply = undefined; renderSheet(true); }
-  let sheetKey = '';
-  function renderSheet(force) {
-    const mode = sheetMode(); const sheet = $('sheet'); const cal = calibration();
-    // The gateway drives capture and validation, so a run started from the desktop opens the sheet here too.
-    if ((mode === 'capture' || mode === 'validate') && s.sheet !== mode) {
-      // A run started elsewhere waits until the operator lets go of the pad before covering the screen.
-      if (s.padHeld && !s.sheet) { $('sheet').hidden = true; return; }
-      s.sheet = mode;
-    }
-    $('app').inert = !!mode;
-    if (!mode) { sheet.hidden = true; sheet.replaceChildren(); sheetKey = ''; return; }
-    sheet.hidden = false;
-    const key = JSON.stringify([mode, cal.status, cal.step, cal.check, cal.reference && cal.reference.epoch, s.reply, control(ACTION.check) && 1, control(ACTION.origin) && 1, control(ACTION.clear) && 1]);
-    if (!force && key === sheetKey) { renderSheetLive(); return; }
-    sheetKey = key;
-    sheet.replaceChildren(...{ intro, capture, captured, validate, validated }[mode]());
-    renderSheetLive();
-  }
-  // The right side of the bar is left clear for the floating Stop button.
-  const top = (left, title, count, onLeft) => h('div', { class: 'sheet-top' }, h('button', { type: 'button', class: 'left', onclick: onLeft }, left), h('b', {}, title, count ? h('small', {}, count) : null), h('span'));
-  const svg = markup => { const box = h('div'); box.innerHTML = markup; return box.firstElementChild; };
-  const reply = () => s.reply ? h('p', { class: 'reply' + (s.reply.bad ? ' bad' : ''), role: 'status' }, s.reply.text) : null;
-
-  function intro() {
-    const cal = calibration(); const [summary, tone] = calibrationSummary();
-    const calibrated = cal.status === 'captured';
-    return [
-      top('Close', 'Calibration', '', closeSheet),
-      svg(scene('flat')),
-      h('div', { class: 'sheet-body' },
-        h('h2', { class: 'title' }, calibrated ? 'Calibrated' : 'Teach it which way is forward'),
-        h('p', { class: 'body' }, 'Four short moves with the phone in your hand: flat, forward, right, up. It takes about a minute and sets which way is forward for this phone’s pose.'),
-        h('div', { class: 'frame-status' }, h('span', {}, 'Now using'), h('b', { class: tone }, summary === 'Not calibrated' ? 'the phone’s start position' : summary)),
-        reply()),
-      h('div', { class: 'sheet-foot' },
-        control(ACTION.start) && h('button', { type: 'button', class: 'cta', onclick: () => { s.reply = undefined; send(control(ACTION.start)); } }, calibrated ? 'Calibrate again' : 'Start calibration'),
-        calibrated && control(ACTION.check) && h('button', { type: 'button', class: 'cta quiet', onclick: () => { s.reply = undefined; send(control(ACTION.check)); } }, 'Validate'),
-        h('div', { class: 'links' },
-          control(ACTION.origin) && h('button', { type: 'button', onclick: () => send(control(ACTION.origin)) }, 'Set origin here'),
-          calibrated && control(ACTION.clear) && h('button', { type: 'button', class: 'danger', onclick: () => send(control(ACTION.clear)) }, 'Reset'))),
-    ];
-  }
-  function stepTrack(list, current, done) { return h('div', { class: 'track' }, list.map(name => { const state = done(name); return h('span', { class: name === current ? 'cur' : state || '' }, name === current ? h('em', {}, cap(name)) : cap(name) + (state === 'pass' ? ' ✓' : state === 'fail' ? ' ✗' : '')); })); }
-  const cap = word => word[0].toUpperCase() + word.slice(1);
-  function capture() {
-    const cal = calibration(); const step = cal.step || 'flat'; const index = STEPS.indexOf(step);
-    const copy = STEP_COPY[step];
-    return [
-      top('Cancel', 'Calibrate', (index + 1) + ' of 4', () => { send(control(ACTION.cancel)); closeSheet(); }),
-      stepTrack(STEPS, step, name => STEPS.indexOf(name) < index ? 'done' : ''),
-      svg(scene(step)),
-      h('div', { class: 'sheet-body' },
-        h('h2', { class: 'title' }, copy.title), h('p', { class: 'body' }, copy.body),
-        h('div', { class: 'meter', id: 'meter' }, h('div', { class: 'meter-top' }, h('span', { id: 'meter-label' }), h('span', {}, h('b', { id: 'meter-value' }), h('span', { id: 'meter-unit' }))), h('div', { class: 'meter-bar' }, h('i', { id: 'meter-fill' }), h('s', { id: 'meter-tick' })), h('p', { class: 'note', id: 'meter-note' })),
-        reply()),
-      h('div', { class: 'sheet-foot' }, h('button', { type: 'button', class: 'cta', id: 'cta', onclick: () => send(control(ACTION.capture), step) }, copy.cta)),
-    ];
-  }
-  function captured() {
-    return [
-      top('Close', 'Calibrate', '', closeSheet),
-      svg(scene('flat')),
-      h('div', { class: 'sheet-body' }, h('h2', { class: 'title' }, 'Calibrated'), h('p', { class: 'body' }, 'Forward, left and up now follow how you held the phone.'), reply()),
-      h('div', { class: 'sheet-foot' },
-        h('button', { type: 'button', class: 'cta', onclick: closeSheet }, 'Done'),
-        control(ACTION.check) && h('button', { type: 'button', class: 'cta quiet', onclick: () => { s.reply = undefined; send(control(ACTION.check)); } }, 'Validate (optional)')),
-    ];
-  }
-  const resultState = move => { const r = (calibration().check || { results: [] }).results.find(x => x.move === move); return r ? (r.passed ? 'pass' : 'fail') : ''; };
-  function validate() {
-    const check = calibration().check; const move = check.step; const index = MOVES.indexOf(move);
-    return [
-      top('Cancel', 'Validate', (index + 1) + ' of 3', () => { send(control(ACTION.check), 'cancel'); closeSheet(); }),
-      stepTrack(MOVES, move, resultState),
-      svg(scene(move)),
-      h('div', { class: 'sheet-body' },
-        h('h2', { class: 'title' }, MOVE_COPY[move].title), h('p', { class: 'body' }, MOVE_COPY[move].body),
-        h('div', { class: 'axes', id: 'axes' }, [['x', 'forward', 'var(--red)'], ['y', 'left', 'var(--green)'], ['z', 'up', 'var(--blue)']].map(([axis, word, color]) =>
-          h('div', { class: 'axis', id: 'axis-' + axis }, h('span', {}, word), h('span', { class: 'bar' }, h('i', { id: 'axis-bar-' + axis, style: 'background:' + color })), h('b', { id: 'axis-val-' + axis })))),
-        h('p', { class: 'note', id: 'axes-note' }),
-        reply()),
-      h('div', { class: 'sheet-foot' }, h('button', { type: 'button', class: 'cta', id: 'cta', onclick: () => send(control(ACTION.check), move) }, 'Check ' + move)),
-    ];
-  }
-  function validated() {
-    const check = calibration().check || { results: [] }; const passed = check.passed;
-    const failed = check.results.filter(r => !r.passed);
-    return [
-      top('Close', 'Validate', '', closeSheet),
-      stepTrack(MOVES, undefined, resultState),
-      h('div', { class: 'sheet-body' },
-        h('h2', { class: 'title' + (passed ? ' ok' : ' bad') }, passed ? 'Validated ✓' : 'That didn’t line up'),
-        h('p', { class: 'body' }, passed ? 'Forward, right and up each moved along the axis they should.' : failed.map(r => cap(r.move) + ' went ' + AXIS_WORDS[r.dominant] + '.').join(' ') + ' Calibrate again and keep each move straight.'),
-        h('ul', { class: 'results' }, check.results.map(r => { const d = r.displacement; const along = Math.round(Math.hypot(d.x, d.y, d.z) * 1000); return h('li', {}, h('span', {}, cap(r.move)), h('span', { class: r.passed ? 'ok' : 'bad' }, AXIS_WORDS[r.dominant] + ' (' + r.dominant.replace('-', '−') + '), ' + along + ' mm ' + (r.passed ? '✓' : '✗'))); }))),
-      h('div', { class: 'sheet-foot' },
-        h('button', { type: 'button', class: 'cta', onclick: passed ? closeSheet : () => { s.reply = undefined; send(control(ACTION.start)); } }, passed ? 'Done' : 'Calibrate again'),
-        !passed && h('button', { type: 'button', class: 'cta quiet', onclick: closeSheet }, 'Not now')),
-    ];
-  }
-
-  // Live parts of the sheet, updated with every pose.
-  function renderSheetLive() {
-    const mode = sheetMode(); const p = s.pose; const cal = calibration();
-    const tracking = s.tracking ? s.tracking.state : (p ? p.trackingState : 'initializing');
-    const usable = canCalibrate(tracking, s.tracking ? s.tracking.source : p && p.source);
-    const cta = $('cta');
-    if (cta) cta.disabled = !usable;
-    if (mode === 'capture' && p) {
-      const step = cal.step || 'flat'; const a = cal.anchor; const v = p.position;
-      let label = 'Moved', value = 0, unit = ' mm of ' + TARGET_MM, ready = false, note = '', progress = 0;
-      if (step === 'flat') {
-        const screen = screenDirection(p); const tilt = Math.round(Math.acos(clamp(screen.z, -1, 1)) * 180 / Math.PI);
-        label = 'Tilt'; value = tilt; unit = '°'; ready = tilt <= FLAT_DEG; progress = 1 - clamp(tilt / 90, 0, 1);
-        note = ready ? 'flat enough, capture when ready' : 'hold it flatter, screen up';
-        placePhone(0, 0, 0);
-      } else if (a) {
-        const d = { x: v.x - a.x, y: v.y - a.y, z: v.z - a.z };
-        if (step === 'up') { value = mm(d.z); placePhone(0, 0, clamp(value * 0.7, 0, 110)); }
-        else if (step === 'right' && s.forwardAt) {
-          // Right is measured across the forward direction just captured, so leftover forward travel does not count.
-          const f = { x: s.forwardAt.x - a.x, y: s.forwardAt.y - a.y }; const len = Math.hypot(f.x, f.y) || 1; const fx = f.x / len, fy = f.y / len;
-          value = mm(d.x * fy - d.y * fx); const along = mm(d.x * fx + d.y * fy);
-          if (Math.abs(along) > 40) note = 'go back to the flat spot first';
-          placePhone(clamp(along * 0.7, -60, 110), clamp(value * 0.7, -90, 110), 0);
-        } else { value = mm(Math.hypot(d.x, d.y)); placePhone(step === 'forward' ? clamp(value * 0.7, 0, 110) : 0, step === 'right' ? clamp(value * 0.7, 0, 110) : 0, 0); }
-        ready = value >= MIN_MM; progress = clamp(value / TARGET_MM, 0, 1);
-        if (!note) note = ready ? 'that’s enough, capture when steady' : MIN_MM + ' mm is enough to capture';
-      }
-      if (!usable) note = 'waiting for tracking';
-      // A blind camera barely registers the move, so say why the meter is stuck.
-      else if (tracking === 'limited' && step !== 'flat' && !ready) note = 'tracking is limited, hold the phone up so the camera sees the room';
-      setText($('meter-label'), label); setText($('meter-value'), String(value)); setText($('meter-unit'), unit);
-      $('meter-fill').style.width = (progress * 100).toFixed(1) + '%';
-      const tick = $('meter-tick'); tick.hidden = step === 'flat'; tick.style.left = (MIN_MM / TARGET_MM * 100) + '%';
-      $('meter').className = 'meter' + (ready ? ' ready' : ''); setText($('meter-note'), note);
-    }
-    if (mode === 'validate' && p) {
-      const move = cal.check.step; const v = p.position; const lead = dominant(v); const [expectAxis, expectSign] = EXPECTED[move];
-      for (const axis of ['x', 'y', 'z']) {
-        const n = mm(v[axis]); const fraction = clamp(n / 150, -1, 1) * 50; const bar = $('axis-bar-' + axis);
-        bar.style.left = (fraction < 0 ? 50 + fraction : 50) + '%'; bar.style.width = Math.abs(fraction) + '%';
-        setText($('axis-val-' + axis), signed(n)); $('axis-' + axis).className = 'axis' + (lead[1].toLowerCase() === axis ? ' lead' : '');
-      }
-      const travel = Math.round(Math.hypot(v.x, v.y, v.z) * 1000);
-      const good = lead === (expectSign > 0 ? '+' : '-') + expectAxis.toUpperCase();
-      setText($('axes-note'), !usable ? 'waiting for tracking' : travel < MIN_MM ? 'start from the flat spot' : good ? 'moving ' + AXIS_WORDS[lead] + ', ' + travel + ' mm' : travel + ' mm ' + AXIS_WORDS[lead] + ' of the flat spot, go back to it first');
-      // The drawn phone follows the calibrated position, so a wrong frame shows up as the phone sliding the wrong way.
-      placePhone(clamp(v.x * 700, -60, 110), clamp(-v.y * 700, -100, 110), clamp(v.z * 700, -10, 110));
-    }
   }
 
   /* ---------- Bridge wiring ---------- */
-  const boot = () => {
-    const M = window.Marionette; if (!M || boot.done) return; boot.done = true;
-    M.on('connection', c => { s.connection = c; renderStrip(); renderHeadline(); renderRows(); renderHolds(); renderLive(); });
-    M.on('tracking', t => { s.tracking = t; renderStrip(); renderHeadline(); renderDock(); if (s.sheet) renderSheetLive(); });
-    M.on('camera_frame', m => {
-      const view = cameraView(); if (!view || view.streams.indexOf(m.cameraId) < 0) return;
-      const pane = $('cam').querySelector('[data-stream="' + CSS.escape(m.cameraId) + '"]'); if (!pane) { renderCamera(); return; }
-      pane.querySelector('img').src = m.dataUrl; const fresh = Date.now() - (frameAt[m.cameraId] || 0) >= 2000; frameAt[m.cameraId] = Date.now(); if (fresh) renderCamera();
-    });
-    let posePending = false;
-    M.on('pose', p => { s.pose = p; if (posePending) return; posePending = true; requestAnimationFrame(() => { posePending = false; renderPose(); }); });
-    M.on('config', c => {
-      const before = s.config ? s.config.calibration : undefined; s.config = c; const cal = c.calibration;
-      for (const id of pressed.keys()) { const x = byId(id); if (x && x.held) pressed.set(id, true); }
-      for (const id of touching.keys()) { const x = byId(id); if (x && x.live) touching.set(id, true); }
-      // Remember where the phone was when forward was captured, to measure the right step across it.
-      if (before && before.step === 'forward' && cal.step === 'right' && s.pose) s.forwardAt = s.pose.position;
-      if (cal.status !== 'capturing') s.forwardAt = undefined;
-      if (before && before.status === 'capturing' && cal.status === 'captured' && s.sheet === 'capture' && cal.reference && (!before.reference || before.reference.epoch !== cal.reference.epoch)) s.sheet = 'captured';
-      else if (before && before.status === 'capturing' && cal.status !== 'capturing' && s.sheet === 'capture') s.sheet = undefined;
-      if (before && before.check && before.check.step && cal.check && cal.check.passed !== undefined) s.sheet = 'validated';
-      else if (before && before.check && before.check.step && !(cal.check && cal.check.step) && s.sheet === 'validate') s.sheet = undefined;
-      if (before && (before.step !== cal.step || (before.check && before.check.step) !== (cal.check && cal.check.step))) s.reply = undefined;
-      renderStrip(); renderHeadline(); renderRows(); renderDrive(); renderDock(); renderCamera(); renderSheet();
-    });
-    M.on('status', m => {
-      const c = s.config; const from = m.controlId && c && c.controls.find(x => x.id === m.controlId);
-      // Every gateway reply says whether it did what was asked; a refusal is shown where the operator is looking.
-      const refused = !!(m.values && m.values.accepted === false);
-      if (from && (from.action === ACTION.capture || from.action === ACTION.check)) { s.reply = refused ? { text: m.message, bad: true } : undefined; renderSheet(); return; }
-      if (from && (from.action === ACTION.start || from.action === ACTION.origin || from.action === ACTION.clear || from.action === ACTION.cancel)) { if (s.sheet === 'intro') { s.reply = { text: m.message, bad: refused }; renderSheet(); } else if (!s.sheet) toast(m.message); return; }
-      if (m.message === 'Connected to Marionette gateway') return;
-      toast(m.message);
-    });
-  };
-  if (window.Marionette) boot(); else window.addEventListener('marionette-ready', boot, { once: true });
+  K.on('config', () => { renderRows(); renderDrive(); renderDock(); renderHeadline(); });
+  K.on('connection', () => { renderRows(); renderHeadline(); });
+  K.on('tracking', renderHeadline);
+  K.on('touch', () => { renderDriveState(); renderHeadline(); });
+  // Gateway replies with no other home (calibration's own go to its sheet) are shown as a toast.
+  K.on('status', m => { if (calibration.handles(m) || m.message === 'Connected to Marionette gateway') return; K.toast(m.message); });
 })();
 </script>
 </body>
