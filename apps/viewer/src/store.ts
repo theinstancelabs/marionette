@@ -1,10 +1,11 @@
 import { defaultConfig, sanitizeConfig, validateCameraFrame, validateInput, validatePose, validateStatus, type ConfigMessage, type InputMessage, type PhoneInfo, type PosePacket, type StatusMessage, type UiControl } from '@marionette/protocol';
 import { EventJournal, configEvents, inputDraft, phoneEvents, phoneState, rosterEvents, statusDraft, type ConsoleEvent, type EventDraft, type PhoneState, type Tone } from './events';
 import { frameKey, trimBefore, type Sample } from './motion';
-import { rosterPhones, type Phone } from './phones';
+import { rosterPhones, safeColor, type Phone } from './phones';
 import { SIM_PHONES, simulatedConfig, simulatedGatewayConfig, simulatedHolds, simulatedRoster, simulationPose } from './simulation';
 
-export type InputRecord = { at: number; input: InputMessage };
+/** `id` is unique for the store's lifetime, so lists can key on it. */
+export type InputRecord = { id: number; at: number; input: InputMessage };
 /** Fast-changing telemetry of one phone. Kept out of React state; views read it in their own frame loops. */
 export type PhoneLive = {
   pose?: PosePacket; poseAt: number; trail: Sample[]; history: Sample[];
@@ -46,6 +47,9 @@ export class ViewerStore {
   config: ConfigMessage = defaultConfig();
   phoneConfigs: Record<string, ConfigMessage> = {};
   readonly journal: EventJournal;
+  /** Every phone this session has named, so log lines keep the name of a phone that has left the roster. */
+  readonly seen = new Map<string, { name: string; color: string }>();
+  private inputSeq = 1;
   private sim?: { start: number; seq: number; renewedAt: number };
 
   constructor(private readonly listener: { onConfigs?: () => void; onEvents: (batch: ConsoleEvent[]) => void }, private readonly clocks: Clocks = systemClocks) {
@@ -55,7 +59,7 @@ export class ViewerStore {
 
   reset() {
     this.live = { phones: new Map(), cameras: new Map(), startedAt: this.clocks.wall() };
-    this.journal.clear(); this.sim = undefined;
+    this.journal.clear(); this.sim = undefined; this.seen.clear();
     this.config = defaultConfig(); this.phoneConfigs = {}; this.listener.onConfigs?.();
   }
 
@@ -129,12 +133,14 @@ export class ViewerStore {
     phone.lastInputAt = at;
     if (input.renew) return;
     const control = this.control(input.phoneId, input.controlId);
-    const wasHeld = phone.holding.has(input.controlId);
+    // The gateway relays an input before acting on it, so its config still shows a hold this input ends.
+    // That also covers a hold that was already on when this viewer connected.
+    const wasHeld = phone.holding.has(input.controlId) || (control?.type === 'button' && !!control.held);
     if (control?.type === 'button' && control.hold) { if (input.value === false) phone.holding.delete(input.controlId); else phone.holding.add(input.controlId); }
     // A slider being dragged is one entry that keeps its latest value.
     const last = phone.inputs.at(-1);
-    if (last && last.input.controlId === input.controlId && typeof input.value === 'number' && typeof last.input.value === 'number' && at - last.at < 1000) phone.inputs[phone.inputs.length - 1] = { at, input };
-    else { phone.inputs.push({ at, input }); if (phone.inputs.length > MAX_INPUTS) phone.inputs.shift(); }
+    if (last && last.input.controlId === input.controlId && typeof input.value === 'number' && typeof last.input.value === 'number' && at - last.at < 1000) phone.inputs[phone.inputs.length - 1] = { id: last.id, at, input };
+    else { phone.inputs.push({ id: this.inputSeq++, at, input }); if (phone.inputs.length > MAX_INPUTS) phone.inputs.shift(); }
     const draft = inputDraft(input, control, wasHeld);
     if (draft) this.propose([draft]);
   }
@@ -147,12 +153,16 @@ export class ViewerStore {
     const gone = this.config.phones.filter(phone => !listed.has(phone.id)).map(phone => phone.id);
     for (const id of gone) this.live.phones.delete(id);
     if (gone.some(id => id in this.phoneConfigs)) this.phoneConfigs = Object.fromEntries(Object.entries(this.phoneConfigs).filter(([id]) => !gone.includes(id)));
+    this.remember(next.phones);
     this.config = next; this.listener.onConfigs?.();
   }
+
+  private remember(phones: PhoneInfo[]) { for (const phone of phones) this.seen.set(phone.id, { name: phone.name, color: safeColor(phone.color) }); }
 
   applyPhoneConfig(next: PhoneConfig) {
     const id = next.phone.id; const prev = this.phoneConfigs[id];
     if (prev) this.propose(configEvents(prev, next), id);
+    this.remember([next.phone]);
     this.phoneConfigs = { ...this.phoneConfigs, [id]: next }; this.listener.onConfigs?.();
   }
 

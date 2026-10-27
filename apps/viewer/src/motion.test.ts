@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { PosePacket } from '@marionette/protocol';
-import { frameKey, niceRange, recentMotion, signed, stepProgressMm, tiltDegrees, trimBefore, type Sample } from './motion';
+import { frameKey, niceRange, recentMotion, signed, stepProgressMm, tiltDegrees, trackingValue, trimBefore, type Sample } from './motion';
 
 const at = (t: number, x: number, y = 0, z = 0, key = 'a'): Sample => ({ t, p: { x, y, z }, key });
 
 describe('motion summaries', () => {
+  it('says how a phone is tracking and where its pose comes from', () => {
+    expect(trackingValue('normal', 'arkit')).toBe('Good, ARKit');
+    expect(trackingValue('limited', 'synthetic')).toBe('Limited, synthetic');
+    expect(trackingValue('unavailable', 'arkit')).toBe('None');
+  });
+
   it('formats signed numbers with a real minus and no negative zero', () => {
     expect(signed(12.44, 1)).toBe('+12.4');
     expect(signed(-3.06, 1)).toBe('−3.1');

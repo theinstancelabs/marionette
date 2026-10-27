@@ -19,7 +19,7 @@ function App() {
   }), []);
   const gw = useGateway(remember);
   const inConsole = gw.phase === 'live' || gw.phase === 'sim';
-  useEffect(() => { document.title = gw.phase === 'live' && gw.url ? `${gatewayLabel(gw.url)} · Marionette` : gw.phase === 'sim' ? 'Simulated phones · Marionette' : 'Connect · Marionette'; }, [gw.phase, gw.url]);
+  useEffect(() => { document.title = gw.phase === 'live' && gw.url ? `${gatewayLabel(gw.url)} – Marionette` : gw.phase === 'sim' ? 'Simulated phones – Marionette' : 'Connect – Marionette'; }, [gw.phase, gw.url]);
   return inConsole ? <Console gw={gw} /> : <ConnectPage gw={gw} recent={recent} />;
 }
 

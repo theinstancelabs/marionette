@@ -1,7 +1,7 @@
 import React from 'react';
 import { CALIBRATION_STEPS, CALIBRATION_STEP_TEXT, CHECK_EXPECTED_AXIS, CHECK_MOVE_TEXT, MIN_CALIBRATION_STEP_M, describeCheckResult, dominantAxis, metersToMillimeters, type ConfigMessage, type UiControl, type Vector3 } from '@marionette/protocol';
 import { inputText, knownStep, valueText } from './events';
-import { AXIS_WORD, TRACKING_WORDS, axisText, recentMotion, signed, stepProgressMm, tiltDegrees } from './motion';
+import { AXIS_WORD, axisText, recentMotion, signed, stepProgressMm, tiltDegrees, trackingValue } from './motion';
 import { stopOn, type Phone } from './phones';
 import type { PhoneLive } from './store';
 import { PhoneDot, ago, clock } from './ui';
@@ -26,8 +26,8 @@ function PhoneTabs({ phones, selected, onSelect }: { phones: Phone[]; selected?:
   return <div className="ptabs" role="tablist" aria-label="Phones">
     {phones.map((phone, index) => {
       const on = phone.id === selected; const stop = stopOn(phone.config);
-      return <button key={phone.id} type="button" role="tab" data-phone={phone.id} aria-selected={on} tabIndex={on ? 0 : -1} className={`${on ? 'on' : ''} ${phone.connected ? '' : 'off'}`}
-        title={phone.connected ? undefined : `${phone.name} is disconnected`} onClick={() => onSelect(phone.id)} onKeyDown={event => move(event, index)}>
+      return <button key={phone.id} type="button" role="tab" data-phone={phone.id} aria-selected={on} aria-controls="inspector-panel" tabIndex={on ? 0 : -1} className={`${on ? 'on' : ''} ${phone.connected ? '' : 'off'}`}
+        title={[phone.name, !phone.connected && 'disconnected', stop && 'Stop on'].filter(Boolean).join(', ')} onClick={() => onSelect(phone.id)} onKeyDown={event => move(event, index)}>
         <PhoneDot color={phone.color} muted={!phone.connected} /><span className="tab-name">{phone.name}</span>{stop && <i className="tab-stop" role="img" aria-label="Stop on" title="Stop on" />}
       </button>;
     })}
@@ -38,7 +38,7 @@ function PoseSection({ phone, live, selected }: { phone: Phone; live?: PhoneLive
   const pose = live?.pose; const present = !!live?.presence.present && phone.connected;
   const mm = pose ? metersToMillimeters(pose.position) : undefined;
   const motion = live ? recentMotion(live.trail, performance.now()) : { state: 'unknown' as const };
-  const tracking = !phone.connected ? 'Disconnected' : present && pose ? TRACKING_WORDS[pose.trackingState] : 'No pose';
+  const tracking = !phone.connected ? 'Disconnected' : present && pose ? trackingValue(pose.trackingState, pose.source) : 'No pose';
   return <section id="inspector-pose" className={`section ${present ? '' : 'stale'}`}>
     <Head title="Pose" note="operator frame, mm" selected={selected} />
     <div className="big3">
@@ -98,10 +98,9 @@ function CalibrationSection({ config, live, selected, simulated }: { config?: Co
   const current = capturing ? CALIBRATION_STEPS.indexOf(step) : guidedDone ? CALIBRATION_STEPS.length : -1;
   const results = c.check?.results ?? [];
   const failed = results.filter(result => !result.passed);
-  const shownInstruction = capturing ? CALIBRATION_STEP_TEXT[step].instruction : validating && c.check?.step ? CHECK_MOVE_TEXT[c.check.step].instruction : undefined;
-  // Refusals stay in view for a while; other replies only while a step is in progress, and only when they add to the instruction.
-  const recent = live?.reply && Date.now() - live.reply.at < 30_000 ? live.reply : undefined;
-  const reply = recent && (recent.tone === 'fail' || ((capturing || validating) && recent.message !== shownInstruction)) ? recent : undefined;
+  // A refusal stays in view until the gateway's next reply. Accepted replies only restate the instruction
+  // and the results shown here (the event log keeps them).
+  const reply = live?.reply && live.reply.tone === 'fail' && Date.now() - live.reply.at < 30_000 ? live.reply : undefined;
 
   let body: React.ReactNode;
   if (capturing) {
@@ -172,9 +171,9 @@ function InputsSection({ config, live, selected }: { config?: ConfigMessage; liv
   return <section id="inspector-inputs" className="section">
     <Head title="Recent inputs" note="repeats of a hold left out" selected={selected} />
     {!records.length ? <p className="empty">No inputs yet.</p>
-      : <ol className="inputs">{records.map(({ at, input }) => {
+      : <ol className="inputs">{records.map(({ id, at, input }) => {
           const control = config?.controls.find(candidate => candidate.id === input.controlId);
-          return <li key={`${at}-${input.controlId}-${String(input.value)}`} className={input.source === 'gateway' ? 'inferred' : undefined}>
+          return <li key={id} className={input.source === 'gateway' ? 'inferred' : undefined}>
             <time className="num" dateTime={new Date(at).toISOString()}>{clock(at)}</time>
             <span className="what"><b>{control?.label ?? input.action}</b> {inputText(input, control)}</span>
           </li>;
@@ -190,7 +189,8 @@ export function Inspector({ phones, selected, onSelect, live, section, simulated
   const phoneLive = live(selected.id);
   return <aside className="inspector" aria-label={`Inspector, ${selected.name}`}>
     <PhoneTabs phones={phones} selected={selected.id} onSelect={onSelect} />
-    <div role="tabpanel" aria-label={selected.name}>
+    <div id="inspector-panel" role="tabpanel" aria-label={selected.name}>
+      {stopOn(selected.config) && <p className="stop-note"><b>Stop is on</b> for {selected.name}. What it stops is up to the consumer.</p>}
       {!selected.connected && <p className="gone-note">{selected.name} is disconnected. Showing what it last sent.</p>}
       <PoseSection phone={selected} live={phoneLive} selected={section === 'pose'} />
       <CalibrationSection config={selected.config} live={phoneLive} selected={section === 'calibration'} simulated={simulated} />

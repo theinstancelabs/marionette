@@ -1,10 +1,16 @@
-import { dominantAxis, phoneAxes, type AxisLabel, type CalibrationStep, type PosePacket, type Quaternion, type TrackingState, type Vector3 } from '@marionette/protocol';
+import { dominantAxis, phoneAxes, type AxisLabel, type CalibrationStep, type PosePacket, type PoseSource, type Quaternion, type TrackingState, type Vector3 } from '@marionette/protocol';
 
 /** One published position, stamped with the viewer's clock (ms) and the frame it is expressed in. */
 export type Sample = { t: number; p: Vector3; key: string };
 
 export const AXIS_WORD: Record<AxisLabel, string> = { '+X': 'forward', '-X': 'back', '+Y': 'left', '-Y': 'right', '+Z': 'up', '-Z': 'down' };
 export const TRACKING_WORDS: Record<TrackingState, string> = { normal: 'Tracking good', limited: 'Tracking limited', initializing: 'Tracking starting', relocalizing: 'Relocalizing', unavailable: 'No tracking' };
+const TRACKING_VALUE: Record<TrackingState, string> = { normal: 'Good', limited: 'Limited', initializing: 'Starting', relocalizing: 'Relocalizing', unavailable: 'None' };
+const SOURCE_WORDS: Record<PoseSource, string> = { arkit: 'ARKit', 'device-motion': 'device motion', synthetic: 'synthetic' };
+/** The value of a "Tracking" row: "Good, ARKit", "Limited, synthetic". */
+export function trackingValue(state: TrackingState, source: PoseSource): string {
+  return state === 'unavailable' ? 'None' : `${TRACKING_VALUE[state]}, ${SOURCE_WORDS[source] ?? source}`;
+}
 
 const MINUS = '−';
 /** "+12.4", "−3.1", "0.0": a real minus sign, and never a negative zero. */

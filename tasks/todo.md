@@ -135,5 +135,27 @@ Mockup approved (viewer with two phones, the phones' identity chip and color rul
 - [x] Viewer (Opus 5.5 xhigh subagent): per-phone store, phone pills, per-phone streams tree, stations in 3D with Overlay, per-phone plot strips, camera panel with its own view, read-only inspector with phone tabs, phone-tagged events, two simulated phones. 56 tests.
 - [x] README rewritten (several phones, consuming Marionette with a message table, ROS 2, cameras, custom screens with declared controls).
 - [x] Review subagent A (gateway, protocol, phone screen, app, bridge): 7 P1s and many P2s fixed (see below).
-- [ ] Review subagent B (viewer UI/UX and integration with the reviewed gateway).
+- [x] Review subagent B (viewer UI/UX and integration with the reviewed gateway): 2 P1s and about a dozen P2s fixed; 65 viewer tests.
 - [x] Device build r8 with the review fixes, installed on the iPhone (not launched).
+
+## Review (round 5)
+- **Design:** the gateway is a relay. Per-phone pose and input streams, tagged with the phone, go to consoles. Marionette keeps values, hold liveness and calibration, and decides nothing about motion: no Stop latch, no deadman gating, no arbitration, no clutch. Several phones connect at once, each with its own identity and color.
+- **Review A** (gateway, protocol, phone screen, app, bridge) fixed 7 P1s:
+  - script injection through `/screen?phone=`
+  - consoles missing phone configs on disconnect and reconnect
+  - the app could lock onto another phone's identity after a slow hello
+  - best-effort ROS poses that reliable subscribers never receive
+  - no latched per-phone ROS state for late starters
+  - bridge crashes and stale latched topics when the gateway drops
+  - a pad stuck on "Holding…" after the gateway dropped a hold
+
+  It also fixed P2s: takeover resets, hot-reload edge cases, CORS limited to the WebSocket origin rule, uncropped 16:9 camera panes, headline priorities, and bridge shutdown and address parsing.
+- **Review B** (viewer) fixed 2 P1s, Stop clipped in the top bar with many phones and Stop not shown clearly in the inspector, plus P2s: 3D label collisions, a WebGL context leak, duplicate release lines, takeover narration, duplicated calibration instructions, tab overflow, copy and accessibility.
+- **Verification:** gateway 25, viewer 65, protocol 20 and bridge tests pass; typecheck, lint and build are clean. Live checks used two to six scripted phones, the `/screen` mirror and the bridge in dry-run mode. Device build r8 is installed on the iPhone.
+- **Docs and tools:** README (several phones, consuming Marionette, ROS 2, cameras, custom screens, developing without iPhones), `docs/INTEGRATION.md` for the robot-side agent, `tools/phone-sim.mts` and `tools/act.mts`.
+- **Repo:** pushed to `theinstancelabs/marionette` (private).
+- **Incidents:** the viewer subagent briefly killed OpenClaw on port 18791, and launchd restarted it (lesson recorded). The 8787 gateway and the 15173 viewer each hit the background time limit once and were restarted with longer limits.
+- **Not done or known limits:**
+  - The rclpy bridge has never run under real ROS 2.
+  - A device id restored from a backup clones a phone's identity.
+  - On-device test with two real iPhones.

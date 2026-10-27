@@ -41,6 +41,24 @@ function roundedRect(length: number, width: number, radius: number): THREE.Shape
 }
 const tint = (color: string, amount: number) => new THREE.Color(0xffffff).lerp(new THREE.Color(color), amount);
 
+type Box = { left: number; right: number; top: number; bottom: number };
+/** A station label hangs this many label heights below its anchor, and each further row one more. */
+const LABEL_DROP = 1.15, LABEL_ROW = 0.95;
+/**
+ * The first row, from 0 down to `maxRow`, where a label at screen point (`x`, `y`) clears every label in
+ * `placed`; adds its box there. `cx` is the fraction of its `width` to the left of the anchor. Only the
+ * middle 70% of a label's height holds glyphs, so neighbouring rows do not count as touching.
+ */
+export function placeLabel(placed: Box[], label: { x: number; y: number; cx: number; width: number; height: number }, maxRow: number): number {
+  const { x, y, cx, width, height } = label; let row = 0; let box: Box;
+  for (;; row++) {
+    const top = y + (LABEL_DROP - 1 + row * LABEL_ROW) * height;
+    box = { left: x - cx * width - 4, right: x + (1 - cx) * width + 4, top: top + 0.15 * height, bottom: top + 0.85 * height };
+    if (row >= maxRow || !placed.some(other => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top)) break;
+  }
+  placed.push(box); return row;
+}
+
 /** Handwritten label drawn into a canvas, kept a constant size on screen. A `dot` draws a phone's color before the text. */
 class Label {
   readonly sprite: THREE.Sprite; readonly direction = new THREE.Vector3();
@@ -51,6 +69,8 @@ class Label {
     this.sprite.center.set(0, 0.5); this.sprite.renderOrder = 10; this.draw();
   }
   setText(text: string) { if (text === this.text) return; this.text = text; this.draw(); }
+  /** On-screen size in CSS pixels; the glyphs fill about the middle 70% of the height. */
+  pixelSize(): { width: number; height: number } { const height = this.px * 108 / 72; return { width: height * this.aspect, height }; }
   draw() {
     const font = '400 72px Kalam, Noteworthy, "Bradley Hand", cursive'; const ctx = this.canvas.getContext('2d')!;
     const indent = this.dot ? 52 : 0;
@@ -280,18 +300,23 @@ export class SpatialView {
     // Phones that went away lose their rigs; a phone whose color changed gets a new one.
     const ids = new Set(phones.map(phone => phone.id));
     for (const [id, rig] of this.rigs) if (!ids.has(id) || phones.find(phone => phone.id === id)!.color !== rig.color) { rig.dispose(); this.rigs.delete(id); }
-    // Stations that land on the same spot on screen (Overlay, or the Side view) stack their labels;
-    // otherwise each label grows away from the centre, clear of the frame axis labels.
-    const stacked = this.view === 'side' || phones.every(phone => phone.offset === phones[0].offset);
+    // Each station label grows away from the centre, clear of the frame axis labels (or straight down in
+    // the Side view and wherever a station sits at the centre), then drops a row at a time until it clears
+    // the labels placed before it. Overlay stacks them; neighbours in the Top view take turns.
+    const width = Math.max(1, this.host.clientWidth), height = Math.max(1, this.host.clientHeight);
     const origin = this.projected.origin.set(0, 0, 0).applyMatrix4(this.operator.matrixWorld).project(this.camera);
+    const placed: Box[] = [];
     let refit = false;
-    phones.forEach((phone, index) => {
+    phones.forEach(phone => {
       let rig = this.rigs.get(phone.id); if (!rig) { rig = this.createRig(phone); this.rigs.set(phone.id, rig); }
       const live = this.sources.live(phone.id); const pose = live?.pose; const present = !!live?.presence.present;
       rig.station.position.set(0, phone.offset, 0);
       rig.label.setText(phone.label);
-      const side = stacked ? 0 : Math.sign(this.projected.station.set(0, phone.offset, 0).applyMatrix4(this.operator.matrixWorld).project(this.camera).x - origin.x);
-      rig.label.sprite.center.set(side > 0 ? 0.1 : side < 0 ? 0.9 : 0.5, 1.15 + (stacked ? index * 0.95 : 0));
+      const dx = (this.projected.station.set(0, phone.offset, 0).applyMatrix4(this.operator.matrixWorld).project(this.camera).x - origin.x) * width / 2;
+      const cx = this.view === 'side' || Math.abs(dx) < 4 ? 0.5 : dx > 0 ? 0.1 : 0.9;
+      const anchor = this.projected.station.set(-STATION_LABEL_BACK_M, phone.offset, 0).applyMatrix4(this.operator.matrixWorld).project(this.camera);
+      const row = placeLabel(placed, { x: (anchor.x + 1) / 2 * width, y: (1 - anchor.y) / 2 * height, cx, ...rig.label.pixelSize() }, phones.length);
+      rig.label.sprite.center.set(cx, LABEL_DROP + row * LABEL_ROW);
       rig.body.visible = !!pose && phone.shown.pose;
       rig.bodyAxes.visible = phone.shown.axes;
       if (pose) {
@@ -339,6 +364,7 @@ export class SpatialView {
     for (const rig of this.rigs.values()) rig.dispose(); this.rigs.clear();
     this.grid?.geometry.dispose();
     for (const item of [...this.disposables, ...this.materials, ...this.labels]) item.dispose();
-    this.renderer.dispose(); this.renderer.domElement.remove();
+    // Without this the context lives until garbage collection, and a few reconnects hit the browser's limit.
+    this.renderer.forceContextLoss(); this.renderer.dispose(); this.renderer.domElement.remove();
   }
 }

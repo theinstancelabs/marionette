@@ -76,6 +76,10 @@ describe('roster', () => {
     expect(rosterEvents([one, { ...two, connected: false }], [one, two]).map(e => `${e.phoneId}: ${e.message}`)).toEqual(['phone-2: Reconnected']);
     expect(rosterEvents([one, two], [two]).map(e => `${e.phoneId}: ${e.message}`)).toEqual(['phone-1: Disconnected']);
     expect(rosterEvents([{ ...one, connected: false }], [])).toEqual([]);
+    // A takeover keeps the phone connected; only a new connection clears its session.
+    expect(rosterEvents([{ ...one, sessionId: 'a' }], [one]).map(e => e.message)).toEqual(['Reconnected, replacing its previous connection']);
+    expect(rosterEvents([one], [{ ...one, sessionId: 'a' }])).toEqual([]);
+    expect(rosterEvents([{ ...one, sessionId: 'a' }], [{ ...one, sessionId: 'b' }])).toEqual([]);
   });
 });
 
@@ -88,6 +92,8 @@ describe('inputs', () => {
     expect(inputDraft(input({ value: false }), deadman, true)?.message).toBe('Hold to move released');
     expect(inputDraft(input({ value: false, source: 'gateway', reason: 'hold not renewed' }), deadman, true)?.message).toBe('Hold to move released by the gateway (hold not renewed)');
     expect(inputDraft(input({ source: 'mirror' }), deadman, false)?.message).toBe('Hold to move pressed (desktop mirror)');
+    // The phone letting go of a hold the gateway already ended is not news.
+    expect(inputDraft(input({ value: false }), deadman, false)).toBeUndefined();
   });
 
   it('leaves settings and calibration to the configs, and logs undeclared actions', () => {

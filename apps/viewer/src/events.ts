@@ -127,13 +127,18 @@ export function configEvents(prev: ConfigMessage, next: ConfigMessage): EventDra
   return [...controlEvents(prev, next), ...calibrationEvents(prev.calibration, next.calibration)];
 }
 
-/** Phones joining, leaving and coming back, from one roster to the next. */
+/**
+ * Phones joining, leaving and coming back, from one roster to the next. A
+ * connected phone whose session the gateway cleared was taken over by a new
+ * connection from the same device (only a new connection clears it).
+ */
 export function rosterEvents(prev: PhoneInfo[], next: PhoneInfo[]): EventDraft[] {
   const out: EventDraft[] = [];
   for (const phone of next) {
     const before = prev.find(candidate => candidate.id === phone.id);
     if (phone.connected && !before?.connected) out.push({ kind: 'session', message: before ? 'Reconnected' : 'Connected', tone: 'normal', phoneId: phone.id });
     else if (!phone.connected && before?.connected) out.push({ kind: 'session', message: 'Disconnected', tone: 'normal', phoneId: phone.id });
+    else if (phone.connected && before?.sessionId && !phone.sessionId) out.push({ kind: 'session', message: 'Reconnected, replacing its previous connection', tone: 'normal', phoneId: phone.id });
   }
   for (const phone of prev) if (phone.connected && !next.some(candidate => candidate.id === phone.id)) out.push({ kind: 'session', message: 'Disconnected', tone: 'normal', phoneId: phone.id });
   return out;
@@ -158,7 +163,9 @@ export function inputText(input: InputMessage, control?: UiControl): string {
 
 /**
  * The log line for one input, if it gets one. Renewals of a hold never do,
- * and neither does a second press of a hold already pressed (`wasHeld`).
+ * and neither does a second press of a hold already pressed (`wasHeld`), nor
+ * the release of a hold that had already ended (the phone letting go after
+ * the gateway released it for missed renewals).
  * Toggles, selects and sliders are logged from the phone's config when the
  * value changes, and calibration buttons from the calibration progress.
  */
@@ -167,7 +174,8 @@ export function inputDraft(input: InputMessage, control: UiControl | undefined, 
   const kind: EventKind = input.action.startsWith('safety.') ? 'safety' : 'input';
   const base = { kind, tone: 'normal' as const, phoneId: input.phoneId };
   if (control?.type === 'button') {
-    if (control.hold && input.value !== false && wasHeld) return undefined;
+    const release = input.value === false;
+    if (control.hold && (release ? !wasHeld : wasHeld)) return undefined;
     if (!control.hold && control.action.startsWith('calibration.')) return undefined;
     return { ...base, message: `${control.label} ${inputText(input, control)}` };
   }

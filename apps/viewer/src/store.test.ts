@@ -149,6 +149,55 @@ describe('event attribution', () => {
     expect(store.phones()[1]).toMatchObject({ id: 'phone-2', connected: true, config: undefined });
   });
 
+  it('logs a hold’s release once, even when the phone lets go after the gateway released it', () => {
+    const { store, advance, log } = setup(); const roster = connectTwo(store);
+    // Gateway order: relay the press, then publish the hold.
+    store.receive(input('phone-1')); store.receive(phoneConfig(roster[0], roster, set('deadman', { held: true })));
+    // Renewals stop: the gateway's release, then its config; the finger comes up a second later.
+    store.receive(input('phone-1', { value: false, source: 'gateway', reason: 'renewals stopped' })); store.receive(phoneConfig(roster[0], roster));
+    store.receive(input('phone-1', { value: false }));
+    advance(300);
+    expect(log().slice(3)).toEqual(['phone-1: Hold to move pressed', 'phone-1: Hold to move released by the gateway (renewals stopped)']);
+    // The late release still shows in the phone's recent inputs.
+    expect(store.live.phones.get('phone-1')!.inputs.map(record => record.input.source)).toEqual(['phone', 'gateway', 'phone']);
+  });
+
+  it('logs the release of a hold that was already on when the viewer connected', () => {
+    const { store, advance, log } = setup(); const roster = [info(1)];
+    store.receive(gatewayConfig(roster)); store.receive(phoneConfig(roster[0], roster, set('grip', { held: true })));
+    store.receive(input('phone-1', { controlId: 'grip', action: 'gripper.hold', renew: true }));
+    store.receive(input('phone-1', { controlId: 'grip', action: 'gripper.hold', value: false })); store.receive(phoneConfig(roster[0], roster));
+    advance(300);
+    expect(log()).toEqual(['phone-1: Connected', 'phone-1: Grip released']);
+  });
+
+  it('says so when a new connection from the same phone takes over', () => {
+    const { store, advance, log } = setup(); const roster = [{ ...info(1), sessionId: 'arkit-a' }, info(2)];
+    store.receive(gatewayConfig(roster)); store.receive(phoneConfig(roster[0], roster, c => c, { status: 'captured', epoch: 1 }));
+    store.receive(pose('phone-1', 1, 0, { sessionId: 'arkit-a' })); advance(300);
+    // attach(): the old stream's last pose, calibration cleared, then the roster with the session gone.
+    store.receive({ ...pose('phone-1', 1, 0, { sessionId: 'arkit-a' }), heartbeat: false, trackingState: 'unavailable', calibrationVersion: 'guided-v2:1-stale' });
+    const next = [info(1), info(2)];
+    store.receive(gatewayConfig(next)); store.receive(phoneConfig(next[0], next, c => c, { status: 'uncalibrated', epoch: 2 }));
+    advance(300);
+    expect(log().slice(2)).toEqual(['phone-1: Streaming poses, tracking good', 'phone-1: Reconnected, replacing its previous connection', 'phone-1: Calibration cleared']);
+  });
+
+  it('keeps the name of a phone that left the roster for its log lines', () => {
+    const { store } = setup(); connectTwo(store);
+    store.receive(gatewayConfig([info(1)]));
+    expect(store.seen.get('phone-2')).toEqual({ name: 'Phone 2', color: '#b04fc4' });
+    store.reset();
+    expect(store.seen.size).toBe(0);
+  });
+
+  it('gives every recent input its own id', () => {
+    const { store } = setup(); connectTwo(store);
+    for (let i = 0; i < 3; i++) store.receive(input('phone-1', { controlId: 'grip', action: 'gripper.hold', value: i % 2 === 0 }));
+    const ids = store.live.phones.get('phone-1')!.inputs.map(record => record.id);
+    expect(new Set(ids).size).toBe(3);
+  });
+
   it('notices tracking changes per phone', () => {
     const { store, advance, log } = setup(); connectTwo(store);
     store.receive(pose('phone-1', 1, 0)); store.receive(pose('phone-2', 1, 0)); advance(16);

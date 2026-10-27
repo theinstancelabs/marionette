@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { gatewayLabel, selectedCameraView, type CameraView, type ConfigMessage } from '@marionette/protocol';
 import type { ConsoleEvent, EventKind, PhoneState } from './events';
 import type { Gateway } from './gateway';
@@ -67,7 +67,7 @@ function TopBar({ gw, presence, onSelect }: { gw: Gateway; presence: (id: string
   return <header className="topbar">
     <div className="brand"><Mark size={22} />Marionette</div>
     {sim ? <span className="pill sim">Simulated phones, not connected to a gateway</span> : <span className="addr mono" title={gw.config.serverName || gw.url}>{gw.url ? gatewayLabel(gw.url) : ''}</span>}
-    <div className="phone-pills" role="group" aria-label="Phones">
+    <div className="phone-pills" role="group" aria-label="Phones" style={{ '--pills': Math.max(1, phones.length) } as CSSProperties}>
       {phones.length ? phones.map(phone => <PhonePill key={phone.id} phone={phone} presence={presence(phone.id)} onSelect={onSelect} />)
         : <span className="pill"><i className="dot" />No phones connected</span>}
     </div>
@@ -193,8 +193,8 @@ function CameraPanel({ config, cameras, simulated, viewId, onView }: { config: C
   return <section className="camera" aria-label="Cameras">
     <header className="panel-head">
       <h4>Cameras</h4>
-      {views.length > 1 && <div className="seg" role="radiogroup" aria-label="Camera view, this viewer only">
-        {views.map(candidate => <button key={candidate.id} type="button" role="radio" aria-checked={candidate.id === view?.id} className={candidate.id === view?.id ? 'on' : ''} onClick={() => onView(candidate.id)}>{candidate.label}</button>)}
+      {views.length > 1 && <div className="seg" role="group" aria-label="Camera view, this viewer only">
+        {views.map(candidate => <button key={candidate.id} type="button" aria-pressed={candidate.id === view?.id} className={candidate.id === view?.id ? 'on' : ''} onClick={() => onView(candidate.id)}>{candidate.label}</button>)}
       </div>}
     </header>
     {!view ? <div className="camera-frame"><p className="empty">{simulated ? 'No camera in simulation' : 'This gateway has no camera streams'}</p></div>
@@ -213,7 +213,8 @@ function CameraPanel({ config, cameras, simulated, viewId, onView }: { config: C
   </section>;
 }
 
-const EventLog = memo(function EventLog({ events, phones, flash }: { events: ConsoleEvent[]; phones: Map<string, Phone>; flash?: number }) {
+type Named = Map<string, { name: string; color: string }>;
+const EventLog = memo(function EventLog({ events, phones, flash }: { events: ConsoleEvent[]; phones: Named; flash?: number }) {
   const box = useRef<HTMLDivElement>(null); const stick = useRef(true);
   useLayoutEffect(() => { const el = box.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [events]);
   useEffect(() => { if (flash === undefined) return; box.current?.querySelector(`[data-id="${flash}"]`)?.scrollIntoView({ block: 'nearest' }); }, [flash]);
@@ -224,25 +225,27 @@ const EventLog = memo(function EventLog({ events, phones, flash }: { events: Con
       return <div key={event.id} data-id={event.id} className={`log-row ${event.tone} ${flash === event.id ? 'flash' : ''}`}>
         <time className="num" dateTime={new Date(event.at).toISOString()}>{clock(event.at)}</time>
         <span className="kind"><i style={{ background: KIND_COLOR[event.kind] }} />{event.kind}</span>
-        <span className="who-tag">{event.phoneId && <><PhoneDot color={phone?.color ?? 'var(--ink2)'} />{phone?.name ?? event.phoneId}</>}</span>
+        <span className="who-tag">{event.phoneId && <><PhoneDot color={phone?.color ?? 'var(--ink2)'} /><span className="who-name">{phone?.name ?? event.phoneId}</span></>}</span>
         <span className="msg">{event.message}</span>
       </div>;
     })}
   </div>;
 });
 
-function TimePanel({ events, phones, startedAt, focusEvents }: { events: ConsoleEvent[]; phones: Map<string, Phone>; startedAt: number; focusEvents: number }) {
+function TimePanel({ events, phones, startedAt, focusEvents }: { events: ConsoleEvent[]; phones: Named; startedAt: number; focusEvents: number }) {
   const [flash, setFlash] = useState<number>();
   const now = Date.now(); const span = Math.min(15 * 60_000, Math.max(60_000, now - startedAt)); const from = now - span;
   useEffect(() => { if (focusEvents) setFlash(events.at(-1)?.id); }, [focusEvents]);
+  // The highlight marks where the log jumped to, then lets go.
+  useEffect(() => { if (flash === undefined) return; const id = window.setTimeout(() => setFlash(undefined), 2500); return () => window.clearTimeout(id); }, [flash]);
   return <footer className="time">
     <div className="timeline" aria-hidden="true">
       <span className="from num">{clock(from)}</span>
       <div className="track">
         <div className="axis" />
         {events.filter(event => event.at >= from).map(event => {
-          const who = event.phoneId ? `${phones.get(event.phoneId)?.name ?? event.phoneId} · ` : '';
-          return <b key={event.id} className={event.tone === 'fail' ? 'fail' : undefined} style={{ left: `${(event.at - from) / span * 100}%`, background: KIND_COLOR[event.kind] }} title={`${clock(event.at)} · ${who}${event.kind} · ${event.message}`} onClick={() => setFlash(event.id)} />;
+          const who = event.phoneId ? `${phones.get(event.phoneId)?.name ?? event.phoneId}, ` : '';
+          return <b key={event.id} className={event.tone === 'fail' ? 'fail' : undefined} style={{ left: `${(event.at - from) / span * 100}%`, background: KIND_COLOR[event.kind] }} title={`${clock(event.at)}, ${who}${event.kind}: ${event.message}`} onClick={() => setFlash(event.id)} />;
         })}
         <i className="now-mark" />
       </div>
@@ -261,7 +264,8 @@ export function Console({ gw }: { gw: Gateway }) {
   const [layout, setLayoutState] = useState<Layout>(() => read(LAYOUT_KEY) === 'overlay' ? 'overlay' : 'side');
   const [cameraView, setCameraViewState] = useState<string | undefined>(() => read(CAMERA_VIEW_KEY) ?? undefined);
   const [focusEvents, setFocusEvents] = useState(0);
-  const phoneMap = useMemo(() => new Map(phones.map(phone => [phone.id, phone])), [phones]);
+  // The store learns names with the configs that change `phones`, so this stays current.
+  const phoneMap = useMemo<Named>(() => new Map([...store.seen, ...phones.map(phone => [phone.id, phone] as const)]), [phones, store]);
   const current = phones.find(phone => phone.id === phoneId) ?? phones.find(phone => phone.connected) ?? phones[0];
 
   const toggle = useCallback((owner: string | undefined, id: Toggle) => setHidden(old => {
