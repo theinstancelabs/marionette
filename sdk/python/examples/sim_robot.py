@@ -172,15 +172,15 @@ def pattern(stream: str, arm: SimArm, t: float, width: int = 320, height: int = 
     """A moving gradient, the gripper as a dot (front: y and z; top: y and x), and the time."""
     columns, rows = np.meshgrid(np.arange(width), np.arange(height))
     image = np.zeros((height, width, 3), dtype=np.uint8)
-    image[..., 0] = (columns + t * 60) % 256 // 2
-    image[..., 1] = rows * 255 // height // 2
+    image[..., 0] = 60 + 50 * np.sin(columns / width * 2 * math.pi - t * 2)
+    image[..., 1] = rows * 120 // height
     image[..., 2] = 90 if stream == "sim-front" else 150
     offset = (arm.position - HOME) / BOX  # -1..1 on each axis
     across, along = -offset[1], (-offset[2] if stream == "sim-front" else -offset[0])
     cx, cy = int((across + 1) / 2 * (width - 1)), int((along + 1) / 2 * (height - 1))
     dot = (columns - cx) ** 2 + (rows - cy) ** 2 < 64
     image[dot] = (240, 200, 40) if arm.clutch.engaged else (230, 230, 230)
-    draw_text(image, time.strftime("%H:%M:%S") + f".{int(t * 10) % 10}", 8, height - 28)
+    draw_text(image, time.strftime("%H:%M:%S") + f".{int(t * 10) % 10}", 8, 8)
     return image
 
 
@@ -201,6 +201,8 @@ def main() -> None:
     parser.add_argument("--mirror", choices=("allow", "stop-only", "deny"), default="stop-only", help="what a desktop /screen mirror may do")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+    for noisy in ("aioice", "aiortc"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     tracker = PhoneTracker(mirror=args.mirror)
     link = RobotLink(args.gateway, ROBOT_ID, NAME, token=args.token, screen=Path(__file__).with_name("sim_robot.html"), watch=True, every=0.2, tracker=tracker)

@@ -52,6 +52,13 @@ h1{font-size:28px;margin:10px 0 0;letter-spacing:-.01em}
 .scale{display:flex;align-items:center;gap:10px;margin:14px 0 6px}
 .scale input{flex:1}
 #rows{margin-top:10px}
+/* A phone on its side: the cameras on the left, everything else on the right. */
+@media (orientation:landscape) and (min-width:700px){
+  main{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);column-gap:20px;align-items:start}
+  main>*{grid-column:2}
+  main>h1,main>.note{grid-column:1/-1}
+  .cams{grid-column:1;grid-row:3/span 6}
+}
 </style>
 </head>
 <body>
