@@ -234,6 +234,30 @@ def test_mirror_policies() -> None:
         PhoneTracker(mirror="sometimes")  # type: ignore[arg-type]
 
 
+def test_a_new_phone_starts_from_the_screens_defaults_not_another_phones_values(clock: Clock) -> None:
+    tracker = PhoneTracker(clock)
+    tracker.apply(msg.config(["phone-1"], controls=CONTROLS))
+    send(tracker, "safety.estop", True)
+    tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, values={"safety.estop": True, "arm.select": "right", "gripper.set": 0.7}))
+    # phone-3 joins: the first config that names it is phone-1's, with phone-1's Stop, arm and grip.
+    tracker.apply(msg.config(["phone-1", "phone-3"], "phone-1", CONTROLS, values={"safety.estop": True, "arm.select": "right", "gripper.set": 0.7}))
+    phone = tracker.get("phone-3")
+    assert phone is not None and not phone.stop and [p.id for p in tracker.stops()] == ["phone-1"]
+    assert phone.value("arm.select") == "left" and phone.number("gripper.set", -1) == 0 and phone.drag("gripper.set").value == 0  # type: ignore[union-attr]
+    assert tracker.layout["arm.select"]["value"] == "left" and "held" not in tracker.layout["teleop.deadman"]
+    # Its own config brings its own values.
+    tracker.apply(msg.config(["phone-1", "phone-3"], "phone-3", CONTROLS, values={"arm.select": "right"}))
+    assert tracker.get("phone-3").value("arm.select") == "right"  # type: ignore[union-attr]
+    # A tracker that has only seen phones' configs gives a new phone no values until its own config.
+    late = PhoneTracker(clock)
+    late.apply(msg.config(["phone-1", "phone-3"], "phone-1", CONTROLS, values={"safety.estop": True, "arm.select": "right"}))
+    phone = late.get("phone-3")
+    assert phone is not None and not phone.stop and phone.value("arm.select") is None and "teleop.deadman" in phone.holds
+    late.apply(msg.config(["phone-1", "phone-3"], controls=CONTROLS))
+    assert late.get("phone-3").value("arm.select") == "left" and late.get("phone-3").drag("gripper.set").value == 0  # type: ignore[union-attr]
+    assert late.get("phone-1").value("arm.select") == "right"  # type: ignore[union-attr]
+
+
 def test_a_late_tracker_learns_stop_from_the_config() -> None:
     tracker = PhoneTracker()
     tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, values={"safety.estop": True}))

@@ -128,6 +128,8 @@ The rules, each learned on a robot:
 - A desktop mirror of a phone's screen (the gateway's `/screen`) acts as that phone. `mirror="stop-only"` (the
   default) lets it turn Stop on and nothing else, not even turn Stop off through the config the gateway sends after
   it; `"allow"` treats it like the phone; `"deny"` ignores it.
+- A new phone starts from the screen's defaults (the gateway's own config, without `phone`), never from another
+  phone's values; its own config brings its values.
 - Anything malformed is ignored.
 
 ### Meanings on top
