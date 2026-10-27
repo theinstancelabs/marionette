@@ -330,7 +330,10 @@ class GatewayClient:
             self._samples.clear()
             self._in_flight.clear()
             self.offset_ms = None
-            await ws.send(dumps(self._hello()))
+            try:
+                await ws.send(dumps(self._hello()))
+            except ConnectionClosed:
+                pass  # refused at once (a shut-out address): the close code below says why
             tasks = [
                 asyncio.ensure_future(self._receive(ws)),
                 asyncio.ensure_future(self._send_loop(ws)),

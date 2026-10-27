@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Parts for robots driven by Marionette: a gateway connection, phone tracking, teleop math, robot screens and state, WebRTC video, and test phones."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
 authors = [{ name = "Instance Labs" }]
 dependencies = [
     "websockets>=13",
