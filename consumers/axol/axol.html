@@ -114,6 +114,9 @@ button.tag{cursor:pointer}
 .cam{position:relative;display:grid;grid-template-columns:repeat(var(--panes,1),minmax(0,1fr));gap:1.5px;margin:6px 0 0;border-radius:12px;border:1.5px solid var(--ink);background:var(--ink);overflow:hidden}
 .cam[role=button]{cursor:zoom-in}
 .cam.big{grid-template-columns:minmax(0,1fr);cursor:zoom-out}
+/* Three streams: the first (the head) large on the left, the other two stacked beside it. */
+.cam.trio:not(.big){grid-template-columns:minmax(0,2fr) minmax(0,1fr);grid-template-rows:auto auto}
+.cam.trio:not(.big) .pane:first-child{grid-row:1 / span 2;aspect-ratio:auto}
 .pane{position:relative;min-width:0;aspect-ratio:16/9;background:var(--paper2)}
 .pane img{display:block;width:100%;height:100%;object-fit:contain;background:var(--ink)}
 .pane figcaption{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:7px}
@@ -615,7 +618,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     cam.hidden = !view; if (!view) return;
     const key = view.id + ':' + view.streams.join(',');
     if (key !== camKey) {
-      camKey = key; cam.style.setProperty('--panes', view.streams.length);
+      camKey = key; cam.style.setProperty('--panes', view.streams.length); cam.classList.toggle('trio', view.streams.length === 3);
       // Several streams side by side are small; a tap (or Enter) stacks them full width.
       const many = view.streams.length > 1; if (!many) cam.classList.remove('big');
       for (const [name, value] of [['role', 'button'], ['tabindex', '0'], ['aria-label', 'Cameras, tap to show them larger or smaller']]) { if (many) cam.setAttribute(name, value); else cam.removeAttribute(name); }
