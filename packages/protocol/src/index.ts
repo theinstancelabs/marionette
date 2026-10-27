@@ -104,6 +104,21 @@ export function operatorPose(pose: PosePacket, reference?: PoseReference): PoseP
   return reference && reference.sessionId === pose.sessionId ? applyPoseReference(pose, reference) : applyPhoneFrame(pose);
 }
 
+/**
+ * The inverse of `operatorPose`: the raw ARKit camera pose that the gateway publishes as `target`, in the frame of
+ * `reference` (a calibration from the same session) or, without one, in the uncalibrated operator frame. Simulated
+ * phones use it to stream what a real phone would.
+ */
+export function rawPoseFor(target: { position: Vector3; rotation: Quaternion }, reference?: PoseReference): { position: Vector3; rotation: Quaternion } {
+  if (!reference) {
+    const toArkit = conjugateQuaternion(ARKIT_TO_OPERATOR);
+    return { position: rotateVector(toArkit, target.position), rotation: multiplyQuaternions(multiplyQuaternions(toArkit, target.rotation), conjugateQuaternion(CAMERA_TO_BODY)) };
+  }
+  const frame = normalizeQuaternion(reference.frame);
+  return { position: add(reference.position, rotateVector(frame, target.position)),
+    rotation: multiplyQuaternions(multiplyQuaternions(multiplyQuaternions(frame, target.rotation), conjugateQuaternion(frame)), normalizeQuaternion(reference.rotation)) };
+}
+
 function dot(a: Vector3, b: Vector3): number { return a.x * b.x + a.y * b.y + a.z * b.z; }
 function add(a: Vector3, b: Vector3): Vector3 { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
 function subtract(a: Vector3, b: Vector3): Vector3 { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }

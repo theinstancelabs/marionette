@@ -1,0 +1,14 @@
+{
+  "name": "With mirror deny, a mirror does nothing",
+  "description": "Not even Stop.",
+  "options": {"mirror": "deny", "stop_action": "safety.estop"},
+  "steps": [
+    {"message": {"type": "config", "version": 1, "sessionId": "marionette-aaaaaaa", "serverName": "test", "controls": [{"id": "deadman", "type": "button", "label": "Hold to move", "action": "teleop.deadman", "hold": true, "held": false}, {"id": "turn-left", "type": "button", "label": "Turn left", "action": "base.turnLeft", "hold": true, "held": false}, {"id": "estop", "type": "toggle", "label": "Stop", "action": "safety.estop", "value": false}, {"id": "arm", "type": "select", "label": "Arm", "action": "arm.select", "value": "left", "options": [{"label": "Left", "value": "left"}, {"label": "Right", "value": "right"}]}, {"id": "scale", "type": "slider", "label": "Scale", "action": "teleop.translationScale", "value": 1, "min": 0.1, "max": 4, "step": 0.1, "live": false}, {"id": "drive", "type": "joystick", "label": "Drive", "action": "base.drive", "value": {"x": 0, "y": 0}, "live": false}, {"id": "reset-left", "type": "button", "label": "Reset left arm", "action": "arm.resetLeft"}], "cameraStreams": [], "cameraViews": [], "calibration": {"status": "uncalibrated", "epoch": 0}, "phones": [{"id": "phone-1", "name": "Phone 1", "color": "#c98200", "connected": true, "sessionId": "iphone-phone-1"}], "phone": {"id": "phone-1", "name": "Phone 1", "color": "#c98200", "connected": true, "sessionId": "iphone-phone-1"}}},
+    {"message": {"type": "input", "version": 1, "phoneId": "phone-1", "sessionId": "iphone-phone-1", "controlId": "deadman", "action": "teleop.deadman", "value": true, "source": "mirror", "sentAt": 1793000000520, "receivedAt": 1793000000530}},
+    {"message": {"type": "input", "version": 1, "phoneId": "phone-1", "sessionId": "iphone-phone-1", "controlId": "drive", "action": "base.drive", "value": {"x": 0.5, "y": 0}, "live": true, "source": "mirror", "sentAt": 1793000000530, "receivedAt": 1793000000540}},
+    {"message": {"type": "input", "version": 1, "phoneId": "phone-1", "sessionId": "iphone-phone-1", "controlId": "reset-left", "action": "arm.resetLeft", "source": "mirror", "sentAt": 1793000000540, "receivedAt": 1793000000550}},
+    {"message": {"type": "input", "version": 1, "phoneId": "phone-1", "sessionId": "iphone-phone-1", "controlId": "arm", "action": "arm.select", "value": "right", "source": "mirror", "sentAt": 1793000000550, "receivedAt": 1793000000560}},
+    {"message": {"type": "input", "version": 1, "phoneId": "phone-1", "sessionId": "iphone-phone-1", "controlId": "estop", "action": "safety.estop", "value": true, "source": "mirror", "sentAt": 1793000000560, "receivedAt": 1793000000570}},
+    {"expect": {"phones": {"phone-1": {"holds": {"teleop.deadman": {"down": false, "presses": 0}}, "drags": {"base.drive": {"live": false}}, "presses": {"arm.resetLeft": 0}, "values": {"arm.select": "left"}, "stop": false}}, "any_stop": false}}
+  ]
+}
