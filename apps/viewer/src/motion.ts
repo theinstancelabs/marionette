@@ -28,7 +28,7 @@ export function axisText(label: AxisLabel): string { return label.replace('-', M
 export function frameKey(pose: PosePacket): string { return `${pose.sessionId}|${pose.calibrationVersion.replace(/-stale$/, '')}`; }
 
 /** Drops samples older than `cutoff`. Samples are kept in time order. */
-export function trimBefore(samples: Sample[], cutoff: number): void {
+export function trimBefore(samples: { t: number }[], cutoff: number): void {
   let drop = 0;
   while (drop < samples.length && samples[drop].t < cutoff) drop++;
   if (drop) samples.splice(0, drop);

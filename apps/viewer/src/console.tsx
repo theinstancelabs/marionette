@@ -1,13 +1,15 @@
 import { memo, type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { gatewayLabel, selectedCameraView, type CameraView, type ConfigMessage } from '@marionette/protocol';
+import { gatewayLabel, selectedCameraView, type CameraStream, type CameraView, type ConfigMessage, type RobotInfo } from '@marionette/protocol';
 import type { ConsoleEvent, EventKind, PhoneState } from './events';
 import type { Gateway } from './gateway';
-import { Inspector, type Section } from './inspector';
+import { Inspector, type Focus, type Section } from './inspector';
+import { PairDialog } from './pair';
 import { armOf, phoneDetail, stationName, stationOffsets, type Layout, type Phone } from './phones';
 import { PAD, PlotGroup, PlotStrip, SERIES, TIME_TICKS, type SeriesId } from './plot';
+import type { RtcViewer, VideoState } from './rtc';
 import { SpatialView, type GatewayLayer, type SpatialPhone, type View } from './spatial';
 import type { CameraFrame, ViewerStore } from './store';
-import { Mark, PhoneDot, clock } from './ui';
+import { Mark, PhoneDot, RobotDot, clock } from './ui';
 
 type PhoneRowId = 'pose' | 'trail' | 'axes' | 'position';
 type GatewayRowId = GatewayLayer | 'camera' | 'events';
@@ -15,14 +17,15 @@ type Toggle = PhoneRowId | GatewayLayer | 'camera' | SeriesId;
 /** Hidden streams: per phone (keyed by phone id) and gateway-wide. */
 type Hidden = { phones: Record<string, Toggle[]>; gateway: Toggle[] };
 type Row = { id: PhoneRowId | GatewayRowId; label: string; swatch: string; line?: boolean; toggle: boolean; section?: Section };
-type Selection = { phoneId?: string; id: Row['id'] };
+/** The highlighted tree row: a phone's or the gateway's (`id` a row id), or a robot's (`id` is `state` or `stream:<id>`). */
+type Selection = { phoneId?: string; robotId?: string; id: string };
 
 const VISIBILITY_KEY = 'marionette.viewer.visibility';
 const LAYOUT_KEY = 'marionette.viewer.layout';
 const CAMERA_VIEW_KEY = 'marionette.viewer.cameraView';
 const PHONE_TOGGLES: Toggle[] = ['pose', 'trail', 'axes', 'position'];
 const GATEWAY_TOGGLES: Toggle[] = ['frame', 'grid', 'calibration', 'camera', 'forward', 'left', 'up'];
-const KIND_COLOR: Record<EventKind, string> = { session: '#6b6f73', tracking: '#9aa0a6', calibration: '#2f53b5', validation: '#3f7d4e', input: '#c8a43a', safety: '#cf3f35', camera: '#7d8c95', settings: '#b4b9be' };
+const KIND_COLOR: Record<EventKind, string> = { session: '#6b6f73', tracking: '#9aa0a6', calibration: '#2f53b5', validation: '#3f7d4e', input: '#c8a43a', safety: '#cf3f35', camera: '#7d8c95', settings: '#b4b9be', robot: '#2e3033' };
 const AXIS_SWATCH = 'linear-gradient(90deg, #cf3f35 0 33%, #3f7d4e 33% 66%, #2f53b5 66%)';
 const NO_PRESENCE: PhoneState = { present: false };
 
@@ -62,7 +65,7 @@ function PhonePill({ phone, presence, onSelect }: { phone: Phone; presence: Phon
   </button>;
 }
 
-function TopBar({ gw, presence, onSelect }: { gw: Gateway; presence: (id: string) => PhoneState; onSelect: (id: string) => void }) {
+function TopBar({ gw, presence, onSelect, onPair }: { gw: Gateway; presence: (id: string) => PhoneState; onSelect: (id: string) => void; onPair: () => void }) {
   const sim = gw.phase === 'sim'; const { phones } = gw;
   return <header className="topbar">
     <div className="brand"><Mark size={22} />Marionette</div>
@@ -71,13 +74,15 @@ function TopBar({ gw, presence, onSelect }: { gw: Gateway; presence: (id: string
       {phones.length ? phones.map(phone => <PhonePill key={phone.id} phone={phone} presence={presence(phone.id)} onSelect={onSelect} />)
         : <span className="pill"><i className="dot" />No phones connected</span>}
     </div>
+    {!sim && <button type="button" className="btn" onClick={onPair} title="The QR code, pairing code and addresses a phone needs">Pair a phone</button>}
     <button type="button" className="btn ghost" onClick={gw.disconnect}>{sim ? 'Exit simulation' : 'Disconnect'}</button>
   </header>;
 }
 
-const Streams = memo(function Streams({ phones, hidden, selected, eventCount, onToggle, onSelect }: { phones: Phone[]; hidden: Hidden; selected?: Selection; eventCount: number; onToggle: (phoneId: string | undefined, id: Toggle) => void; onSelect: (row: Row, phoneId?: string) => void }) {
+
+const Streams = memo(function Streams({ phones, robots, hidden, selected, eventCount, onToggle, onSelect, onSelectRobot }: { phones: Phone[]; robots: RobotInfo[]; hidden: Hidden; selected?: Selection; eventCount: number; onToggle: (phoneId: string | undefined, id: Toggle) => void; onSelect: (row: Row, phoneId?: string) => void; onSelectRobot: (robotId: string, row: string) => void }) {
   const row = (item: Row, phoneId?: string, name?: string) => {
-    const shown = !item.toggle || isShown(hidden, phoneId, item.id as Toggle); const on = selected?.id === item.id && selected.phoneId === phoneId;
+    const shown = !item.toggle || isShown(hidden, phoneId, item.id as Toggle); const on = selected?.id === item.id && selected.phoneId === phoneId && !selected.robotId;
     const label = name ? `${name} ${item.label}` : item.label;
     return <div key={item.id} className={`tree-row ${on ? 'sel' : ''} ${shown ? '' : 'off'}`}>
       <button type="button" className="tree-name" aria-current={on ? 'true' : undefined} onClick={() => onSelect(item, phoneId)}>
@@ -96,6 +101,24 @@ const Streams = memo(function Streams({ phones, hidden, selected, eventCount, on
       return <div key={phone.id} className={`tree-group ${phone.connected ? '' : 'gone'}`} role="group" aria-label={phone.name}>
         <div className="tree-head phone"><PhoneDot color={phone.color} muted={!phone.connected} /><span className="who">{phone.name}</span><span className="sub">{phone.connected ? arm ?? '' : 'disconnected'}</span></div>
         {phoneRows(phone).map(item => row(item, phone.id, phone.name))}
+      </div>;
+    })}
+    {robots.map(robot => {
+      const robotRow = (id: string, label: string, swatch: string, value?: string) => {
+        const on = selected?.robotId === robot.id && selected.id === id;
+        return <div key={id} className={`tree-row ${on ? 'sel' : ''}`}>
+          <button type="button" className="tree-name" aria-current={on ? 'true' : undefined} onClick={() => onSelectRobot(robot.id, id)}>
+            <span className="sw" style={{ background: swatch }} /><span className="name">{label}</span>
+          </button>
+          {value && <span className="eye value">{value}</span>}
+        </div>;
+      };
+      // What the robot provides: its state, the phones' screen when it is its own, and the streams it serves over WebRTC.
+      return <div key={robot.id} className={`tree-group ${robot.connected ? '' : 'gone'}`} role="group" aria-label={`${robot.name}, robot${robot.connected ? '' : ', offline'}`}>
+        <div className="tree-head phone" title={`${robot.name}, robot ${robot.id}`}><RobotDot muted={!robot.connected} /><span className="who">{robot.name}</span><span className="sub">{robot.connected ? '' : 'offline'}</span></div>
+        {robotRow('state', 'state', 'var(--ink)')}
+        {robot.screen && robotRow('screen', 'screen', 'var(--ink2)', 'on phones')}
+        {(robot.streams ?? []).map(stream => robotRow(`stream:${stream}`, stream, '#7d8c95', 'WebRTC'))}
       </div>;
     })}
     <div className="tree-group" role="group" aria-label="gateway">
@@ -186,7 +209,36 @@ function cameraViews(config: ConfigMessage): CameraView[] {
 }
 const cameraLabel = (label: string) => label.replace(/\s*\(virtual\)$/i, '');
 
-function CameraPanel({ config, cameras, simulated, viewId, onView }: { config: ConfigMessage; cameras: Map<string, CameraFrame>; simulated: boolean; viewId?: string; onView: (id: string) => void }) {
+/**
+ * One camera stream. A stream a robot publishes over WebRTC plays as video, asked for while the pane is on screen and
+ * closed when it goes; until the video plays (or when it fails and is retried), the stream's JPEG frames show if
+ * there are any. Other streams show their latest JPEG frame.
+ */
+function CameraPane({ id, stream, frame, rtc, now }: { id: string; stream?: CameraStream; frame?: CameraFrame; rtc: RtcViewer; now: number }) {
+  const label = cameraLabel(stream?.label ?? id);
+  const publisher = stream?.transport === 'webrtc' && rtc.supported ? stream.publisher : undefined;
+  const [video, setVideo] = useState<VideoState>();
+  const [playing, setPlaying] = useState(false);
+  const element = useRef<HTMLVideoElement>(null);
+  useEffect(() => { setVideo(undefined); if (publisher) return rtc.watch(id, publisher, setVideo); }, [rtc, id, publisher]);
+  const media = video?.status === 'video' ? video.media : undefined;
+  useEffect(() => {
+    const el = element.current; setPlaying(false); if (!el) return;
+    el.muted = true; el.srcObject = media ?? null;
+    if (media) el.play().catch(() => { /* autoplay refused; `playing` never fires and the JPEG frame stays */ });
+  }, [media]);
+  const showVideo = !!media && playing;
+  const age = frame ? (now - frame.at) / 1000 : undefined;
+  const waiting = publisher ? (video?.status === 'failed' ? 'Video unavailable, retrying' : 'Connecting to the video…') : stream?.status === 'offline' ? 'Offline' : 'No frames yet';
+  return <figure className="camera-frame" data-transport={publisher ? 'webrtc' : 'jpeg'}>
+    {publisher && <video ref={element} className={showVideo ? undefined : 'waiting'} autoPlay playsInline muted onPlaying={() => setPlaying(true)} aria-label={`Live video from the ${label} camera`} />}
+    {!showVideo && (frame ? <img src={frame.dataUrl} alt={`Latest frame from the ${label} camera`} /> : <p className="empty" title={video?.status === 'failed' ? video.why : undefined}>{waiting}</p>)}
+    <figcaption>{label}</figcaption>
+    {showVideo ? <span className="stale">WebRTC</span> : age !== undefined && age > 2 && <span className="stale">{Math.round(age)} s old</span>}
+  </figure>;
+}
+
+function CameraPanel({ config, cameras, rtc, simulated, viewId, onView }: { config: ConfigMessage; cameras: Map<string, CameraFrame>; rtc: RtcViewer; simulated: boolean; viewId?: string; onView: (id: string) => void }) {
   const views = simulated ? [] : cameraViews(config);
   const view = views.find(candidate => candidate.id === viewId) ?? (config.cameraViews.length ? selectedCameraView(config) : undefined) ?? views[0];
   const now = Date.now();
@@ -199,15 +251,7 @@ function CameraPanel({ config, cameras, simulated, viewId, onView }: { config: C
     </header>
     {!view ? <div className="camera-frame"><p className="empty">{simulated ? 'No camera in simulation' : 'This gateway has no camera streams'}</p></div>
       : <div className={`camera-grid n${Math.min(view.streams.length, 2)}`}>
-          {view.streams.slice(0, 2).map(id => {
-            const stream = config.cameraStreams.find(candidate => candidate.id === id); const label = cameraLabel(stream?.label ?? id);
-            const frame = cameras.get(id); const age = frame ? (now - frame.at) / 1000 : undefined;
-            return <figure key={id} className="camera-frame">
-              {frame ? <img src={frame.dataUrl} alt={`Latest frame from the ${label} camera`} /> : <p className="empty">{stream?.status === 'offline' ? 'Offline' : 'No frames yet'}</p>}
-              <figcaption>{label}</figcaption>
-              {age !== undefined && age > 2 && <span className="stale">{Math.round(age)} s old</span>}
-            </figure>;
-          })}
+          {view.streams.slice(0, 2).map(id => <CameraPane key={id} id={id} stream={config.cameraStreams.find(candidate => candidate.id === id)} frame={cameras.get(id)} rtc={rtc} now={now} />)}
         </div>}
     {views.length > 1 && <p className="camera-note">This view only. Each phone picks its own.</p>}
   </section>;
@@ -260,13 +304,19 @@ export function Console({ gw }: { gw: Gateway }) {
   const [hidden, setHidden] = useState(loadHidden);
   const [selected, setSelected] = useState<Selection>();
   const [section, setSection] = useState<Section | undefined>('pose');
-  const [phoneId, setPhoneId] = useState<string>();
+  const [focus, setFocus] = useState<Focus>();
+  const [pairing, setPairing] = useState(false);
   const [layout, setLayoutState] = useState<Layout>(() => read(LAYOUT_KEY) === 'overlay' ? 'overlay' : 'side');
   const [cameraView, setCameraViewState] = useState<string | undefined>(() => read(CAMERA_VIEW_KEY) ?? undefined);
   const [focusEvents, setFocusEvents] = useState(0);
   // The store learns names with the configs that change `phones`, so this stays current.
   const phoneMap = useMemo<Named>(() => new Map([...store.seen, ...phones.map(phone => [phone.id, phone] as const)]), [phones, store]);
-  const current = phones.find(phone => phone.id === phoneId) ?? phones.find(phone => phone.connected) ?? phones[0];
+  // Robots come with the gateway config (and, from an older roster, with their first state).
+  const robots = useMemo(() => store.robots(), [gw.config.robots, store.live.robotStates.size, store]);
+  const current = phones.find(phone => focus?.kind === 'phone' && phone.id === focus.id) ?? phones.find(phone => phone.connected) ?? phones[0];
+  const robot = focus?.kind === 'robot' ? robots.find(candidate => candidate.id === focus.id) : undefined;
+  // The inspector shows the chosen robot, else the chosen (or first connected) phone, else the first robot.
+  const shown: Focus | undefined = robot ? focus : current ? { kind: 'phone', id: current.id } : robots[0] ? { kind: 'robot', id: robots[0].id } : undefined;
 
   const toggle = useCallback((owner: string | undefined, id: Toggle) => setHidden(old => {
     const list = owner ? old.phones[owner] ?? [] : old.gateway;
@@ -279,30 +329,34 @@ export function Console({ gw }: { gw: Gateway }) {
   const reveal = (target?: Section) => { if (target) requestAnimationFrame(() => document.getElementById(`inspector-${target}`)?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })); };
   const selectRow = useCallback((row: Row, owner?: string) => {
     setSelected({ id: row.id, phoneId: owner }); setSection(row.section);
-    if (owner) setPhoneId(owner);
+    // A phone's row, or a gateway row about the phones (calibration aids), brings a phone back into the inspector.
+    if (owner) setFocus({ kind: 'phone', id: owner }); else if (row.section) setFocus(old => old?.kind === 'robot' ? undefined : old);
     reveal(row.section);
     if (row.id === 'events') setFocusEvents(n => n + 1);
   }, []);
-  const selectPhone = useCallback((id: string) => { setPhoneId(id); setSelected({ id: 'pose', phoneId: id }); setSection('pose'); }, []);
+  const selectPhone = useCallback((id: string) => { setFocus({ kind: 'phone', id }); setSelected({ id: 'pose', phoneId: id }); setSection('pose'); }, []);
+  const selectRobot = useCallback((id: string, row = 'state') => { setFocus({ kind: 'robot', id }); setSelected({ robotId: id, id: row }); setSection(undefined); }, []);
+  const selectTab = useCallback((next: Focus) => { if (next.kind === 'phone') selectPhone(next.id); else selectRobot(next.id); }, [selectPhone, selectRobot]);
   const setLayout = (next: Layout) => { setLayoutState(next); write(LAYOUT_KEY, next); };
   const setCameraView = (id: string) => { setCameraViewState(id); write(CAMERA_VIEW_KEY, id); };
   const presence = (id: string) => store.live.phones.get(id)?.presence ?? NO_PRESENCE;
-  const treeSelection = useMemo<Selection | undefined>(() => selected ?? (current ? { id: 'pose', phoneId: current.id } : undefined), [selected, current?.id]);
+  const treeSelection = useMemo<Selection | undefined>(() => selected ?? (shown?.kind === 'phone' ? { id: 'pose', phoneId: shown.id } : shown ? { id: 'state', robotId: shown.id } : undefined), [selected, shown?.kind, shown?.id]);
   const cameraShown = isShown(hidden, undefined, 'camera');
 
   return <div className={`console ${gw.phase === 'sim' ? 'simulated' : ''}`}>
-    <TopBar gw={gw} presence={presence} onSelect={selectPhone} />
+    <TopBar gw={gw} presence={presence} onSelect={selectPhone} onPair={() => setPairing(true)} />
     <div className="workspace">
-      <Streams phones={phones} hidden={hidden} selected={treeSelection} eventCount={gw.events.length} onToggle={toggle} onSelect={selectRow} />
+      <Streams phones={phones} robots={robots} hidden={hidden} selected={treeSelection} eventCount={gw.events.length} onToggle={toggle} onSelect={selectRow} onSelectRobot={selectRobot} />
       <main className="center">
         <SpatialPanel store={store} phones={phones} hidden={hidden} layout={layout} onLayout={setLayout} />
         <div className={`lower ${cameraShown ? '' : 'no-camera'}`}>
           <PlotPanel store={store} phones={phones} hidden={hidden} onToggle={toggleSeries} />
-          {cameraShown && <CameraPanel config={gw.config} cameras={store.live.cameras} simulated={gw.phase === 'sim'} viewId={cameraView} onView={setCameraView} />}
+          {cameraShown && <CameraPanel config={gw.config} cameras={store.live.cameras} rtc={gw.rtc} simulated={gw.phase === 'sim'} viewId={cameraView} onView={setCameraView} />}
         </div>
       </main>
-      <Inspector phones={phones} selected={current} onSelect={selectPhone} live={id => store.live.phones.get(id)} section={section} simulated={gw.phase === 'sim'} />
+      <Inspector phones={phones} robots={robots} focus={shown} onSelect={selectTab} store={store} section={section} simulated={gw.phase === 'sim'} />
     </div>
     <TimePanel events={gw.events} phones={phoneMap} startedAt={store.live.startedAt} focusEvents={focusEvents} />
+    {gw.phase === 'live' && <PairDialog open={pairing} onClose={() => setPairing(false)} url={gw.api('/api/pairing')} />}
   </div>;
 }

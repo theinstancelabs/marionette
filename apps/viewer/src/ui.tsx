@@ -19,3 +19,8 @@ export function ago(at: number, now: number): string {
 export function PhoneDot({ color, muted = false }: { color: string; muted?: boolean }) {
   return <i className={`pdot ${muted ? 'muted' : ''}`} style={{ background: color }} aria-hidden="true" />;
 }
+
+/** A robot's mark: a graphite square, so robots never read as phones. Always next to its name. */
+export function RobotDot({ muted = false }: { muted?: boolean }) {
+  return <i className={`rdot ${muted ? 'muted' : ''}`} aria-hidden="true" />;
+}

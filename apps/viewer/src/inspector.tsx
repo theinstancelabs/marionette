@@ -1,12 +1,15 @@
-import React from 'react';
-import { CALIBRATION_STEPS, CALIBRATION_STEP_TEXT, CHECK_EXPECTED_AXIS, CHECK_MOVE_TEXT, MIN_CALIBRATION_STEP_M, describeCheckResult, dominantAxis, isLiveControl, isStickValue, metersToMillimeters, type ConfigMessage, type StickValue, type UiControl, type Vector3 } from '@marionette/protocol';
+import React, { memo, useCallback, useState } from 'react';
+import { CALIBRATION_STEPS, CALIBRATION_STEP_TEXT, CHECK_EXPECTED_AXIS, CHECK_MOVE_TEXT, MIN_CALIBRATION_STEP_M, describeCheckResult, dominantAxis, isLiveControl, isStickValue, metersToMillimeters, staleAfterMs, type ConfigMessage, type JsonValue, type RobotInfo, type StickValue, type UiControl, type Vector3 } from '@marionette/protocol';
 import { inputText, knownStep, valueText } from './events';
 import { AXIS_WORD, axisText, recentMotion, signed, stepProgressMm, tiltDegrees, trackingValue } from './motion';
 import { stopOn, type Phone } from './phones';
-import type { PhoneLive } from './store';
-import { PhoneDot, ago, clock } from './ui';
+import { branchSummary, freshness, inlineArray, isBranch, leafKind, leafText, openByDefault, stateKey, streamList, type RobotStateEntry } from './robots';
+import type { PhoneLive, ViewerStore } from './store';
+import { PhoneDot, RobotDot, ago, clock } from './ui';
 
 export type Section = 'pose' | 'calibration' | 'controls' | 'inputs';
+/** What the inspector shows: a phone, or a robot's state. */
+export type Focus = { kind: 'phone' | 'robot'; id: string };
 const AXES = [{ axis: 'x', name: 'forward' }, { axis: 'y', name: 'left' }, { axis: 'z', name: 'up' }] as const;
 const STEP_NAME = { flat: 'Flat', forward: 'Forward', right: 'Right', up: 'Up' } as const;
 const MIN_STEP_MM = MIN_CALIBRATION_STEP_M * 1000;
@@ -17,24 +20,38 @@ function Head({ title, note, selected }: { title: string; note?: React.ReactNode
   return <h4><span className={selected ? 'hl' : undefined}>{title}</span>{note && <small>{note}</small>}</h4>;
 }
 
-function PhoneTabs({ phones, selected, onSelect }: { phones: Phone[]; selected?: string; onSelect: (id: string) => void }) {
+/** One tab per phone, then one per robot. */
+function Tabs({ phones, robots, focus, onSelect }: { phones: Phone[]; robots: RobotInfo[]; focus: Focus; onSelect: (focus: Focus) => void }) {
+  const all: Focus[] = [...phones.map(phone => ({ kind: 'phone' as const, id: phone.id })), ...robots.map(robot => ({ kind: 'robot' as const, id: robot.id }))];
+  const tabId = (f: Focus) => `${f.kind}:${f.id}`;
   const move = (event: React.KeyboardEvent, index: number) => {
     const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0; if (!step) return;
-    event.preventDefault(); const next = phones[(index + step + phones.length) % phones.length];
-    onSelect(next.id); (event.currentTarget.parentElement?.querySelector(`[data-phone="${next.id}"]`) as HTMLElement | null)?.focus();
+    event.preventDefault(); const next = all[(index + step + all.length) % all.length];
+    onSelect(next); (event.currentTarget.parentElement?.querySelector(`[data-tab="${CSS.escape(tabId(next))}"]`) as HTMLElement | null)?.focus();
   };
-  return <div className="ptabs" role="tablist" aria-label="Phones">
+  const tab = (f: Focus, index: number, body: React.ReactNode, connected: boolean, title: string) => {
+    const on = f.kind === focus.kind && f.id === focus.id;
+    return <button key={tabId(f)} type="button" role="tab" data-tab={tabId(f)} aria-selected={on} aria-controls="inspector-panel" tabIndex={on ? 0 : -1} className={`${on ? 'on' : ''} ${connected ? '' : 'off'}`}
+      title={title} onClick={() => onSelect(f)} onKeyDown={event => move(event, index)}>{body}</button>;
+  };
+  return <div className="ptabs" role="tablist" aria-label={robots.length ? 'Phones and robots' : 'Phones'}>
     {phones.map((phone, index) => {
-      const on = phone.id === selected; const stop = stopOn(phone.config);
-      return <button key={phone.id} type="button" role="tab" data-phone={phone.id} aria-selected={on} aria-controls="inspector-panel" tabIndex={on ? 0 : -1} className={`${on ? 'on' : ''} ${phone.connected ? '' : 'off'}`}
-        title={[phone.name, !phone.connected && 'disconnected', stop && 'Stop on'].filter(Boolean).join(', ')} onClick={() => onSelect(phone.id)} onKeyDown={event => move(event, index)}>
-        <PhoneDot color={phone.color} muted={!phone.connected} /><span className="tab-name">{phone.name}</span>{stop && <i className="tab-stop" role="img" aria-label="Stop on" title="Stop on" />}
-      </button>;
+      const stop = stopOn(phone.config);
+      return tab(all[index], index, <><PhoneDot color={phone.color} muted={!phone.connected} /><span className="tab-name">{phone.name}</span>{stop && <i className="tab-stop" role="img" aria-label="Stop on" title="Stop on" />}</>,
+        phone.connected, [phone.name, !phone.connected && 'disconnected', stop && 'Stop on'].filter(Boolean).join(', '));
     })}
+    {robots.map((robot, index) => tab(all[phones.length + index], phones.length + index, <><RobotDot muted={!robot.connected} /><span className="tab-name">{robot.name}</span></>,
+      robot.connected, [robot.name, robot.connected ? 'robot' : 'robot, offline'].join(', ')))}
   </div>;
 }
 
-function PoseSection({ phone, live, selected }: { phone: Phone; live?: PhoneLive; selected: boolean }) {
+/** The link latency readout: the median of the gateway's stamps over the last second. */
+function latencyText(latency: { ms: number } | undefined): string {
+  if (!latency) return '—';
+  return latency.ms < 1 ? 'under 1 ms' : `${Math.round(latency.ms)} ms`;
+}
+
+function PoseSection({ phone, live, selected, latency }: { phone: Phone; live?: PhoneLive; selected: boolean; latency?: { ms: number; count: number } }) {
   const pose = live?.pose; const present = !!live?.presence.present && phone.connected;
   const mm = pose ? metersToMillimeters(pose.position) : undefined;
   const motion = live ? recentMotion(live.trail, performance.now()) : { state: 'unknown' as const };
@@ -54,6 +71,9 @@ function PoseSection({ phone, live, selected }: { phone: Phone; live?: PhoneLive
     <dl className="kv">
       <div><dt>Tracking</dt><dd className={present && pose?.trackingState !== 'normal' ? 'warn' : !present ? 'muted' : undefined}>{tracking}</dd></div>
       <div><dt>Moving</dt><dd>{present && motion.state === 'moving' ? <>{motion.words} <span className="muted num">{Math.round(motion.mm)} mm in 0.5 s</span></> : present && motion.state === 'still' ? 'still' : '—'}</dd></div>
+      <div><dt>Latency</dt><dd className={latency && present ? undefined : 'muted'} title="Phone to gateway, the gateway's estimate from its clock pings: the median over the last second of poses and inputs">
+        {present ? latencyText(latency) : '—'} {present && <span className="muted">{latency ? 'phone → gateway, last 1 s' : 'not stamped yet'}</span>}
+      </dd></div>
       <div><dt>Session</dt><dd className="mono" title={pose?.sessionId}>{pose?.sessionId ?? '—'}</dd></div>
     </dl>
   </section>;
@@ -196,21 +216,103 @@ function InputsSection({ config, live, selected }: { config?: ConfigMessage; liv
   </section>;
 }
 
-export function Inspector({ phones, selected, onSelect, live, section, simulated }: { phones: Phone[]; selected?: Phone; onSelect: (id: string) => void; live: (id: string) => PhoneLive | undefined; section?: Section; simulated: boolean }) {
+function Caret({ open }: { open: boolean }) {
+  return <svg className={`caret ${open ? 'open' : ''}`} viewBox="0 0 8 8" aria-hidden="true"><path d="M2.5 1.2 5.8 4 2.5 6.8" /></svg>;
+}
+
+type Branch = JsonValue[] | { [key: string]: JsonValue };
+/** One key of a JSON tree: a value on its row, or a branch that opens. `flipped` holds the paths opened or closed by hand. */
+function JsonNode({ name, value, path, depth, flipped, onFlip }: { name: string; value: JsonValue; path: string; depth: number; flipped: Set<string>; onFlip: (path: string) => void }) {
+  const inline = inlineArray(value);
+  if (!isBranch(value) || inline !== undefined || !(Array.isArray(value) ? value.length : Object.keys(value).length)) {
+    const text = inline ?? (isBranch(value) ? branchSummary(value) : leafText(value));
+    return <div className="jrow"><span className="jk">{name}</span><span className={`jv ${isBranch(value) ? 'empty-branch' : leafKind(value)}`} title={text.length > 24 ? text : undefined}>{text}</span></div>;
+  }
+  const branch: Branch = value; const open = openByDefault(branch, depth) !== flipped.has(path);
+  const entries: [string, JsonValue][] = Array.isArray(branch) ? branch.map((item, index) => [String(index), item]) : Object.entries(branch);
+  return <div className="jbranch">
+    <button type="button" className="jrow jtoggle" aria-expanded={open} onClick={() => onFlip(path)}>
+      <span className="jk"><Caret open={open} />{name}</span>{!open && <span className="jsum">{branchSummary(branch)}</span>}
+    </button>
+    {open && <div className={`jkids ${Array.isArray(branch) ? 'list' : ''}`}>{entries.map(([key, item]) => <JsonNode key={key} name={key} value={item} path={`${path}\u0000${key}`} depth={depth + 1} flipped={flipped} onFlip={onFlip} />)}</div>}
+  </div>;
+}
+
+/**
+ * Robot state as a tree: keys on the left, values in monospace on the right, objects and lists folding open. The
+ * top two levels start open (long ones closed); what is opened or closed by hand stays so as the state updates.
+ */
+const JsonTree = memo(function JsonTree({ state, label }: { state: { [key: string]: JsonValue }; label: string }) {
+  const [flipped, setFlipped] = useState<Set<string>>(() => new Set());
+  const flip = useCallback((path: string) => setFlipped(old => { const next = new Set(old); if (!next.delete(path)) next.add(path); return next; }), []);
+  const entries = Object.entries(state);
+  return <div className="jtree" role="group" aria-label={label}>
+    {entries.length ? entries.map(([key, value]) => <JsonNode key={key} name={key} value={value} path={key} depth={0} flipped={flipped} onFlip={flip} />)
+      : <p className="empty">An empty state.</p>}
+  </div>;
+});
+
+/** One retained robot state: for every phone, or for one phone, with how old it is and whether it went stale. */
+function StateSection({ entry, robot, store, title, phone }: { entry: RobotStateEntry; robot: RobotInfo; store: ViewerStore; title: string; phone?: { name: string; color: string } }) {
+  const age = store.stateAge(entry); const fresh = freshness(entry, robot.connected, age);
+  const every = entry.message.everyMs;
+  const when = ago(Date.now() - age, Date.now());
+  const note = fresh === 'stale' ? <span className="fresh-note stale" title={`Nothing new for longer than ${staleAfterMs(every) / 1000} s${every ? `; the robot said it sends every ${every} ms` : ''}`}>stale, updated {when}</span>
+    : fresh === 'offline' ? <span className="fresh-note">offline, updated {when}</span>
+    : <span className="fresh-note">updated {when}</span>;
+  return <section className={`section robot-state ${fresh === 'fresh' ? '' : 'stale'}`} aria-label={`${robot.name}: ${title}`}>
+    <h4><span className="state-title">{phone && <PhoneDot color={phone.color} />}{title}</span><small>{note}</small></h4>
+    <JsonTree state={entry.message.state} label={`${robot.name}, ${title}`} />
+  </section>;
+}
+
+/** A robot: whether it is online, whose screen the phones show, the video it publishes, and its latest state for every phone and for each phone. */
+function RobotPanel({ robot, store, phones }: { robot: RobotInfo; store: ViewerStore; phones: Phone[] }) {
+  const { all, phones: perPhone } = store.robotStates(robot.id);
+  const every = all?.message.everyMs ?? perPhone[0]?.message.everyMs;
+  const named = (id: string) => phones.find(phone => phone.id === id) ?? store.seen.get(id);
+  return <>
+    {!robot.connected && <p className="gone-note">{robot.name} is offline. Showing what it last sent.</p>}
+    <section className="section">
+      <h4><span>Robot</span><small className="mono">{robot.id}</small></h4>
+      <dl className="kv">
+        <div><dt>Connection</dt><dd className={robot.connected ? undefined : 'muted'}>{robot.connected ? 'Online' : 'Offline'}</dd></div>
+        <div><dt>Phone screen</dt><dd className={robot.screen ? undefined : 'muted'}>{robot.screen ? 'Its screen is showing' : 'Not its screen'}</dd></div>
+        <div><dt>Video</dt><dd className={robot.streams?.length ? 'mono' : 'muted'} title={streamList(robot.streams)}>{robot.streams?.length ? `${streamList(robot.streams)}` : 'None over WebRTC'}</dd></div>
+        <div><dt>Sends state</dt><dd className={every ? 'num' : 'muted'}>{every ? `every ${every} ms` : '—'}</dd></div>
+      </dl>
+    </section>
+    {all && <StateSection key={stateKey(robot.id)} entry={all} robot={robot} store={store} title="State for every phone" />}
+    {perPhone.map(entry => {
+      const id = entry.message.phoneId!; const phone = named(id);
+      return <StateSection key={stateKey(robot.id, id)} entry={entry} robot={robot} store={store} title={`For ${phone?.name ?? id}`} phone={phone} />;
+    })}
+    {!all && !perPhone.length && <p className="empty">No state from {robot.name} yet. A robot sends <span className="mono">robot_state</span> to show it here.</p>}
+  </>;
+}
+
+export function Inspector({ phones, robots, focus, onSelect, store, section, simulated }: { phones: Phone[]; robots: RobotInfo[]; focus?: Focus; onSelect: (focus: Focus) => void; store: ViewerStore; section?: Section; simulated: boolean }) {
   const now = Date.now();
-  if (!selected) return <aside className="inspector" aria-label="Inspector">
+  const robot = focus?.kind === 'robot' ? robots.find(candidate => candidate.id === focus.id) : undefined;
+  const selected = focus?.kind === 'phone' ? phones.find(phone => phone.id === focus.id) : undefined;
+  if (!focus || (!robot && !selected)) return <aside className="inspector" aria-label="Inspector">
     <p className="empty inspector-empty">No phones yet. Each phone's pose, calibration and controls show here once it connects to the gateway.</p>
   </aside>;
-  const phoneLive = live(selected.id);
-  return <aside className="inspector" aria-label={`Inspector, ${selected.name}`}>
-    <PhoneTabs phones={phones} selected={selected.id} onSelect={onSelect} />
-    <div id="inspector-panel" role="tabpanel" aria-label={selected.name}>
-      {stopOn(selected.config) && <p className="stop-note"><b>Stop is on</b> for {selected.name}. What it stops is up to the consumer.</p>}
-      {!selected.connected && <p className="gone-note">{selected.name} is disconnected. Showing what it last sent.</p>}
-      <PoseSection phone={selected} live={phoneLive} selected={section === 'pose'} />
-      <CalibrationSection config={selected.config} live={phoneLive} selected={section === 'calibration'} simulated={simulated} />
-      <ControlsSection config={selected.config} live={phoneLive} selected={section === 'controls'} now={now} />
-      <InputsSection config={selected.config} live={phoneLive} selected={section === 'inputs'} />
+  const tabs = <Tabs phones={phones} robots={robots} focus={focus} onSelect={onSelect} />;
+  if (robot) return <aside className="inspector" aria-label={`Inspector, ${robot.name}`}>
+    {tabs}
+    <div id="inspector-panel" role="tabpanel" aria-label={robot.name}><RobotPanel robot={robot} store={store} phones={phones} /></div>
+  </aside>;
+  const phone = selected!; const phoneLive = store.live.phones.get(phone.id);
+  return <aside className="inspector" aria-label={`Inspector, ${phone.name}`}>
+    {tabs}
+    <div id="inspector-panel" role="tabpanel" aria-label={phone.name}>
+      {stopOn(phone.config) && <p className="stop-note"><b>Stop is on</b> for {phone.name}. What it stops is up to the consumer.</p>}
+      {!phone.connected && <p className="gone-note">{phone.name} is disconnected. Showing what it last sent.</p>}
+      <PoseSection phone={phone} live={phoneLive} selected={section === 'pose'} latency={store.latency(phone.id)} />
+      <CalibrationSection config={phone.config} live={phoneLive} selected={section === 'calibration'} simulated={simulated} />
+      <ControlsSection config={phone.config} live={phoneLive} selected={section === 'controls'} now={now} />
+      <InputsSection config={phone.config} live={phoneLive} selected={section === 'inputs'} />
     </div>
   </aside>;
 }
