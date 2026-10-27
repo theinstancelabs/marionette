@@ -38,7 +38,9 @@
 <link rel="stylesheet" href="marionette-kit.css">
 <script src="marionette-kit.js"></script>
 <style>
-main{padding:0 16px calc(24px + env(safe-area-inset-bottom))}
+/* The app shows the page edge to edge (viewport-fit=cover), so keep clear of the status bar, the home bar and, on its side, the notch. */
+body{padding:var(--top) var(--right) 0 var(--left)}
+main{padding:0 16px calc(24px + var(--bottom))}
 h1{font-size:28px;margin:10px 0 0;letter-spacing:-.01em}
 .note{margin:2px 0 10px;color:var(--ink2);min-height:1.3em}
 .cams{margin:0 0 12px}
