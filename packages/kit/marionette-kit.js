@@ -53,47 +53,56 @@
   function ready(fn) { if (booted) safely(fn, window.Marionette); else waiting.push(fn); }
 
   /* ---------- Holds and drags: what this page is touching, and what the gateway says about it ---------- */
-  // Hold buttons pressed here: control id → whether the gateway has reported the hold during this press.
+  // Hold buttons pressed here, and sliders, sticks and drags dragged here: control id → false (not yet reported by the
+  // gateway), true (reported held or live during this touch) or CUT. A cut touch is over for the gateway: the
+  // connection dropped or this page's phone changed during it, it began while the gateway was away, or the kit let go
+  // of it. Nothing more goes out for it and it reads as dropped, whatever the gateway says, until the operator lets go.
+  const CUT = 'cut';
   const pressed = new Map();
-  // Sliders and sticks dragged here: control id → whether the gateway has reported the drag live during this drag.
   const touching = new Map();
   const config = () => last.config;
   const control = action => { const c = last.config; return c ? c.controls.find(x => x.action === action) : undefined; };
   const byId = id => { const c = last.config; return c ? c.controls.find(x => x.id === id) : undefined; };
   const resolve = c => (typeof c === 'string' ? byId(c) : c);
   const linkDown = () => { const c = last.connection; return !!c && c.state !== 'connected'; };
+  const phoneOf = c => (c && c.phone ? c.phone.id : undefined);
   // idle; pending (pressed, not yet reported by the gateway); held; or dropped (the gateway let go, e.g. its repeats
   // stopped arriving, while it is still pressed here; a repeat never restarts a hold, so the operator presses again).
   // Without a gateway connection nothing is held, whatever the last config said.
   function holdState(c) {
     c = resolve(c); if (!c || !pressed.has(c.id)) return 'idle';
-    if (linkDown()) return 'dropped';
-    return c.held ? 'held' : pressed.get(c.id) ? 'dropped' : 'pending';
+    const was = pressed.get(c.id);
+    if (was === CUT || linkDown()) return 'dropped';
+    return c.held ? 'held' : was ? 'dropped' : 'pending';
   }
   // idle; pending (dragged, not yet reported live); live; or dropped (the gateway stopped hearing it while it is still
   // dragged here; like a hold, it only counts again once the operator lets go).
   function liveState(c) {
     c = resolve(c); if (!c || !touching.has(c.id)) return 'idle';
-    if (linkDown()) return 'dropped';
-    return c.live ? 'live' : touching.get(c.id) ? 'dropped' : 'pending';
+    const was = touching.get(c.id);
+    if (was === CUT || linkDown()) return 'dropped';
+    return c.live ? 'live' : was ? 'dropped' : 'pending';
   }
   const busy = () => pressed.size > 0 || touching.size > 0;
   function send(c, value) { const M = window.Marionette; if (c && M) M.sendAction(c.id, c.action, value); }
+  // The host ends every hold and drag when the gateway goes or its phone changes. Whatever is still touched here is
+  // cut: it sends nothing more (a repeat or a new sample would start it again) until the operator lets go.
+  // `why` is 'connection' or 'phone'.
+  function cutAll(why) { let any = false; for (const part of [...parts]) if (part.cut && safely(part.cut, why)) any = true; return any; }
 
   function take(type, payload) {
     if (type === 'config') {
       if (!payload || !Array.isArray(payload.controls)) return;
-      last.config = payload;
-      for (const id of pressed.keys()) { const c = byId(id); if (c && c.held) pressed.set(id, true); }
-      for (const id of touching.keys()) { const c = byId(id); if (c && c.live) touching.set(id, true); }
+      const before = last.config; last.config = payload;
+      // A config for another phone (a mirror that moved on): what is touched here was meant for the old one.
+      const cut = !!before && phoneOf(before) !== phoneOf(payload) && cutAll('phone');
+      for (const [id, was] of pressed) { const c = byId(id); if (was === false && c && c.held) pressed.set(id, true); }
+      for (const [id, was] of touching) { const c = byId(id); if (was === false && c && c.live) touching.set(id, true); }
       for (const part of [...parts]) if (part.sync) safely(part.sync, payload);
-      renderParts();
+      if (cut) touched(); else renderParts();
     } else if (type === 'connection') {
       last.connection = payload;
-      // The host ends every hold and drag when the gateway goes. One still touched here reads as dropped, now and
-      // after a reconnect, until the operator lets go and touches it again.
-      if (payload && payload.state !== 'connected') { for (const id of pressed.keys()) pressed.set(id, true); for (const id of touching.keys()) touching.set(id, true); }
-      renderParts();
+      if (payload && payload.state !== 'connected' && cutAll('connection')) touched(); else renderParts();
     } else last[type] = payload;
     emit(type, payload);
   }
@@ -105,7 +114,7 @@
   // What lets go when the page is left, a sheet opens or Stop turns on: kit parts by default, plus letGoOnLeave().
   const leavers = new Set();
   function renderParts() { for (const part of [...parts]) if (part.render) safely(part.render); }
-  function touched() { renderParts(); emit('touch'); }
+  function touched() { watch(); renderParts(); emit('touch'); }
   function listen(part, node, type, fn, options) { node.addEventListener(type, fn, options); (part.off || (part.off = [])).push(() => node.removeEventListener(type, fn, options)); }
   function adopt(part, o) {
     o = o || {};
@@ -144,6 +153,23 @@
   window.addEventListener('blur', () => letGo());
   document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); });
 
+  // Fingers (and pressed mouse buttons) on the page, seen by the window before anything else, so a part hears its
+  // finger lift even when its element was removed or made inert in the meantime: pointer id → pointer type.
+  // part.ended(event) hears every pointerup, pointercancel and lostpointercapture; part.lifted() hears the last finger lift.
+  const fingers = new Map();
+  const tell = (name, e) => { for (const part of [...parts]) if (part[name]) safely(part[name], e); };
+  const lifted = () => { if (!fingers.size) tell('lifted'); };
+  window.addEventListener('pointerdown', e => { fingers.set(e.pointerId, e.pointerType); }, true);
+  for (const name of ['pointerup', 'pointercancel']) window.addEventListener(name, e => { fingers.delete(e.pointerId); tell('ended', e); lifted(); }, true);
+  window.addEventListener('lostpointercapture', e => tell('ended', e), true);
+  // No touch left on the screen, whatever the pointer events said.
+  for (const name of ['touchend', 'touchcancel']) window.addEventListener(name, e => { if (e.touches && e.touches.length) return; for (const [id, kind] of fingers) if (kind === 'touch') fingers.delete(id); lifted(); }, true);
+  // While anything is touched, a screen re-rendering it away (replaceChildren without dispose()) lets go of it at once,
+  // whichever way the browser then sends that finger's events: part.orphaned() lets go if its element left the page.
+  const orphans = typeof MutationObserver === 'function' ? new MutationObserver(() => tell('orphaned')) : undefined;
+  let watching = false;
+  function watch() { const want = busy(); if (!orphans || want === watching) return; watching = want; if (want) orphans.observe(document, { childList: true, subtree: true }); else orphans.disconnect(); }
+
   /* ---------- DOM helpers ---------- */
   /** h('button', { class: 'x', onclick: fn, 'aria-label': 'y' }, 'text', child, [more]) */
   const h = (tag, props, ...children) => {
@@ -172,58 +198,96 @@
   /* ---------- hold: true on press, false on release ---------- */
   // The app repeats the press while it is held, and the gateway drops a hold whose renewals stop. The release goes to
   // the control that was pressed, even if the config changed in between, and dispose() releases first, so a rebuilt
-  // dock can never leave a hold behind.
+  // dock can never leave a hold behind. A button taken off the page mid-press (a screen re-rendering without dispose())
+  // lets go at once, and the press's finger is followed on the window, so its lift is heard wherever it lands.
   function hold(button, o) {
     o = o || {}; const get = finder(o);
-    let held, shown;
+    let held, pointer, sent, shown;
     const current = () => (held ? byId(held.id) || held : get());
     const part = { el: button };
     part.release = quiet => {
-      if (!held) return; const c = held; held = undefined; pressed.delete(c.id);
-      if (quiet !== true) send(c, false);
+      if (!held) return; const c = held; held = undefined; pointer = undefined; pressed.delete(c.id);
+      if (quiet !== true && sent) send(c, false);
       touched(); if (o.onChange) safely(o.onChange, false);
     };
     part.letGo = part.release;
+    // A press cut by a phone change is released quietly: its release would go to the new phone.
+    part.cut = why => { if (!held) return false; if (why === 'phone') sent = false; if (pressed.get(held.id) === CUT) return false; pressed.set(held.id, CUT); return true; };
+    part.ended = e => { if (held && e.pointerId === pointer) part.release(); };
+    part.orphaned = () => { if (!held || button.isConnected) return false; part.release(); return true; };
     part.state = () => holdState(current());
     part.render = () => {
+      if (part.orphaned()) return;
       const c = current(); const state = holdState(c);
       button.setAttribute('data-state', state); button.setAttribute('aria-pressed', String(state !== 'idle'));
       if (state !== shown) { shown = state; if (o.onState) safely(o.onState, state, c); }
     };
     listen(part, button, 'pointerdown', e => {
-      e.preventDefault(); if (held || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+      e.preventDefault(); if (held || !button.isConnected || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
       const c = get(); if (!c) return;
-      held = c; pressed.set(c.id, false);
+      held = c; pointer = e.pointerId;
       try { button.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the press still counts */ }
-      send(c, true); touched(); if (o.onChange) safely(o.onChange, true);
+      // Pressed while the gateway is away: the press never goes out (a host could deliver it once the gateway is back),
+      // so it can't turn into a hold without a fresh press.
+      sent = !linkDown(); pressed.set(c.id, sent ? false : CUT); if (sent) send(c, true);
+      touched(); if (o.onChange) safely(o.onChange, true);
     });
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) listen(part, button, name, () => part.release());
     listen(part, button, 'contextmenu', prevent);
     return adopt(part, o);
   }
 
   /* ---------- Live values: sliders and sticks stream while they are dragged ---------- */
-  // The bridge's stream sends the newest value at most once a frame, marked live, and the host repeats the latest
-  // sample while it is open; end() sends the final value.
-  function dragger(get) {
-    let stream, id;
+  // The newest value goes out at most once a frame, marked live, and the host repeats the latest sample while the drag
+  // is open; end() sends the final value, which ends it. The kit streams the values itself, the way the bridge's
+  // stream() does, so that cutting a drag also drops a sample still waiting for its frame. A cut drag sends nothing
+  // more and ignores update() until end() says the gesture is over; `onCut` hears it being cut.
+  const sameValue = (a, b) => a === b || (!!a && !!b && typeof a === 'object' && typeof b === 'object' && a.x === b.x && a.y === b.y);
+  const sendable = v => (typeof v === 'number' ? isFinite(v) : typeof v === 'string' || typeof v === 'boolean' || (!!v && typeof v === 'object' && typeof v.x === 'number' && typeof v.y === 'number'));
+  function dragger(get, onCut) {
+    let c, state = 'idle', pending, sent, frame = 0;   // state: idle, open or CUT
+    const stopFrame = () => { if (frame) cancelAnimationFrame(frame); frame = 0; pending = undefined; };
+    const flush = () => { frame = 0; if (state !== 'open' || pending === undefined) return; sent = pending; pending = undefined; post(sent, true); };
+    const final = value => { const v = value !== undefined ? value : pending !== undefined ? pending : sent; stopFrame(); post(v); };
+    const post = (value, live) => { const M = window.Marionette; if (M) M.sendAction(c.id, c.action, value, live ? { live: true } : undefined); };
+    const cutHere = () => { stopFrame(); state = CUT; touching.set(c.id, CUT); if (onCut) safely(onCut); };
     return {
       update(value) {
-        if (!stream) { const c = get(); const M = window.Marionette; if (!c || !M || !M.stream) return; id = c.id; stream = M.stream(c.id, c.action); touching.set(id, false); touched(); }
-        stream.update(value);
+        if (state === CUT || !sendable(value)) return;
+        if (state === 'idle') {
+          const x = get(); const M = window.Marionette; if (!x || !M || typeof M.stream !== 'function') return;
+          c = x; sent = undefined;
+          // Begun while the gateway is away: nothing goes out (a host could deliver it once the gateway is back).
+          if (linkDown()) { cutHere(); touched(); return; }
+          state = 'open'; touching.set(c.id, false); touched();
+        }
+        if (sameValue(value, pending !== undefined ? pending : sent)) return;
+        pending = value; if (!frame) frame = requestAnimationFrame(flush);
       },
-      end(value, quiet) { if (!stream) return; if (quiet !== true) stream.end(value); stream = undefined; touching.delete(id); touched(); },
-      isOpen: () => !!stream,
-      id: () => (stream ? id : undefined),
+      // The gesture is over: the final value goes out (the last one if left out) unless quiet, or nothing if it was cut.
+      end(value, quiet) {
+        if (state === 'idle') return;
+        if (state === 'open' && quiet !== true) final(value); else stopFrame();
+        state = 'idle'; touching.delete(c.id); touched();
+      },
+      // The kit let go mid-gesture: the final value goes out unless quiet, then nothing until end().
+      letGo(value, quiet) { if (state !== 'open') return false; if (quiet !== true) final(value); cutHere(); touched(); return true; },
+      // The host already ended it (the gateway went, or the phone changed): nothing goes out, now or at the end.
+      cut() { if (state !== 'open') return false; cutHere(); return true; },
+      isOpen: () => state === 'open',
+      isCut: () => state === CUT,
+      id: () => (state === 'idle' ? undefined : c.id),
     };
   }
   /** A live value fed by your own touch handling (a thumb sliding on a pad, say): update() streams, end() sends the final value. */
   function drag(o) {
-    o = o || {}; const get = finder(o); const d = dragger(get);
+    // Once cut (the kit let go, sending the last value again without live; the gateway went; the phone changed),
+    // update() does nothing until end(), and onLetGo tells your touch handling to show it let go.
+    o = o || {}; const get = finder(o); const d = dragger(get, o.onLetGo);
     const part = { update: d.update, end: (value, quiet) => d.end(value, quiet), isOpen: d.isOpen };
     part.state = () => liveState(d.id() ? byId(d.id()) : get());
-    // Letting go sends the last value again, without `live`.
-    part.letGo = quiet => d.end(undefined, quiet);
+    part.letGo = quiet => { d.letGo(undefined, quiet); };
+    part.cut = () => d.cut();
+    part.dispose = () => d.end();
     return adopt(part, o);
   }
   /** A slider that streams while dragged; letting go (or a key press) sends the final value. */
@@ -233,19 +297,33 @@
     // The range comes from the control, now or once the config arrives.
     const shape = c => { for (const key of ['min', 'max', 'step']) if (input.getAttribute(key) !== String(c[key])) input.setAttribute(key, c[key]); if (!input.getAttribute('aria-label')) input.setAttribute('aria-label', c.label); };
     if (c0 && c0.type === 'slider') { shape(c0); input.value = c0.value; }
-    const drag = dragger(get); const fmt = o.format || format;
+    const drag = dragger(get); const fmt = o.format || format; let pointer;
     const current = () => (drag.id() ? byId(drag.id()) : get()) || c0;
     const show = value => { if (o.out) setText(o.out, fmt(current(), value)); };
+    // Back to the gateway's value: after a cut drag the thumb shows nothing that wasn't sent.
+    const settle = () => { const c = get(); if (c && c.type === 'slider') { input.value = c.value; show(c.value); } };
     const part = { el: input, out: o.out };
-    part.finish = quiet => drag.end(Number(input.value), quiet);
-    part.letGo = part.finish;
+    // The finger lifted (or a key press committed the value): the final value goes out, or nothing after a cut.
+    part.finish = quiet => { pointer = undefined; const cut = drag.isCut(); drag.end(Number(input.value), quiet); if (cut) settle(); };
+    // The kit let go mid-drag: the value so far is the final one, and the rest of the drag is ignored until the finger lifts.
+    part.letGo = quiet => { drag.letGo(Number(input.value), quiet); };
+    part.cut = () => drag.cut();
+    part.ended = e => { if (e.pointerId === pointer && e.type !== 'lostpointercapture') part.finish(); };
+    part.lifted = () => { if (drag.id() !== undefined) part.finish(); };
+    part.orphaned = () => { if (drag.id() === undefined || input.isConnected) return false; part.finish(); return true; };
+    part.dispose = () => part.finish();
     part.state = () => liveState(current());
-    part.render = () => { const state = liveState(current()); input.setAttribute('data-state', state); if (o.out) o.out.setAttribute('data-state', state); };
+    part.render = () => {
+      if (part.orphaned()) return;
+      const state = liveState(current()); input.setAttribute('data-state', state); if (o.out) o.out.setAttribute('data-state', state);
+    };
     // Values change with every config; follow them unless this slider is being dragged or has focus.
     part.sync = () => { const c = get(); if (!c || c.type !== 'slider' || touching.has(c.id)) return; shape(c); if (document.activeElement === input) return; input.value = c.value; show(c.value); };
-    listen(part, input, 'input', () => { const value = Number(input.value); show(value); drag.update(value); });
-    listen(part, input, 'change', () => part.finish());
-    for (const name of ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'blur']) listen(part, input, name, () => part.finish());
+    listen(part, input, 'pointerdown', e => { pointer = e.pointerId; });
+    listen(part, input, 'input', () => { if (drag.isCut()) return; const value = Number(input.value); drag.update(value); if (!drag.isCut()) show(value); });
+    for (const name of ['change', 'pointerup', 'pointercancel', 'touchend', 'touchcancel']) listen(part, input, name, () => part.finish());
+    // Focus taken away mid-drag is the page letting go, not the finger.
+    listen(part, input, 'blur', () => part.letGo());
     show(input.value);
     return adopt(part, o);
   }
@@ -267,7 +345,9 @@
     for (const [k, v] of [['tabindex', '0'], ['role', 'group'], ['aria-roledescription', 'stick'], ['aria-label', label + '. Drag to push it, or hold the arrow keys. Let go to stop.']]) if (!pad.hasAttribute(k)) pad.setAttribute(k, v);
     const face = svg(STICK_FACE); const vec = face.querySelector('.mk-vec'); const knob = h('span', { class: 'mk-knob' });
     pad.append(face, ...(o.edges || []).map((word, i) => h('span', { class: 'mk-edge mk-' + 'nswe'[i] }, word)), knob);
-    const drag = dragger(get); let rect, pointer, pushed = false; const keys = new Set();
+    let rect, pointer, pushed = false; const keys = new Set();
+    // A cut stick (the kit let go, or the gateway went) springs back and ignores the finger until it lifts.
+    const drag = dragger(get, () => rest());
     const current = () => (drag.id() ? byId(drag.id()) : get()) || c0;
     const off = () => pad.getAttribute('aria-disabled') === 'true';
     const show = v => {
@@ -275,27 +355,38 @@
       vec.setAttribute('x2', (50 - v.y * 35).toFixed(1)); vec.setAttribute('y2', (50 - v.x * 35).toFixed(1));
       if (o.onMove) safely(o.onMove, v);
     };
-    const push = v => { pushed = true; show(v); drag.update(v); };
+    function rest() { pad.classList.remove('mk-dragging'); if (pushed) { pushed = false; show({ x: 0, y: 0 }); } }
+    const push = v => { if (drag.isCut()) return; drag.update(v); if (drag.isCut()) return; pushed = true; pad.classList.add('mk-dragging'); show(v); };
     const part = { el: pad };
-    part.letGo = quiet => { if (!pushed) return; pushed = false; pointer = undefined; keys.clear(); pad.classList.remove('mk-dragging'); show({ x: 0, y: 0 }); drag.end({ x: 0, y: 0 }, quiet); };
+    // The finger lifted (or the last arrow key came up): back to rest, which goes out unless the drag was cut.
+    const release = quiet => { pointer = undefined; keys.clear(); rest(); drag.end({ x: 0, y: 0 }, quiet); };
+    part.letGo = quiet => { drag.letGo({ x: 0, y: 0 }, quiet); };
+    part.cut = () => drag.cut();
+    // The finger is followed on the window, so a stick taken off the page mid-drag still lets go.
+    part.ended = e => { if (pointer !== undefined && e.pointerId === pointer) release(); };
+    part.lifted = () => { if (pointer !== undefined) release(); };
+    part.orphaned = () => { if ((pointer === undefined && !keys.size) || pad.isConnected) return false; release(); return true; };
+    part.dispose = () => release();
     part.state = () => liveState(current());
-    part.render = () => pad.setAttribute('data-state', liveState(current()));
+    part.render = () => {
+      if (part.orphaned()) return;
+      pad.setAttribute('data-state', liveState(current()));
+    };
     const at = e => {
       if (!rect || !rect.width || !rect.height) return { x: 0, y: 0 };
       return stickLimit((rect.top + rect.height / 2 - e.clientY) / (rect.height * 0.35), (rect.left + rect.width / 2 - e.clientX) / (rect.width * 0.35));
     };
     listen(part, pad, 'pointerdown', e => {
-      e.preventDefault(); if (pointer !== undefined || off()) return;
-      pointer = e.pointerId; rect = pad.getBoundingClientRect(); keys.clear(); pad.classList.add('mk-dragging');
+      e.preventDefault(); if (pointer !== undefined || !pad.isConnected || off()) return;
+      pointer = e.pointerId; rect = pad.getBoundingClientRect(); keys.clear();
       try { pad.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the drag still counts */ }
       push(at(e));
     });
     listen(part, pad, 'pointermove', e => { if (e.pointerId === pointer) push(at(e)); });
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) listen(part, pad, name, e => { if (e.pointerId === pointer) part.letGo(); });
     const fromKeys = () => { let x = 0, y = 0; for (const key of keys) { x += ARROWS[key][0]; y += ARROWS[key][1]; } return stickLimit(x, y); };
-    listen(part, pad, 'keydown', e => { if (!ARROWS[e.key] || pointer !== undefined || off()) return; e.preventDefault(); if (e.repeat || keys.has(e.key)) return; keys.add(e.key); pad.classList.add('mk-dragging'); push(fromKeys()); });
-    listen(part, pad, 'keyup', e => { if (!keys.delete(e.key)) return; if (keys.size) push(fromKeys()); else part.letGo(); });
-    listen(part, pad, 'blur', () => { if (keys.size) part.letGo(); });
+    listen(part, pad, 'keydown', e => { if (!ARROWS[e.key] || pointer !== undefined || off()) return; e.preventDefault(); if (e.repeat || keys.has(e.key)) return; keys.add(e.key); push(fromKeys()); });
+    listen(part, pad, 'keyup', e => { if (!keys.delete(e.key)) return; if (keys.size) push(fromKeys()); else release(); });
+    listen(part, pad, 'blur', () => { if (keys.size) release(); });
     listen(part, pad, 'contextmenu', prevent);
     return adopt(part, o);
   }

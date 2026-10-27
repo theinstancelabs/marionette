@@ -105,12 +105,19 @@ declare global {
       onState?(state: HoldState, control: Marionette.Control | undefined): void;
     };
     interface DragPart extends Part {
-      /** Streams a value, marked live, at most once a frame; the first one starts the drag. */
+      /**
+       * Streams a value, marked live, at most once a frame; the first one starts the drag. Ignored while the drag is cut
+       * (the kit let go of it, the gateway went or this page's phone changed), until end().
+       */
       update(value: Marionette.ControlValue): void;
-      /** Sends the final value (the last one if left out) and ends the drag. `quiet` ends it here only. */
+      /** The gesture is over: sends the final value (the last one if left out) and ends the drag. `quiet`, or a cut drag, sends nothing. */
       end(value?: Marionette.ControlValue, quiet?: boolean): void;
       isOpen(): boolean; state(): LiveState; letGo(quiet?: boolean): void;
     }
+    type DragOptions = Target & PartOptions & {
+      /** Called when the drag is cut while open (the kit let go, the gateway went or the phone changed), to show it let go. Call end() when the finger lifts anyway. */
+      onLetGo?(): void;
+    };
     interface SegmentsPart extends Part { el: HTMLElement; render(): void }
     type SegmentsOptions = Target & PartOptions & {
       /** Turns an option off (the selected one always stays on). Call render() when what it depends on changes. */
@@ -208,7 +215,7 @@ declare global {
       letGoOnLeave(target: Group | Part | ((quiet: boolean) => void)): () => void;
 
       hold(button: HTMLElement, options: HoldOptions): HoldPart;
-      drag(options: Target & PartOptions): DragPart;
+      drag(options: DragOptions): DragPart;
       segments(el: HTMLElement | null, options: SegmentsOptions): SegmentsPart;
       slider(input: HTMLInputElement | null, options: SliderOptions): SliderPart;
       stick(pad: HTMLElement | null, options: StickOptions): StickPart;

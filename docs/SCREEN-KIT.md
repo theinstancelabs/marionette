@@ -58,6 +58,8 @@ The kit knows what this page is pressing or dragging, and what the gateway repor
 
 A dropped touch stays dropped until the operator lets go and touches it again. While the gateway is away (`connection` is `disconnected` or `reconnecting`) everything still touched reads as dropped, and it stays dropped after a reconnect until it is let go. `K.holdState(control)` and `K.liveState(control)` give the same states for your own headline.
 
+The kit doesn't rely on the host or the gateway for this. It cuts a touch when the connection drops, when this page's phone changes (a mirror that moves on to another phone), when the touch begins while the gateway is away, and when the kit lets go of it (see [Letting go](#letting-go)). A cut touch sends nothing more: no new samples, no repeat, and no release or final value for a touch the host already ended. It reads as `dropped` whatever a later config says, until the finger lifts; only a fresh touch counts again.
+
 ### hold
 
 ```js
@@ -67,7 +69,9 @@ const pad = K.hold(document.querySelector('#pad'), {
 });
 ```
 
-It sends `true` on press and `false` on release, to the control that was pressed even if the config changed in between. The app repeats the press while it is held. A press does nothing if the button is `disabled` or `aria-disabled="true"`, or if the layout has no such control. `onChange(pressed)` is called on press and release. Style it with `[data-state=held]` and friends.
+It sends `true` on press and `false` on release, to the control that was pressed even if the config changed in between. The app repeats the press while it is held. A press does nothing if the button is `disabled` or `aria-disabled="true"`, if it isn't on the page, or if the layout has no such control. `onChange(pressed)` is called on press and release. Style it with `[data-state=held]` and friends.
+
+A button taken off the page mid-press (a screen re-rendering with `replaceChildren` without `dispose()`) lets go at once: while anything is touched the kit watches the page, and it follows the pressing finger on the window too, not just on the button. A button moved within the page (a keyed re-order) stays pressed. Sliders and sticks do the same.
 
 ### slider, stick and drag
 
@@ -79,11 +83,22 @@ document.querySelector('#drive-cell').append(drive.el);
 
 - `slider(input, options)` streams every value while the thumb is dragged (marked `live`, at most once a frame), and sends the final value when it is let go. Pass `null` for a new `<input type="range">`. It takes `min`, `max`, `step` and the value from the control (now, or once the config arrives), follows the config while it isn't dragged or focused, and writes the formatted value into `out` (with the same `data-state`). `slider.finish()` ends a drag now.
 - `stick(pad, options)` turns an element (or a new one, with `null`) into a spring-return stick. A touch anywhere on it pushes the stick that far from the centre, and it follows the finger until let go, when it sends `{x: 0, y: 0}`. The arrow keys push it too. `x` is up the pad (forward) and `y` is to the left, each from −1 to 1, rounded to two decimals toward zero, never longer than 1 together (`K.stickLimit(x, y)` does the rounding). `aria-disabled="true"` turns it off.
-- `drag(options)` is a live value fed by your own touch handling, such as a thumb sliding on a pad to set a gripper: `update(value)` streams, `end(value?)` sends the final value (the last one if you leave it out).
+- `drag(options)` is a live value fed by your own touch handling, such as a thumb sliding on a pad to set a gripper: `update(value)` streams, `end(value?)` sends the final value (the last one if you leave it out). Call `end()` when the finger lifts. When the drag is cut (the kit lets go of it, the gateway goes or the phone changes), `update()` does nothing until `end()`, which then sends nothing, and `state()` reads `dropped`. `onLetGo()` tells your touch handling when that happens, so it can show the thumb let go:
+
+```js
+const pad = document.querySelector('#grip-pad');
+const grip = K.drag({ action: 'gripper.set', onLetGo: () => pad.classList.remove('sliding') });
+const at = e => K.clamp((e.clientX - pad.getBoundingClientRect().left) / pad.clientWidth, 0, 1);
+pad.addEventListener('pointerdown', e => { pad.setPointerCapture(e.pointerId); pad.classList.add('sliding'); grip.update(at(e)); });
+pad.addEventListener('pointermove', e => { if (pad.hasPointerCapture(e.pointerId)) grip.update(at(e)); });
+pad.addEventListener('pointerup', () => { pad.classList.remove('sliding'); grip.end(); });   // after onLetGo too
+```
 
 ### Letting go
 
 Every hold, slider, stick and drag lets go when the page loses focus or is hidden, when a sheet opens and when this phone's Stop turns on. Pass `letGoOnLeave: false` to a part to keep it out of that.
+
+A slider, stick or drag that is let go of mid-gesture sends its final value (for a stick, rest), and the rest of that gesture is ignored: it reads `dropped` until the finger lifts (for `drag()`, until `end()`), so a finger still sliding after Stop turns on, or behind a sheet, never starts it again. A slider then shows the gateway's value again.
 
 ```js
 const dock = K.group();                          // parts that are rebuilt together
