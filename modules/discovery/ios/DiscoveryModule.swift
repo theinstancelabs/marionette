@@ -18,7 +18,7 @@ private struct Service {
 ///
 /// JS calls `start()` and `stop()`, and gets `onChange` with `{ status, gateways }` whenever the list changes:
 /// `status` is `browsing`, `denied` (Local Network access is off) or `unavailable`, and `gateways` is
-/// `[{ id, name, host, port, auth }]`, sorted by name, one per gateway id. Everything runs on the main queue.
+/// `[{ id, name, host, port, auth }]`, sorted by name, one per gateway id and address. Everything runs on the main queue.
 public class DiscoveryModule: Module {
   private static let serviceType = "_marionette._tcp"
   // The DNS-SD error iOS reports while Local Network access is off for the app (kDNSServiceErr_PolicyDenied).
@@ -136,14 +136,20 @@ public class DiscoveryModule: Module {
   }
 
   private func emit() {
-    var byId: [String: [String: Any]] = [:]
+    // One entry per id and address: a gateway that re-registers under a new service name shows once, but anything
+    // else advertising the same id (anyone can) is listed separately, at its own address, never folded into it.
+    var entries: [String: [String: Any]] = [:]
     for service in services.values {
       guard let host = service.host, let port = service.port else { continue }
       let id = service.txt["id"].flatMap { $0.isEmpty ? nil : $0 } ?? service.name
       let name = service.txt["name"].flatMap { $0.isEmpty ? nil : $0 } ?? service.name
-      byId[id] = ["id": id, "name": name, "host": host, "port": port, "auth": service.txt["auth"] == "1"]
+      entries["\(id)\n\(host):\(port)"] = ["id": id, "name": name, "host": host, "port": port, "auth": service.txt["auth"] == "1"]
     }
-    let gateways = byId.values.sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+    let gateways = entries.values.sorted {
+      let a = ($0["name"] as? String ?? "", $0["host"] as? String ?? "", $0["port"] as? Int ?? 0)
+      let b = ($1["name"] as? String ?? "", $1["host"] as? String ?? "", $1["port"] as? Int ?? 0)
+      return a < b
+    }
     sendEvent("onChange", ["status": status, "gateways": gateways])
   }
 }
