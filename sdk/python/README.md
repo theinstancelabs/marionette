@@ -266,6 +266,13 @@ handle.stop()
 It needs Node 20 or later: `$MARIONETTE_NODE`, `node` on PATH, or the one the `gateway` extra installs. The pairing
 identity lives in `~/.marionette` (`home=` or `--home` to change it), and the diagnostics log in `<home>/logs`.
 
+The gateway is tied to the Python process that started it (`run`, `start`, `marionette-gateway` and
+`testing.Gateway` alike): Node gets a pipe on its stdin that only that process holds, and with
+`MARIONETTE_EXIT_WITH_PARENT=1` the gateway stops, after its Bonjour goodbye, when the pipe closes. So a robot that
+crashes or is killed (even with `SIGKILL`) never leaves a gateway holding its port. A child the robot forked
+holds the pipe too, so it ends once the last of them does. The variable works for any program that runs the
+gateway as a child this way; without it the gateway ignores its stdin.
+
 ## Testing tools
 
 ```python

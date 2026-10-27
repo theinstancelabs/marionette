@@ -8,7 +8,9 @@ with Node 20 or later from ``PATH``, or with the ``nodejs-wheel-binaries`` packa
     marionette-gateway --port 8787 --name "Lab robot"         # the console script
     python -m marionette.gateway --no-mdns
 
-From Python, :func:`run` runs it in the foreground and :func:`start` in the background, returning a handle.
+From Python, :func:`run` runs it in the foreground and :func:`start` in the background, returning a handle. Either
+way the gateway is tied to this process: it gets a pipe on its stdin that only this process holds, and stops when
+the pipe closes, so a robot that dies (even killed outright) never leaves a gateway holding its port.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import threading
 from collections.abc import Callable, Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 Auth = Literal["off", "on", "strict"]
 _LISTENING = re.compile(r"listening on http://[^\s:]+:(\d+)")
@@ -120,6 +122,13 @@ def gateway_env(
     return out
 
 
+def _spawn(env: Mapping[str, str], **options: Any) -> subprocess.Popen[Any]:
+    """Node running the bundle as this process's child. Its stdin is a pipe only this process holds; with
+    ``MARIONETTE_EXIT_WITH_PARENT`` the gateway stops when the pipe closes, which the operating system does when
+    this process ends, however it ends."""
+    return subprocess.Popen([find_node(), str(bundle_path())], env={**env, "MARIONETTE_EXIT_WITH_PARENT": "1"}, stdin=subprocess.PIPE, **options)
+
+
 class GatewayProcess:
     """A gateway running in the background, started by :func:`start`."""
 
@@ -192,8 +201,9 @@ class GatewayProcess:
                 self.process.kill()
                 self.process.wait()
         self._reader.join(1.0)
-        if self.process.stdout is not None:
-            self.process.stdout.close()
+        for stream in (self.process.stdin, self.process.stdout):
+            if stream is not None:
+                stream.close()
 
     def __enter__(self) -> GatewayProcess:
         return self
@@ -217,11 +227,10 @@ def start(
     ready_timeout: float = 15.0,
 ) -> GatewayProcess:
     """Start the gateway in the background and wait until it listens. ``port=0`` picks a free port (read it from
-    the handle's ``port``). ``echo`` gets every line it prints. Stop it with ``stop()`` (or a ``with`` block)."""
-    process = subprocess.Popen(
-        [find_node(), str(bundle_path())],
-        env=gateway_env(port, home=home, name=name, auth=auth, token=token, mdns=mdns, html_file=html_file, log_dir=log_dir, env=env),
-        stdin=subprocess.DEVNULL,
+    the handle's ``port``). ``echo`` gets every line it prints. Stop it with ``stop()`` (or a ``with`` block); it
+    also stops by itself when this process ends."""
+    process = _spawn(
+        gateway_env(port, home=home, name=name, auth=auth, token=token, mdns=mdns, html_file=html_file, log_dir=log_dir, env=env),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -245,12 +254,9 @@ def run(
     log_dir: str | Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> int:
-    """Run the gateway in the foreground, printing what it prints, until it exits or Ctrl-C; its exit code."""
-    process = subprocess.Popen(
-        [find_node(), str(bundle_path())],
-        env=gateway_env(port, home=home, name=name, auth=auth, token=token, mdns=mdns, html_file=html_file, log_dir=log_dir, env=env),
-        stdin=subprocess.DEVNULL,
-    )
+    """Run the gateway in the foreground, printing what it prints, until it exits or Ctrl-C; its exit code. It also
+    stops when this process is killed."""
+    process = _spawn(gateway_env(port, home=home, name=name, auth=auth, token=token, mdns=mdns, html_file=html_file, log_dir=log_dir, env=env))
     try:
         return process.wait()
     except KeyboardInterrupt:
