@@ -142,7 +142,11 @@ declare global {
     interface StopPart extends Part { button: HTMLButtonElement; banner?: HTMLElement; isOn(): boolean; press(): void }
     type StopOptions = {
       action?: string;
-      /** Defaults to a floating Stop button added to the page. A sheet never covers it, wherever it is. */
+      /**
+       * Defaults to a floating Stop button added to the page. A sheet never makes your own button inert, but it is only
+       * above an open sheet if it is positioned (fixed) with a z-index over the sheet's (10), or in the sheet. While an
+       * open sheet covers it, the kit shows its floating Stop as well.
+       */
       button?: HTMLButtonElement;
       /** An element for the banner: filled with the default banner if empty; a `[data-stop-reset]` button inside resets. */
       banner?: HTMLElement;

@@ -405,10 +405,12 @@
 
   /* ---------- Stop: this phone's own signal, a toggle the consumer reads ---------- */
   // Marionette itself stops nothing. A toggle Stop turns on; a plain Stop button (on a custom layout) sends a press.
+  const STOP_WARNING = '[marionette-kit] stop(): an open sheet covers the Stop button you passed, so the kit shows its own floating Stop as well while a sheet is open. Give your Stop position: fixed and a z-index above the sheet\'s (.mk-sheet is 10), or put it in the sheet, or use the kit\'s floating Stop (stop() without a button).';
   function stop(o) {
     o = o || {}; const action = o.action || ACTIONS.estop; const get = () => control(action);
     const button = o.button || document.body.appendChild(h('button', { class: 'mk-stop', type: 'button', 'aria-label': 'Stop', hidden: true }, 'Stop'));
-    // Stop is always one tap away: a sheet never covers it, wherever it sits on the page.
+    // A sheet never makes Stop inert, wherever it sits on the page. The kit's Stop floats above every sheet, but an open
+    // sheet still draws over a screen's own Stop in the page's flow: see part.sheeted.
     kept.add(button);
     const banner = o.banner;
     if (banner) {
@@ -418,11 +420,17 @@
     const reset = o.reset || (banner && banner.querySelector('[data-stop-reset]'));
     const isOn = () => { const c = get(); return !!c && c.value === true; };
     const press = () => { const c = get(); if (!c) return; if (c.type !== 'toggle') send(c); else if (c.value !== true) send(c, true); };
-    let was;
+    // spare: the kit's floating Stop, shown beside the screen's own while an open sheet covers that one.
+    let was, spare, spareShown = false, warned = false;
     const part = { button, banner, isOn, press };
+    const wire = node => {
+      listen(part, node, 'pointerdown', e => { e.preventDefault(); press(); });
+      listen(part, node, 'click', e => { if (e.detail === 0) press(); });
+    };
     part.render = () => {
       const c = get(); const latched = isOn();
       button.hidden = !c; button.setAttribute('aria-pressed', String(latched)); if (banner) banner.hidden = !latched;
+      if (spare) { spare.hidden = !c || !spareShown; spare.setAttribute('aria-pressed', String(latched)); }
       if (latched === was) return;
       // Turning Stop on lets go of everything, so resetting it never starts anything again by itself. Letting go renders
       // every part, this one too, so the change is noted first and told once.
@@ -430,9 +438,26 @@
       if (latched && before === false && o.letGo !== false) letGo();
       if (o.onChange) safely(o.onChange, latched);
     };
-    part.dispose = () => { kept.delete(button); };
-    listen(part, button, 'pointerdown', e => { e.preventDefault(); press(); });
-    listen(part, button, 'click', e => { if (e.detail === 0) press(); });
+    // Whether a tap in the middle of the screen's Stop reaches it. Without hit testing (no layout) it is taken to.
+    const reachable = () => {
+      if (typeof document.elementFromPoint !== 'function') return true;
+      const r = button.getBoundingClientRect(); const at = r.width && r.height ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+      return !!at && (at === button || button.contains(at));
+    };
+    // A sheet opened, finished sliding in, or closed. A screen's own Stop that an open sheet covers (or that isn't on
+    // the page) gets the kit's floating Stop beside it until every sheet is closed, so Stop is always one tap away.
+    part.sheeted = () => {
+      if (!o.button) return;
+      if (![...sheets].some(x => x.open)) spareShown = false;
+      else if (!spareShown && get() && !reachable()) {
+        spareShown = true;
+        if (!spare) { spare = document.body.appendChild(h('button', { class: 'mk-stop mk-spare', type: 'button', 'aria-label': 'Stop' }, 'Stop')); kept.add(spare); wire(spare); }
+        if (!warned) { warned = true; if (window.console && console.warn) console.warn(STOP_WARNING); }
+      }
+      part.render();
+    };
+    part.dispose = () => { kept.delete(button); if (spare) { kept.delete(spare); spare.remove(); } };
+    wire(button);
     if (reset) listen(part, reset, 'click', () => send(get(), false));
     return adopt(part);
   }
@@ -731,7 +756,7 @@
 
   /* ---------- Sheets: full-screen panels (calibration, a More sheet); one at a time ---------- */
   const sheets = new Set();
-  // Elements a sheet never covers, wherever they are: every Stop button and every sheet, plus the kit's overlays.
+  // Elements a sheet never makes inert, wherever they are: every Stop button and every sheet, plus the kit's overlays.
   const kept = new Set();
   const OVERLAYS = '.mk-stop,.mk-sheet,.mk-toast,.mk-rule';
   const spared = n => kept.has(n) || n.matches(OVERLAYS + ',script,style,link,template');
@@ -758,19 +783,24 @@
       get open() { return open; },
       /** Opens the sheet (closing any other) with `children`, or replaces what it shows. Opening lets go of everything. */
       show(children) {
-        if (!open) {
+        const opening = !open;
+        if (opening) {
           for (const other of [...sheets]) if (other !== api && other.open) other.hide();
           open = true; letGo(); covered = cover(o.covers); el.hidden = false;
         }
         if (children !== undefined) el.replaceChildren(...[].concat(children).flat(Infinity).filter(x => x != null && x !== false));
+        // Stop checks whether the sheet covers it once the sheet is laid out, and again once it has slid in.
+        if (opening) tell('sheeted');
         return api;
       },
       hide() {
         if (!open) return; open = false; el.hidden = true; el.replaceChildren();
         for (const n of covered) n.removeAttribute('inert'); covered = [];
+        tell('sheeted');
         if (o.onHide) safely(o.onHide);
       },
     };
+    for (const name of ['animationend', 'transitionend']) el.addEventListener(name, e => { if (open && e.target === el) tell('sheeted'); });
     sheets.add(api);
     return api;
   }

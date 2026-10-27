@@ -42,6 +42,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .mk-stop{position:fixed;z-index:20;top:calc(var(--top) + 5px);right:calc(var(--mk-stop-right,16px) + var(--right));width:64px;height:64px;border-radius:50%;background:var(--red);color:#fff;font-weight:600;font-size:16px;box-shadow:0 0 0 3px var(--paper),0 0 0 5px var(--red);touch-action:none}
 .mk-stop:active{transform:scale(.96)}
 .mk-stop[aria-pressed=true]{background:#a3271f;box-shadow:0 0 0 3px var(--paper),0 0 0 5px #a3271f,inset 0 3px 8px rgba(0,0,0,.35)}
+/* The kit's Stop beside a screen's own one that an open sheet covers: above anything the screen draws. */
+.mk-stop.mk-spare{z-index:2147483647}
 .mk-banner{margin:14px 16px 0;padding:12px 14px;border:2px solid var(--red);border-radius:12px;background:#fff;display:flex;align-items:center;gap:12px}
 .mk-banner b{display:block;color:var(--red);font-weight:600}
 .mk-banner span{font-size:15px;color:var(--ink2)}

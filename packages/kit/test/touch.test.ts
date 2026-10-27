@@ -478,6 +478,33 @@ describe('stop, strip and toast', () => {
     stop.dispose(); more.show([]); expect(inert()).toEqual(['top', 'body', 'foot', 'off']);
   });
 
+  it('shows the kit’s Stop as well while an open sheet covers a screen’s own Stop, and says so once', () => {
+    p = page({ body: '<main id="app"><button id="stop">Stop</button></main>' }); p.connect(); p.config();
+    const warnings: string[] = []; p.window.console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+    const mine = p.document.getElementById('stop') as HTMLButtonElement;
+    mine.getBoundingClientRect = () => ({ left: 10, top: 100, width: 100, height: 40, right: 110, bottom: 140, x: 10, y: 100, toJSON() {} }) as DOMRect;
+    // What a tap at a point reaches: the screen's Stop, or the sheet drawn over it.
+    let top: Element = mine; const asked: number[][] = [];
+    (p.document as any).elementFromPoint = (x: number, y: number) => { asked.push([x, y]); return top; };
+    const floating = p.K.stop(); const stop = p.K.stop({ button: mine }); const sheet = p.K.sheet();
+    const spare = () => p.document.querySelector('.mk-stop.mk-spare') as HTMLButtonElement | null;
+    // A sheet that leaves it within reach (fixed above the sheet, say): nothing more. The kit's own Stop isn't checked.
+    sheet.show([]); expect(asked).toEqual([[60, 120]]); expect(spare()).toBeNull(); sheet.hide();
+    // A sheet over it: the kit's Stop shows too, never inert, turns the same Stop on, and the console says why.
+    top = sheet.el; sheet.show([p.K.h('p', {}, 'More')]);
+    expect(spare()!.hidden).toBe(false); expect(spare()!.closest('[inert]')).toBeNull(); expect(spare()).not.toBe(floating.button);
+    expect(warnings).toEqual([expect.stringMatching(/an open sheet covers the Stop button you passed/)]);
+    p.pointer(spare()!, 'pointerdown'); expect(p.actions()).toEqual([{ controlId: 'estop', action: 'safety.estop', value: true }]);
+    p.config({ estop: { value: true } as never }); expect([spare()!.getAttribute('aria-pressed'), mine.getAttribute('aria-pressed')]).toEqual(['true', 'true']);
+    sheet.hide(); expect(spare()!.hidden).toBe(true);
+    // Covered only once the sheet has slid in: checked again then, and not warned about twice.
+    top = mine; sheet.show([]); expect(spare()!.hidden).toBe(true);
+    top = sheet.el; sheet.el.dispatchEvent(new p.window.Event('animationend')); expect(spare()!.hidden).toBe(false); expect(warnings).toHaveLength(1);
+    // A layout without Stop has nothing to reach.
+    const c = p.config(); p.receive('config', { ...c, controls: c.controls.filter(x => x.id !== 'estop') }); expect(spare()!.hidden).toBe(true);
+    sheet.hide(); stop.dispose(); expect(spare()).toBeNull();
+  });
+
   it('shows the phone, tracking, link and connection in the strip', () => {
     p = page({ body: '<header id="strip"></header>' });
     const strip = p.K.strip(p.document.getElementById('strip'));
