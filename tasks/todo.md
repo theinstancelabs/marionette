@@ -242,11 +242,11 @@ Spec: [round8-spec.md](round8-spec.md). Brainstorm items 1, 2, 3, 4, 5, 6 (WebRT
 
 ## Plan
 - [x] Branch: commit round 7, merge `origin/feat/axol-consumer` (baseline: gateway 33, viewer 70, protocol 22).
-- [ ] Protocol additions (spec §1), written first as the contract.
-- [ ] Wave 1, parallel worktrees: gateway (§2), screen kit (§3), phone app (§4).
-- [ ] Merge wave 1; run everything together.
-- [ ] Wave 2, parallel worktrees: Python SDK (§5), TypeScript SDK (§6), viewer (§7).
-- [ ] Merge wave 2; conformance fixtures pass in both SDKs.
+- [x] Protocol additions (spec §1), written first as the contract.
+- [x] Wave 1, parallel worktrees: gateway (§2), screen kit (§3), phone app (§4).
+- [x] Merge wave 1; run everything together.
+- [x] Wave 2, parallel worktrees: Python SDK (§5), TypeScript SDK (§6), viewer (§7).
+- [x] Merge wave 2; conformance fixtures pass in both SDKs.
 - [ ] Wave 3: Axol port in its own worktree (§8).
 - [ ] Sim verification (§9.1–9.5).
 - [ ] Reviews (Opus 5.5 xhigh), fix large realistic findings, at most two rounds.
