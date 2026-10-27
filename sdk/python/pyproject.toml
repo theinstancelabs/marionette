@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,11 +8,15 @@ version = "0.1.1"
 description = "Parts for robots driven by Marionette: a gateway connection, phone tracking, teleop math, robot screens and state, WebRTC video, and test phones."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
 authors = [{ name = "Instance Labs" }]
 dependencies = [
     "websockets>=13",
     "numpy>=1.26",
 ]
+
+[project.urls]
+Repository = "https://github.com/theinstancelabs/marionette"
 
 [project.optional-dependencies]
 # WebRTC video from the robot (VideoPublisher).
