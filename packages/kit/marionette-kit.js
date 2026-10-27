@@ -529,12 +529,19 @@
   // Panes sit side by side, never cropped; with several, a tap (or Enter) stacks them full width. A stream goes over
   // WebRTC when the host lists `rtc` and the gateway marks the stream `transport: 'webrtc'`; otherwise it shows the
   // `camera_frame` JPEGs, as before. The robot offers; the page answers once its ICE candidates are gathered.
+  // A picture is live only while new frames keep coming: a JPEG or a video frame in the last 2 s, so a frozen picture
+  // never looks live.
   const RTC_RETRY_MS = 2000, RTC_RETRY_MAX_MS = 10000, RTC_ICE_WAIT_MS = 2000, RTC_OFFER_WAIT_MS = 10000, FRAME_FRESH_MS = 2000;
   const randomId = () => Math.random().toString(36).slice(2, 10);
+  // How many frames a video has decoded, where the browser counts them.
+  function framesDecoded(video) {
+    try { const q = typeof video.getVideoPlaybackQuality === 'function' && video.getVideoPlaybackQuality(); if (q && q.totalVideoFrames > 0) return q.totalVideoFrames; } catch (x) { /* not counted here */ }
+    return video.webkitDecodedFrameCount > 0 ? video.webkitDecodedFrameCount : undefined;
+  }
   function cameras(el, o) {
     o = o || {}; const action = o.action || ACTIONS.view;
     el.classList.add('mk-cams');
-    let key = '';
+    let key = '', warned = false;
     const panes = new Map();   // stream id → pane
     const peers = new Map();   // peer name → pane, for signaling
     const abandoned = [];      // peers given up before their offer arrived; a late offer gets a close
@@ -545,6 +552,15 @@
       return views.find(v => pick && v.id === pick.value) || views[0];
     };
     const info = id => { const c = last.config; return c && (c.cameraStreams || []).find(x => x.id === id); };
+    // The gateway sends this phone the JPEG frames of the view its camera.view control picks, whatever `action` picks.
+    const warnJpeg = p => {
+      const c = last.config; if (warned || action === ACTIONS.view || !c) return;
+      const pick = c.controls.find(x => x.action === ACTIONS.view); const views = c.cameraViews || [];
+      const sent = views.find(v => pick && v.id === pick.value) || views[0];
+      if (sent && sent.streams.indexOf(p.id) >= 0) return;
+      warned = true;
+      if (window.console && console.warn) console.warn('[marionette-kit] cameras(): the ' + p.label + ' pane gets no JPEG frames. The gateway sends a phone the JPEG frames of the view its ' + ACTIONS.view + ' control picks, not the view `' + action + '` picks; only WebRTC panes follow `action`.');
+    };
     const rtcWanted = p => { const s = info(p.id); return !!s && s.transport === 'webrtc' && has('rtc') && typeof window.RTCPeerConnection === 'function' && !document.hidden && !linkDown(); };
     const signal = message => { const M = window.Marionette; if (M && typeof M.rtc === 'function') M.rtc(message); };
     const emptyText = (p, state) => (o.empty ? o.empty(p.id, p.label, state) : state === 'unavailable' ? p.label + ' unavailable, retrying' : 'Waiting for ' + p.label.toLowerCase());
@@ -569,15 +585,27 @@
       const k = v.id + ':' + v.streams.join(',');
       // A pane rebuilt for a view switched back to has no picture yet, even if its stream was live a moment ago.
       if (k !== key) { key = k; rebuild(v); }
+      const now = Date.now();
       for (const p of panes.values()) {
         const s = info(p.id); const wanted = rtcWanted(p); const publisher = s && s.publisher;
         // Without the gateway there is no one to tell; it closes the robot's end itself.
         if (p.rtc && (!wanted || p.rtc.publisher !== publisher)) stopRtc(p, !linkDown());
         if (wanted && !p.rtc && !p.retry) startRtc(p, publisher);
-        if (!wanted) { p.backoff = RTC_RETRY_MS; if (p.retry) { clearTimeout(p.retry); p.retry = undefined; } p.failed = false; }
-        const video = p.rtc && p.rtc.live; const jpeg = !video && !!p.img.getAttribute('src') && Date.now() - (frameAt[p.id] || 0) < FRAME_FRESH_MS;
+        if (!wanted) { p.backoff = RTC_RETRY_MS; if (p.retry) { clearTimeout(p.retry); p.retry = undefined; } p.failed = false; warnJpeg(p); }
+        const r = p.rtc;
+        // Besides requestVideoFrameCallback, the decoded frame count (checked at least once a second) says whether frames
+        // still come. Without either, how far the video has played, which a frozen live stream can keep advancing.
+        if (r && r.live && p.video) {
+          const count = framesDecoded(p.video); const mark = count !== undefined ? count : r.watched ? undefined : p.video.currentTime;
+          if (mark !== undefined && mark !== r.shown) { r.shown = mark; r.frameAt = now; }
+        }
+        // Playing, connected (ICE `disconnected` is not), and a frame in the last 2 s.
+        const video = !!r && r.live && !r.down && now - r.frameAt < FRAME_FRESH_MS;
+        const jpeg = !video && !!p.img.getAttribute('src') && now - (frameAt[p.id] || 0) < FRAME_FRESH_MS;
         const state = video || jpeg ? 'live' : p.failed ? 'unavailable' : 'waiting';
-        p.img.hidden = !jpeg; if (p.video) p.video.hidden = !video;
+        // A video that stalls stays on the page under the opaque empty pane, so the browser keeps telling when its
+        // frames come back; it never shows while the pane is not live.
+        p.img.hidden = !jpeg; if (p.video) p.video.hidden = !(r && r.live) || jpeg;
         p.empty.hidden = state === 'live'; p.caption.hidden = state !== 'live';
         setText(p.empty, emptyText(p, state));
         p.el.setAttribute('data-transport', p.rtc || wanted ? 'webrtc' : 'jpeg'); p.el.setAttribute('data-state', state);
@@ -585,7 +613,7 @@
     }
 
     function startRtc(p, publisher) {
-      const r = { peer: (p.id.replace(/[^\w.-]/g, '').slice(0, 40) || 'cam') + '-' + randomId(), publisher, live: false, candidates: [] };
+      const r = { peer: (p.id.replace(/[^\w.-]/g, '').slice(0, 40) || 'cam') + '-' + randomId(), publisher, live: false, down: false, frameAt: 0, candidates: [] };
       p.rtc = r; peers.set(r.peer, p);
       signal({ kind: 'request', stream: p.id, peer: r.peer });
       r.offerTimer = setTimeout(() => { if (p.rtc === r) failRtc(p, 'no offer'); }, RTC_OFFER_WAIT_MS);
@@ -629,14 +657,28 @@
         if (!p.video) { p.video = h('video', { autoplay: true, playsinline: true, muted: true, 'webkit-playsinline': true, hidden: true }); p.video.muted = true; p.el.insertBefore(p.video, p.empty); }
         const video = p.video; const media = (e.streams && e.streams[0]) || (typeof window.MediaStream === 'function' ? new window.MediaStream([e.track]) : undefined);
         if (media && video.srcObject !== media) video.srcObject = media;
-        video.onplaying = () => { if (p.rtc === r) { r.live = true; p.failed = false; p.backoff = RTC_RETRY_MS; render(); } };
+        video.onplaying = () => { if (p.rtc === r) { r.live = true; r.frameAt = Date.now(); p.failed = false; p.backoff = RTC_RETRY_MS; render(); } };
+        // Every new frame keeps the pane live; one that comes after a stall brings it back at once.
+        if (typeof video.requestVideoFrameCallback === 'function' && !r.watched) {
+          r.watched = true;
+          const frame = () => { if (p.rtc !== r) return; const stale = Date.now() - r.frameAt >= FRAME_FRESH_MS; r.frameAt = Date.now(); if (stale && r.live) render(); video.requestVideoFrameCallback(frame); };
+          video.requestVideoFrameCallback(frame);
+        }
         const playing = video.play && video.play(); if (playing && playing.catch) playing.catch(() => {});
       });
+      // ICE `disconnected` (often a network blip that comes back) is not live; `failed` and `closed` end the connection.
+      const ice = () => {
+        if (p.rtc !== r || r.closed) return;
+        const down = pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected';
+        if (down !== r.down) { r.down = down; render(); }
+      };
       pc.addEventListener('connectionstatechange', () => {
         if (p.rtc !== r || r.closed) return;
         if (pc.connectionState === 'connected') p.backoff = RTC_RETRY_MS;
-        else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') failRtc(p, pc.connectionState);
+        else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') { failRtc(p, pc.connectionState); return; }
+        ice();
       });
+      pc.addEventListener('iceconnectionstatechange', ice);
       try {
         await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
         for (const candidate of r.candidates.splice(0)) pc.addIceCandidate(candidate).catch(() => {});

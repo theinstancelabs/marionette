@@ -156,7 +156,10 @@ declare global {
     };
     interface CamerasPart extends Part { el: HTMLElement; render(): void }
     type CamerasOptions = PartOptions & {
-      /** The select that picks the view (default camera.view). */
+      /**
+       * The select that picks the view (default camera.view). The gateway sends a phone the JPEG frames of the view
+       * camera.view picks, so with another select only WebRTC panes get pictures for other views (the kit warns).
+       */
       action?: string;
       /** Text for a pane without a picture. */
       empty?(streamId: string, label: string, state: 'waiting' | 'unavailable'): string;
