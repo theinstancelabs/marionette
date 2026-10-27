@@ -1,5 +1,9 @@
 # Lessons
 
+## 2026-10-27 — Regenerating a lockfile can move native packages; build and launch before calling it done
+- **What happened:** Merging three branches, I resolved `package-lock.json` conflicts by taking one side and re-running `npm install`. That moved `expo-camera` from 58.0.12 to 58.0.13 (within `~58.0.12`). Every test and typecheck passed, but the iOS app quit at launch (dyld: a symbol missing from expo-modules-core). Only launching the app in the simulator showed it.
+- **Rule:** After regenerating a lockfile, diff the resolved versions of native (Expo/Pods) packages against the last known-good build and pin what moved. Pin native packages that were verified on device exactly. Don't call app work done until a build of the merged tree has been launched.
+
 ## 2026-10-27 — Permanent identifiers: use the user's convention, flag before registering
 - **What happened:** For TestFlight I set the bundle ID to `io.instancelabs.marionette`, derived from the website domain (instancelabs.io), and let the archive register it with Apple. The user wanted `com.instancelabs.marionette`.
 - **Rule:** Instance Labs bundle IDs are `com.instancelabs.<app>`. For any identifier that becomes permanent (bundle IDs, App Store records, package names), state the exact value in the plan before anything registers it, and don't infer it from a domain.

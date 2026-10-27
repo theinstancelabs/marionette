@@ -247,8 +247,33 @@ Spec: [round8-spec.md](round8-spec.md). Brainstorm items 1, 2, 3, 4, 5, 6 (WebRT
 - [x] Merge wave 1; run everything together.
 - [x] Wave 2, parallel worktrees: Python SDK (§5), TypeScript SDK (§6), viewer (§7).
 - [x] Merge wave 2; conformance fixtures pass in both SDKs.
-- [ ] Wave 3: Axol port in its own worktree (§8).
-- [ ] Sim verification (§9.1–9.5).
-- [ ] Reviews (Opus 5.5 xhigh), fix large realistic findings, at most two rounds.
-- [ ] Docs: README, INTEGRATION, SDK and kit docs.
+- [x] Wave 3: Axol port in its own worktree (§8).
+- [x] Sim verification (§9.1–9.5).
+- [x] Reviews (Opus 5.5 xhigh), fix large realistic findings, at most two rounds.
+- [x] Docs: README, INTEGRATION, SDK and kit docs.
 - [ ] Report: ready for a real-robot test (no deploy until the user says so).
+
+## Review (round 8)
+- **Built:**
+  - Protocol additions (robot role, robot state, robot screens, ping/pong and latency stamps, WebRTC signaling, pairing links and codes, bridge `robots`/`link`/`rtc` events).
+  - Gateway: robots, retained state, screens with kit inlining, clocks, reconnect-in-place calibration, pairing with QR, Bonjour and rate limits, WebRTC signaling, a single-file bundle.
+  - Screen kit, with the default screen rebuilt on it (859 → about 250 lines).
+  - App 1.1.0: reconnect in place, pairing by deep link, QR and Nearby, saved codes, video, orientation, iPad.
+  - Python SDK (`marionette-sdk`), including a test gateway, scriptable phones, a WebRTC publisher, the bundled gateway and an example sim robot.
+  - TypeScript SDK; the tools moved onto it.
+  - Viewer: robots, the state inspector, latency, the Pair dialog, WebRTC panes.
+  - Axol port on `feat/marionette-teleop` (worktree `scratch/axol-marionette`): gateway.py removed; phones.py 483 → 117; teleop.py 438 → 244; the screen moved into Axol on the kit (1128 → 445).
+- **Reviews (Opus 5.5 xhigh, two rounds, stop rule no P0/P1):**
+  - Round 1 found P0s: DNS rebinding around pairing; drags touched during an outage acting after reconnect; saved codes sent to impostor gateways; cut drags resuming on the mirror; the mirror policy bypassed via configs. Also P1s: Stop covered by the reconnect banner or a sheet, holds stuck when their element is removed, the Node gateway outliving its Python parent, and more.
+  - Round 2 found no P0. Its P1s: the seeded-values mirror rule (replaced: settings follow the phone's shared state, the mirror policy governs motion and Stop-off), first drag after a cut lost, in-flight mirror samples after a phone switch, container clients, a stalled camera looking live, forked children keeping the gateway alive.
+  - All fixed with regression tests.
+- **Tests:** gateway 70, viewer 101, kit 56, protocol 33, TS SDK 85, Python SDK 145 (+1 skipped), ROS bridge OK, Axol `test_marionette.py` 48. Typecheck, lint and viewer build clean.
+- **Sim verification:**
+  - Gateway with pairing plus the example robot and scripted phones: 4401 without a code; a link pairs; guided calibration; a 2× scaled move; Stop; same-session reconnect keeps calibration; 4409 duplicate robot.
+  - `/screen` in the browser: WebRTC playing, robot state, offline, "not answering" and recovery.
+  - Viewer over the LAN with the code: robot inspector and WebRTC panes.
+  - iOS simulator (headless): pairing link, the robot's own screen with live WebRTC video, the Reconnecting banner, recovery after a gateway restart.
+  - Axol sim (agent): arm follows at scale, Stop, drive, robot screen, WebRTC from MuJoCo renders.
+- **Found and fixed in sim:** the lockfile merge had moved expo-camera to 58.0.13, which killed the app at launch (dyld); pinned to 58.0.12. The example robot's screen ignored the top safe area.
+- **Not verified (needs hardware):** real ARKit, Bonjour Nearby, QR scanning and iPad on a device; WebRTC over real Wi-Fi to a phone; the ZED camera path; anything on Axol's hardware.
+- **Before a real-robot deploy (user decisions):** Axol depends on `marionette-sdk` through a local `uv` path source, which breaks `uv sync` on CI and on the robot. Either push the Marionette branch and switch to a git rev, or publish the SDK. The phones need app 1.1.0; the gateway runs on Axol via `axol marionette.gateway`.
