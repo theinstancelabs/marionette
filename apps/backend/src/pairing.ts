@@ -42,13 +42,21 @@ function hostName(host: string | undefined): string | undefined {
   try { return new URL(`http://${host}`).hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '') || undefined; } catch { return undefined; }
 }
 /**
+ * The names a container runtime gives the computer it runs on: Docker Desktop, OrbStack and Podman. Docker Desktop and
+ * OrbStack hand a container's connection to them over to this computer from 127.0.0.1, Host and all. `.internal` is
+ * reserved and never delegated in public DNS, so a web page can't be loaded from one of these names to rebind it.
+ */
+export const CONTAINER_HOST_NAMES: readonly string[] = ['host.docker.internal', 'gateway.docker.internal', 'host.orb.internal', 'host.containers.internal'];
+/**
  * Whether a request's `Host` header names this computer: `localhost`, a loopback or unspecified address, its host
- * name (with or without `.local`), one of its interface addresses, or one of `addresses` (what it advertises). A page
- * whose DNS was rebound to 127.0.0.1 connects from loopback too, but under the name it was loaded from.
+ * name (with or without `.local`), one of its interface addresses, one of `addresses` (what it advertises), or the name
+ * a container on it uses for it (`CONTAINER_HOST_NAMES`). A page whose DNS was rebound to 127.0.0.1 connects from
+ * loopback too, but under the name it was loaded from.
  */
 export function isOwnHost(host: string | undefined, addresses: readonly string[] = []): boolean {
   const name = hostName(host); if (!name) return false;
   if (name === 'localhost' || name === '::1' || name === '0.0.0.0' || name === '::' || /^127\.\d+\.\d+\.\d+$/.test(name)) return true;
+  if (CONTAINER_HOST_NAMES.includes(name)) return true;
   const machine = os.hostname().toLowerCase().replace(/\.$/, ''); const bare = machine.replace(/\.local$/, '');
   // `<first label>.local` is the name this gateway advertises over Bonjour.
   if ([machine, bare, `${bare}.local`, `${bare.split('.')[0]}.local`].includes(name)) return true;

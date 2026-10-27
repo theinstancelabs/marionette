@@ -39,8 +39,12 @@ export type Phone = {
 };
 /** A robot in the roster: its own stable id, its socket while connected, and the camera streams it publishes over WebRTC. */
 type Robot = { info: { id: string; name: string; connected: boolean }; socket?: WebSocket; clientId?: string; streams: Set<string> };
-/** A client is a console until it says otherwise; `ready` once it has introduced itself (or stayed quiet for the grace period). */
-type Client = { id: string; role: 'console' | 'phone' | 'mirror' | 'robot'; hello: boolean; ready: boolean; phoneId?: string; robotId?: string; follow?: string; shown?: boolean; cameras?: boolean; link: Link };
+/**
+ * A client is a console until it says otherwise; `ready` once it has introduced itself (or stayed quiet for the grace
+ * period). `movedAt`: when the gateway last moved a mirror from the phone it showed to another (or to none, or to one
+ * after none).
+ */
+type Client = { id: string; role: 'console' | 'phone' | 'mirror' | 'robot'; hello: boolean; ready: boolean; phoneId?: string; robotId?: string; follow?: string; shown?: boolean; movedAt?: number; cameras?: boolean; link: Link };
 
 export type GatewayOptions = {
   watchdogMs?: number; holdTimeoutMs?: number; streamTimeoutMs?: number; heartbeatMs?: number; diagnostics?: DiagnosticsLog;
@@ -58,6 +62,10 @@ export type GatewayOptions = {
 const MAX_PAYLOAD_BYTES = 3 * 1024 * 1024, MAX_BUFFERED_BYTES = 1024 * 1024;
 // A client that sends no hello within this long is a console (a consumer that only listens).
 const CONSOLE_GRACE_MS = 250;
+// How long after a mirror moves to another phone its actions that don't name their phone are dropped: they may have
+// been on the way, meant for the old one. The /screen mirror names the phone in every action, so only other mirrors
+// (an older /screen page, the SDK's simulated mirror) wait this out.
+const MIRROR_MOVE_GRACE_MS = 1000;
 const NEXT_STEP: Record<GuidedStep, GuidedStep | undefined> = { flat: 'forward', forward: 'right', right: 'up', up: undefined };
 const NEXT_CHECK: Record<CheckMove, CheckMove | undefined> = { forward: 'right', right: 'up', up: undefined };
 const NEXT_STEP_MESSAGE: Partial<Record<GuidedStep, string>> = { forward: 'Flat reference captured. Move the phone straight forward, then press Capture forward', right: 'Forward captured. Return to the flat reference, move straight right, then press Capture right', up: 'Right captured. Return to the flat reference, lift the phone straight up, then press Capture up' };
@@ -165,14 +173,15 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
   const foreignHosts = new Set<string>();
   /**
    * A client on this computer, which `on` lets in without the code: it comes from loopback and asks for this computer
-   * by one of its names. A web page whose DNS was rebound to 127.0.0.1 comes from loopback too, but its Host (and
-   * Origin) is still the name the page was loaded from, so it needs the code like any remote client.
+   * by one of its names, a container on it included (`host.docker.internal` and the like, see `isOwnHost`). A web page
+   * whose DNS was rebound to 127.0.0.1 comes from loopback too, but its Host (and Origin) is still the name the page was
+   * loaded from, so it needs the code like any remote client.
    */
   const onThisComputer = (req: http.IncomingMessage) => {
     const address = addressOf(req); if (!isLoopback(address)) return false;
     if (isOwnHost(req.headers.host, advertised())) return true;
     const host = String(req.headers.host ?? '(none)').slice(0, 128);
-    if (!foreignHosts.has(host) && foreignHosts.size < 64) { foreignHosts.add(host); log({ kind: 'pairing', address, host, msg: `${address} asked for host ${host}, which is not this computer, so it needs the pairing code (connect to localhost or 127.0.0.1 to go without)` }); }
+    if (!foreignHosts.has(host) && foreignHosts.size < 64) { foreignHosts.add(host); log({ kind: 'pairing', address, host, msg: `${address} asked for host ${host}, which is not a name of this computer: connect to localhost or 127.0.0.1, or pass the pairing code` }); }
     return false;
   };
   /**
@@ -313,6 +322,8 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
       const next = client.follow ? phones.get(client.follow) : current?.info.connected ? current : [...phones.values()].find(phone => phone.info.connected);
       if (next?.info.id === client.phoneId && client.shown) continue;
       if (current && current !== next) { dropHolder(current, socket, 'mirror moved to another phone'); dropStreamHolder(current, socket, 'mirror moved to another phone'); }
+      // A mirror that already showed a phone (or the gateway's layout) is moving: what it has on the way was meant for that.
+      if (client.shown) client.movedAt = monotonicMilliseconds();
       // Until its phone appears, a mirror shows the gateway's layout.
       client.phoneId = next?.info.id; client.shown = true;
       send(socket, next ? phoneConfig(next) : gatewayConfig()); replay(socket, { phoneId: client.phoneId });
@@ -574,8 +585,24 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
     if (hello.cameras === false) client.cameras = false;
     becomeConsole(socket, client);
   };
+  /**
+   * Whether an action was meant for another phone than the one its sender acts as: a mirror's, still on the way when
+   * the gateway moved the mirror to another phone. An action that names its phone is checked against it; one from a
+   * mirror that doesn't name it is taken as meant for the old phone for a second after a move.
+   */
+  const meantForAnother = (client: Client, action: ActionMessage) => {
+    if (client.role !== 'phone' && client.role !== 'mirror') return false;
+    if (action.phoneId !== undefined) return action.phoneId !== client.phoneId;
+    return client.role === 'mirror' && client.movedAt !== undefined && monotonicMilliseconds() - client.movedAt < MIRROR_MOVE_GRACE_MS;
+  };
   const handleAction = (socket: WebSocket, client: Client, action: ActionMessage, receivedAt: number) => {
     if (client.role === 'console') becomeConsole(socket, client);
+    // Dropped unseen, so it can neither start nor change anything on the phone the mirror shows now. Its drags and holds
+    // on the old phone ended when it moved. Only a press or a final value is worth a line in the log.
+    if (meantForAnother(client, action)) {
+      if (!action.live && !action.renew) log({ kind: 'mirror', client: client.id, phone: client.phoneId, meant: action.phoneId, control: action.controlId, msg: `dropped ${action.controlId} (${action.action}) from ${client.role} ${client.id}: meant for ${action.phoneId ?? 'the phone it showed before'}, not ${client.phoneId ?? 'no phone'}` });
+      return;
+    }
     const phone = client.role === 'phone' ? phones.get(client.phoneId!) : followed(client);
     if (!phone) { send(socket, status(client.role === 'mirror' ? 'No phone to act as yet; connect a phone first' : 'Consoles only watch; send controls from a phone or a mirror of one (/screen)', undefined, action.controlId, { accepted: false })); return; }
     // Every action is relayed exactly as received, before anything else, whatever the gateway makes of it.

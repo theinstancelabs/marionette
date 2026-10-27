@@ -39,14 +39,17 @@ describe('pairing',()=>{
     for (const route of ['/api/pairing','/api/state','/api/config','/screen']) expect(await asHost(route, evil, page.Origin)).toBe(401);
     expect(await asHost('/health', evil, page.Origin)).toBe(200); expect(await asHost('/api/pairing?token=K7Q2M9XD', evil, page.Origin)).toBe(200);
     expect(gw.state.htmlConfig.source).toEqual({ kind:'default' }); expect(gw.state.robots.size).toBe(0);
-    expect(log.list.filter(r=>r.kind==='pairing' && r.host===evil)).toHaveLength(1);
-    // Local robots and consumers that ask for this computer by name still need no code.
-    for (const host of [`localhost:${port}`,`127.0.0.1:${port}`,`${os.hostname()}:${port}`,`[::1]:${port}`]) {
+    expect(log.list.filter(r=>r.kind==='pairing' && r.host===evil).map(r=>r.msg)).toEqual([`127.0.0.1 asked for host ${evil}, which is not a name of this computer: connect to localhost or 127.0.0.1, or pass the pairing code`]);
+    // Local robots and consumers that ask for this computer by name still need no code, in a container on it too
+    // (Docker Desktop and OrbStack hand its connections over from 127.0.0.1, Host and all).
+    for (const host of [`localhost:${port}`,`127.0.0.1:${port}`,`${os.hostname()}:${port}`,`[::1]:${port}`,`host.docker.internal:${port}`,`host.orb.internal:${port}`]) {
       expect(await asHost('/api/pairing', host)).toBe(200);
       const local=await open({ Host:host }); hello(local,{ role:'console' }); await waitFor(()=>!!local.configOf()); local.ws.close(); } });
   it('knows this computer\'s own names', ()=>{ const machine=os.hostname().replace(/\.local$/i,'');
     for (const host of ['localhost','LOCALHOST:8787','localhost.','127.0.0.1:8787','127.4.5.6','[::1]:8787','0.0.0.0:8787',machine,`${machine.toUpperCase()}.LOCAL:8787`,...(external ? [`${external}:8787`] : [])]) expect(isOwnHost(host)).toBe(true);
-    for (const host of [undefined,'','rebind.example:8787','localhost.rebind.example','127.0.0.1.rebind.example',`${machine}.rebind.example`,'evil@localhost','localhost/x','192.0.2.7']) expect(isOwnHost(host)).toBe(false);
+    for (const host of ['host.docker.internal:8787','HOST.DOCKER.INTERNAL.','gateway.docker.internal','host.orb.internal:8787','host.containers.internal']) expect(isOwnHost(host)).toBe(true);
+    for (const host of [undefined,'','rebind.example:8787','localhost.rebind.example','127.0.0.1.rebind.example',`${machine}.rebind.example`,'evil@localhost','localhost/x','192.0.2.7',
+      'host.docker.internal.rebind.example','docker.internal','evil.docker.internal','host.orb.internal.rebind.example','internal']) expect(isOwnHost(host)).toBe(false);
     expect(isOwnHost('robot.lab:8787',['robot.lab'])).toBe(true); expect(isOwnHost('robot.lab:8787',['192.0.2.7'])).toBe(false); });
   it('turns Bonjour off with one warning when its socket can\'t be opened, instead of crashing', async()=>{
     // Held without address reuse, the port can't be shared: what happens when something else owns UDP 5353.

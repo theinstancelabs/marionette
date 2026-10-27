@@ -159,6 +159,29 @@ describe('several phones',()=>{
     // A mirror of a phone that has not connected yet shows the layout, then the phone once it arrives.
     const early=await open(); early.ws.send(JSON.stringify({ type:'hello', version:PROTOCOL_VERSION, role:'console', follow:'phone-3' })); await waitFor(()=>!!early.configOf()); const c=await phone('c'); expect(c.id).toBe('phone-3'); await waitFor(()=>!!early.configOf('phone-3'));
     for (const client of [viewer,b,mirror,pinned,early,c]) client.ws.close(); });
+  it('drops a mirror\'s actions still on the way for the phone it showed before it moved', async()=>{ const log: any[]=[]; await start({ diagnostics:{ write:(r: any)=>log.push(r), pose:()=>{}, close:()=>{} } });
+    const viewer=await connect(); const a=await phone('a'); const b=await phone('b'); const mirror=await mirrorOf('');
+    const send=(phoneId: string | undefined, value: { x: number; y: number }, final = false) => mirror.ws.send(JSON.stringify({ type:'action', version:PROTOCOL_VERSION, sessionId:'g', controlId:'drive', action:'base.drive', value, ...(final ? {} : { live:true }), ...(phoneId ? { phoneId } : {}), sentAt:Date.now() }));
+    const inputs=(phoneId: string) => viewer.of('input',phoneId).filter(m=>m.source==='mirror').map(m=>[m.value,!!m.live]);
+    send('phone-1',{ x:0.8, y:0 }); await waitFor(()=>live(viewer.configOf('phone-1'),'drive')===true);
+    a.ws.close(); await waitFor(()=>!!mirror.configOf('phone-2'));
+    // Sent before the mirror heard it moved: samples and a final value meant for phone 1 never reach phone 2.
+    for (let i=0; i<5; i++) send('phone-1',{ x:0.8, y:i/100 }); send('phone-1',{ x:0, y:0 },true);
+    // Not stamped (an older /screen page) in the second after the move: taken as meant for phone 1 too.
+    send(undefined,{ x:0.8, y:0.5 });
+    await sleep(100); expect(inputs('phone-2')).toEqual([]); expect(live(viewer.configOf('phone-2'),'drive')).toBeFalsy();
+    expect(log.filter(r=>r.kind==='mirror').map(r=>r.msg)).toEqual([expect.stringMatching(/^dropped drive \(base\.drive\) from mirror .*: meant for phone-1, not phone-2$/)]);
+    // A drag meant for phone 2 drives it; a stamp that names no phone the mirror shows never counts.
+    send('phone-2',{ x:0.3, y:0 }); send('phone-9',{ x:1, y:0 }); await waitFor(()=>live(viewer.configOf('phone-2'),'drive')===true);
+    send('phone-2',{ x:0, y:0 },true); await waitFor(()=>live(viewer.configOf('phone-2'),'drive')===false);
+    // A second after the move, unstamped actions count again.
+    await sleep(1000); send(undefined,{ x:0.2, y:0 }); await waitFor(()=>live(viewer.configOf('phone-2'),'drive')===true); send(undefined,{ x:0, y:0 },true);
+    await waitFor(()=>inputs('phone-2').length===4); expect(inputs('phone-2')).toEqual([[{ x:0.3, y:0 },true],[{ x:0, y:0 },false],[{ x:0.2, y:0 },true],[{ x:0, y:0 },false]]);
+    // A phone's own stamp is checked the same way.
+    const own=(phoneId: string) => b.ws.send(JSON.stringify({ type:'action', version:PROTOCOL_VERSION, sessionId:b.session, controlId:'arm', action:'arm.select', value:'right', phoneId, sentAt:Date.now() }));
+    own('phone-1'); await sleep(50); expect(value(viewer.configOf('phone-2'),'arm')).toBe('left');
+    own('phone-2'); await waitFor(()=>value(viewer.configOf('phone-2'),'arm')==='right');
+    for (const client of [viewer,b,mirror]) client.ws.close(); });
 });
 
 describe('cameras',()=>{
