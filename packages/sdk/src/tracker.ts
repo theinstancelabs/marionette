@@ -1,4 +1,4 @@
-import { STICK_REST, isStickInRange, type ControlValue, type PoseSource, type Quaternion, type StickValue, type TrackingState } from '@marionette/protocol';
+import { STICK_REST, isControlValue, isStickInRange, type ControlValue, type PoseSource, type Quaternion, type StickValue, type TrackingState } from '@marionette/protocol';
 import { monotonic, wallClock } from './clock.js';
 import { matrixFromQuaternion, type Mat3, type Vec3 } from './math.js';
 import type { GatewayClient } from './client.js';
@@ -171,8 +171,13 @@ type Control = { kind: Kind; options?: string[]; min?: number; max?: number };
  * - Stop acts from the press itself, before the config follows.
  * - A lost gateway (`lostGateway()`), or a phone dropping, lets go of everything.
  * - A restarted gateway names phones afresh; a phone left with Stop on is kept, offline, as `<id>@<old gateway
- *   session>` until `clearStaleStops()`.
- * - The mirror policy decides what a desktop mirror's inputs may do.
+ *   session>` until `clearStaleStops()`. A phone that leaves the roster (an app too old to say hello) is forgotten
+ *   the same way, kept as `<id>@<gateway session>` if its Stop is on.
+ * - The mirror policy decides what a desktop mirror's inputs may do. Unless it is `allow`, a config (which the
+ *   gateway republishes after a mirror's presses too) may turn Stop on but not off once the phone is known: only the
+ *   phone itself turns it off.
+ * - `clearStaleStops()` (the desktop clearing Stop) holds for a phone while it stays offline.
+ * - Presses and values of actions no control declares are counted and kept too.
  * - Malformed messages are ignored.
  */
 export class PhoneTracker {
@@ -185,6 +190,10 @@ export class PhoneTracker {
   private offset: () => number | undefined;
   private phones = new Map<string, Phone>();
   private readonly layout = new Map<string, Control>();
+  /** Phones whose config has been seen since the gateway was (re)joined: a config can't turn their Stop off. */
+  private readonly seeded = new Set<string>();
+  /** Offline phones whose Stop the desktop cleared: a config can't turn it back on until they reconnect. */
+  private readonly cleared = new Set<string>();
 
   constructor(options: TrackerOptions = {}) {
     this.mirror = options.mirror ?? 'stop-only'; this.stopAction = options.stopAction ?? 'safety.estop';
@@ -209,10 +218,16 @@ export class PhoneTracker {
   anyStop(): boolean { return [...this.phones.values()].some(phone => phone.stop); }
 
   /** The gateway went away: nobody is connected or holding anything. */
-  lostGateway(): void { for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
-  /** Forgets Stop on phones that are offline, and the phones kept from before a gateway restart (the desktop clears them). */
+  lostGateway(): void { this.seeded.clear(); for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
+  /**
+   * Forgets the phones kept for their Stop (from before a gateway restart, or gone from the roster) and turns Stop off
+   * on phones that are offline, until they reconnect: what a desktop "clear Stop" does.
+   */
   clearStaleStops(): void {
-    for (const [id, phone] of [...this.phones]) { if (phone.stale) this.phones.delete(id); else if (!phone.connected) phone.values[this.stopAction] = false; }
+    for (const [id, phone] of [...this.phones]) {
+      if (phone.stale) this.phones.delete(id);
+      else if (!phone.connected) { phone.values[this.stopAction] = false; this.cleared.add(id); }
+    }
   }
 
   /** Folds in one gateway message; anything else, or anything malformed, is ignored. */
@@ -227,7 +242,10 @@ export class PhoneTracker {
     const session = m.sessionId;
     if (typeof session === 'string' && session && session !== this.gateway) { if (this.gateway !== undefined) this.restarted(this.gateway); this.gateway = session; }
     if (Array.isArray(m.controls)) this.learn(m.controls);
-    if (Array.isArray(m.phones)) for (const info of m.phones) this.info(info);
+    if (Array.isArray(m.phones)) {
+      for (const info of m.phones) this.info(info);
+      if (m.phones.every(info => isObject(info) && typeof info.id === 'string' && info.id)) this.forgetAbsent(new Set([...m.phones.map(info => (info as Json).id as string), ...(isObject(m.phone) && typeof m.phone.id === 'string' ? [m.phone.id] : [])]));
+    }
     const phone = this.info(m.phone); if (!phone) return;
     if (Array.isArray(m.controls)) for (const control of m.controls) {
       if (!isObject(control) || typeof control.action !== 'string' || !control.action) continue;
@@ -240,9 +258,18 @@ export class PhoneTracker {
       else if (known.kind === 'slider' || known.kind === 'joystick') {
         const drag = phone.drags[action] ??= { kind: known.kind, live: false, dropped: false, at: -Infinity };
         if (control.live === false && drag.live) { drag.live = false; if (known.kind === 'joystick') setValue(phone, action, rest()); }
-        if (valid(known, control.value)) setValue(phone, action, control.value as ControlValue);
-      } else if (valid(known, control.value)) phone.values[action] = clone(control.value as ControlValue);
+        // During a drag the samples are newer than any config.
+        if (!drag.live && valid(known, control.value)) setValue(phone, action, control.value as ControlValue);
+      } else if (valid(known, control.value)) {
+        if (action === this.stopAction) {
+          // A cleared offline phone stays cleared; a mirror's Stop off, republished by the gateway, doesn't count.
+          if (control.value === true && this.cleared.has(phone.id) && !phone.connected) continue;
+          if (control.value === false && phone.stop && this.mirror !== 'allow' && this.seeded.has(phone.id)) continue;
+        }
+        phone.values[action] = clone(control.value as ControlValue);
+      }
     }
+    this.seeded.add(phone.id);
     const calibration = m.calibration;
     if (isObject(calibration)) {
       if (typeof calibration.status === 'string' && CALIBRATION.includes(calibration.status)) phone.calibration = calibration.status as CalibrationStatus;
@@ -265,21 +292,33 @@ export class PhoneTracker {
   }
 
   private info(info: unknown): Phone | undefined {
-    if (!isObject(info) || typeof info.id !== 'string' || !info.id) return undefined;
+    // Kept phones (`…@…`) are out of reach of any gateway.
+    if (!isObject(info) || typeof info.id !== 'string' || !info.id || info.id.includes('@')) return undefined;
     let phone = this.phones.get(info.id);
     if (!phone) { phone = new Phone(info.id, this.stopAction); this.phones.set(info.id, phone); }
     if (typeof info.name === 'string') phone.name = info.name;
     if (typeof info.color === 'string') phone.color = info.color;
     const connected = info.connected === true;
     // A phone that drops releases everything it was holding.
-    if (!connected) letGo(phone);
+    if (!connected) letGo(phone); else this.cleared.delete(phone.id);
     phone.connected = connected;
     phone.session = typeof info.sessionId === 'string' ? info.sessionId : undefined;
     return phone;
   }
 
+  /** Phones gone from a complete roster are forgotten; one with Stop on stays, offline, as `<id>@<gateway session>`. */
+  private forgetAbsent(present: Set<string>): void {
+    for (const [id, phone] of [...this.phones]) {
+      if (phone.stale || present.has(id)) continue;
+      this.phones.delete(id); this.seeded.delete(id); this.cleared.delete(id);
+      if (!phone.stop) continue;
+      phone.connected = false; letGo(phone); phone.id = `${id}@${this.gateway ?? 'gateway'}`; this.phones.set(phone.id, phone);
+    }
+  }
+
   /** A restarted gateway names phones afresh. A phone that left Stop on stays, offline, under its old id and gateway. */
   private restarted(old: string): void {
+    this.seeded.clear(); this.cleared.clear();
     const kept = new Map<string, Phone>();
     for (const phone of this.phones.values()) {
       if (!phone.stop) continue;
@@ -290,8 +329,11 @@ export class PhoneTracker {
     this.phones = kept;
   }
 
+  /** A phone the gateway can address (not one kept for its Stop). */
+  private addressed(m: Json): Phone | undefined { const phone = typeof m.phoneId === 'string' ? this.phones.get(m.phoneId) : undefined; return phone && !phone.stale ? phone : undefined; }
+
   private pose(m: Json): void {
-    const phone = typeof m.phoneId === 'string' ? this.phones.get(m.phoneId) : undefined; if (!phone) return;
+    const phone = this.addressed(m); if (!phone) return;
     if (m.heartbeat === false) { phone.pose = null; return; }
     const p = m.position, q = m.rotation;
     if (m.heartbeat !== true || !isObject(p) || !isObject(q) || ![p.x, p.y, p.z, q.x, q.y, q.z, q.w].every(finite)
@@ -308,7 +350,7 @@ export class PhoneTracker {
   }
 
   private input(m: Json): void {
-    const phone = typeof m.phoneId === 'string' ? this.phones.get(m.phoneId) : undefined; if (!phone) return;
+    const phone = this.addressed(m); if (!phone) return;
     const action = m.action; if (typeof action !== 'string' || !action) return;
     const source = m.source ?? 'phone'; if (source !== 'phone' && source !== 'mirror' && source !== 'gateway') return;
     const value = m.value; const renew = m.renew === true; const live = m.live === true; const now = this.clock();
@@ -319,7 +361,13 @@ export class PhoneTracker {
     }
     // Stop acts from the press itself; the config follows.
     if (action === this.stopAction) { if (typeof value === 'boolean') phone.values[action] = value; return; }
-    const control = this.layout.get(action); if (!control) return;
+    const control = this.layout.get(action);
+    if (!control) {
+      // An action no control declares: counted as a press, and its value kept.
+      if (!renew) phone.pressCounts[action] = (phone.pressCounts[action] ?? 0) + 1;
+      if (isControlValue(value)) phone.values[action] = clone(value);
+      return;
+    }
     switch (control.kind) {
       case 'hold': {
         const hold = phone.holds[action] ??= { down: false, at: -Infinity, presses: 0 };

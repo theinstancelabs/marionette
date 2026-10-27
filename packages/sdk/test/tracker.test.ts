@@ -18,8 +18,9 @@ describe('PhoneTracker', () => {
     tracker.apply(messages.config({ phone: 'phone-1', controls: [{ id: 'up', type: 'button', label: 'Lift up', action: 'lift.up', hold: true }, { id: 'pan', type: 'joystick', label: 'Pan', action: 'camera.pan', value: { x: 0, y: 0 } }] }));
     tracker.apply(messages.input('phone-1', 'lift.up', true)); tracker.apply(messages.input('phone-1', 'camera.pan', { x: 0, y: 0.4 }, { live: true }));
     expect(phone().hold('lift.up')).toMatchObject({ down: true, presses: 1 }); expect(phone().drag('camera.pan')).toMatchObject({ live: true, value: { x: 0, y: 0.4 } });
-    // Undeclared actions are only relayed, not tracked.
-    tracker.apply(messages.input('phone-1', 'custom.thing', true)); expect(phone().presses('custom.thing')).toBe(0);
+    // An action no control declares counts as a press and keeps its value.
+    tracker.apply(messages.input('phone-1', 'custom.thing', 'go')); tracker.apply(messages.input('phone-1', 'custom.thing', 'go', { renew: true }));
+    expect(phone().presses('custom.thing')).toBe(1); expect(phone().value('custom.thing')).toBe('go');
   });
 
   it('times holds and sticks out on the tracker clock', () => {
@@ -79,12 +80,45 @@ describe('PhoneTracker', () => {
     expect(phone()).toMatchObject({ calibration: 'captured', epoch: 3 });
   });
 
+  it('never lets a config turn Stop off unless mirrors may act, and lets the desktop clear an offline phone for good', () => {
+    const { tracker, phone } = setup();
+    tracker.apply(messages.input('phone-1', 'safety.estop', true)); tracker.apply(messages.config({ phone: 'phone-1', values: { estop: true } }));
+    // A mirror's Stop off is ignored, but the gateway applies it and republishes the phone's config.
+    tracker.apply(messages.input('phone-1', 'safety.estop', false, { source: 'mirror' })); tracker.apply(messages.config({ phone: 'phone-1', values: { estop: false } }));
+    expect(phone().stop).toBe(true);
+    tracker.apply(messages.input('phone-1', 'safety.estop', false)); expect(phone().stop).toBe(false);
+    // After a lost gateway the next config says what is true again.
+    tracker.apply(messages.input('phone-1', 'safety.estop', true)); tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { estop: false } }));
+    expect(phone().stop).toBe(false);
+    const allow = new PhoneTracker({ mirror: 'allow' }); allow.apply(messages.config({ phone: 'phone-1', values: { estop: true } })); allow.apply(messages.config({ phone: 'phone-1', values: { estop: false } }));
+    expect(allow.get('phone-1')!.stop).toBe(false);
+    // Offline with Stop on: the desktop clears it, and the gateway's republished configs don't bring it back until the phone reconnects.
+    tracker.apply(messages.input('phone-1', 'safety.estop', true)); const offline = messages.phone('phone-1', { connected: false });
+    tracker.apply(messages.config({ phone: offline, values: { estop: true } })); tracker.clearStaleStops(); expect(phone().stop).toBe(false);
+    tracker.apply(messages.config({ phone: offline, values: { estop: true } })); expect(tracker.anyStop()).toBe(false);
+    tracker.apply(messages.config({ phone: 'phone-1', values: { estop: true } })); expect(phone().stop).toBe(true);
+  });
+
+  it('forgets phones that leave a complete roster, keeping one with Stop on', () => {
+    const tracker = new PhoneTracker(); const roster = ['phone-1', 'phone-2', 'phone-3'].map(id => messages.phone(id));
+    for (const phone of roster) tracker.apply(messages.config({ sessionId: 'gw', phones: roster, phone }));
+    tracker.apply(messages.input('phone-3', 'safety.estop', true));
+    tracker.apply(messages.config({ sessionId: 'gw', phones: [roster[0]] }));
+    expect([...tracker.snapshot().keys()].sort()).toEqual(['phone-1', 'phone-3@gw']); expect(tracker.get('phone-3@gw')).toMatchObject({ connected: false, stop: true });
+    // An unreadable roster removes nobody; a config's own phone counts as listed.
+    tracker.apply(messages.config({ sessionId: 'gw', phones: [roster[0], { id: 7 } as never] })); tracker.apply(messages.config({ sessionId: 'gw', phones: [], phone: roster[0] }));
+    expect([...tracker.snapshot().keys()].sort()).toEqual(['phone-1', 'phone-3@gw']);
+  });
+
   it('keeps a stopped phone across more than one gateway restart, under its first old id', () => {
     const tracker = new PhoneTracker();
     tracker.apply(messages.config({ sessionId: 'gw-a', phone: 'phone-1' })); tracker.apply(messages.input('phone-1', 'safety.estop', true));
     // Not told the gateway was lost first: a restart still lets go of it.
     tracker.apply(messages.config({ sessionId: 'gw-b', phones: [] }));
     expect(tracker.get('phone-1@gw-a')).toMatchObject({ connected: false, stop: true, stale: true });
+    // Nothing a gateway sends reaches a kept phone.
+    tracker.apply(messages.input('phone-1@gw-a', 'safety.estop', false)); tracker.apply(messages.config({ sessionId: 'gw-b', phones: [messages.phone('phone-1@gw-a', { connected: true })] }));
+    expect(tracker.get('phone-1@gw-a')).toMatchObject({ connected: false, stop: true });
     tracker.apply(messages.config({ sessionId: 'gw-c', phone: 'phone-1' }));
     expect([...tracker.snapshot().keys()].sort()).toEqual(['phone-1', 'phone-1@gw-a']);
     expect(tracker.anyStop()).toBe(true); expect(tracker.gateway).toBe('gw-c');
