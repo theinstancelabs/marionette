@@ -63,7 +63,7 @@ It learns holds, drags and buttons from the layout in the configs. No actions ar
 - Slider and stick values come from the live inputs, because the config only follows a drag's start and end. A config never overwrites a live drag.
 - Stop acts from the press itself, before the config follows.
 - `lostGateway()` (called for you by `attach`) and a phone dropping let go of everything: no pose, no holds, no drags. Stop stays.
-- A restarted gateway names phones afresh. A phone left with Stop on is kept, offline and out of reach, as `<id>@<old gateway session>`. The same goes for a phone that leaves the roster with Stop on (an app too old to say hello), kept as `<id>@<gateway session>`. Phones kept like this stay until `clearStaleStops()`. That call also turns Stop off on offline phones, and it holds until they reconnect.
+- A restarted gateway names phones afresh. A phone left with Stop on is kept, offline and out of reach, as `<id>@<old gateway session>`. The same goes for a phone that leaves the roster with Stop on (an app too old to say hello), kept as `<id>@<gateway session>`. Phones kept like this stay until `clearStaleStops()`. That call also turns Stop off on offline phones that have it on, and that holds until they reconnect.
 - Mirror policy, for the gateway's desktop `/screen` mirror. `allow` treats its inputs like the phone's. `stop-only` (the default) lets it turn Stop on and nothing else; a config can't turn Stop off either, since the gateway republishes a mirror's Stop off. `deny` ignores it.
 - Malformed messages are ignored.
 

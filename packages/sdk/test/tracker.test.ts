@@ -99,6 +99,15 @@ describe('PhoneTracker', () => {
     tracker.apply(messages.config({ phone: 'phone-1', values: { estop: true } })); expect(phone().stop).toBe(true);
   });
 
+  it('clears Stop only on offline phones that have it on, so a Stop that comes later still counts', () => {
+    const tracker = new PhoneTracker(); const offline = messages.phone('phone-2', { connected: false });
+    tracker.apply(messages.config({ phones: [messages.phone('phone-1'), offline], phone: offline }));
+    tracker.clearStaleStops();
+    // The robot's link blips, and meanwhile phone-2's Stop goes on (from a mirror): the gateway's config says so.
+    tracker.lostGateway(); tracker.apply(messages.config({ phones: [messages.phone('phone-1'), offline], phone: offline, values: { estop: true } }));
+    expect(tracker.get('phone-2')!.stop).toBe(true); expect(tracker.anyStop()).toBe(true);
+  });
+
   it('forgets phones that leave a complete roster, keeping one with Stop on', () => {
     const tracker = new PhoneTracker(); const roster = ['phone-1', 'phone-2', 'phone-3'].map(id => messages.phone(id));
     for (const phone of roster) tracker.apply(messages.config({ sessionId: 'gw', phones: roster, phone }));

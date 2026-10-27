@@ -221,12 +221,12 @@ export class PhoneTracker {
   lostGateway(): void { this.seeded.clear(); for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
   /**
    * Forgets the phones kept for their Stop (from before a gateway restart, or gone from the roster) and turns Stop off
-   * on phones that are offline, until they reconnect: what a desktop "clear Stop" does.
+   * on offline phones that have it on, until they reconnect: what a desktop "clear Stop" does.
    */
   clearStaleStops(): void {
     for (const [id, phone] of [...this.phones]) {
       if (phone.stale) this.phones.delete(id);
-      else if (!phone.connected) { phone.values[this.stopAction] = false; this.cleared.add(id); }
+      else if (!phone.connected && phone.stop) { phone.values[this.stopAction] = false; this.cleared.add(id); }
     }
   }
 
