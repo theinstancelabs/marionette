@@ -22,7 +22,7 @@ To preview the screen in a desktop browser, open http://localhost:8787/screen. I
 Everything is on one screen, with no modes. On a 390 × 844 iPhone nothing needs scrolling. On a 375 × 667 iPhone SE the bottom rows scroll, and Stop, the pad and the stick stay in view.
 
 - **Top:** the phone's name and tracking, **More**, and the **Stop** button. While Stop is on, **Stop is on** and **Reset Stop** take the place of the name and tracking.
-- **Headline:** one line that says what Axol is doing for this phone, a note, and tags: the calibration state (tap it to calibrate), **Sim**, the lift height and the base.
+- **Headline:** one line that says what Axol is doing for this phone, a note, and tags: the calibration state (tap it to calibrate), **Sim**, the lift height, Jelly's battery and the base.
 - **Cameras:** the camera pane with the view picker under it: **Head**, **Both wrists**, **Left wrist**, **Right wrist** and **All three**. With several panes, a tap stacks them full width.
 - **Left column, the arm:**
   - **Left arm** or **Right arm**.
@@ -92,6 +92,7 @@ Feedback never shows as a toast. Other statuses, such as the gateway's calibrati
 | `owner` | string | "Phone 2 has the left arm" when another phone has it. **Open gripper**, **Close gripper** and the grip slide turn off. Empty (or this phone's name) means this phone. |
 | `grip` | number, 0 open to 1 closed | The grip gauge, and where the next slide starts |
 | `hasLift`, `lift`, `liftMoving` | boolean, number 0 to 1 (-1 unknown), boolean | The lift tag. Without a lift, **Raise lift** and **Lower lift** are off. |
+| `battery`, `batteryCharging`, `batteryUnderLoad` | number 0 to 100 (-1 unknown), boolean, boolean | The battery tag: "Battery 62%", "Battery ~40%" for a reading taken while the lift or wheels moved, or "Battery charging". Amber at 25 % or less, red at 10 % or less. No tag without a reading. |
 | `hasBase`, `baseMoving`, `baseFault` | boolean | The base tag, and "Base fault" in the headline. Without a base, the stick and turning are off. |
 | `driving`, `driver` | boolean, string | A "Desktop driving" tag when someone else drives, and "Desktop is driving" in the headline while you drive too |
 | `stopBy` | string | "Stopped by Phone 2" |

@@ -525,6 +525,8 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     const tags = s.config && (control(ACTION.start) || control(ACTION.origin)) ? [[...calibrationTag(), 'calibration']] : [];
     if (f.mode === 'sim') tags.push(['Sim', 'sim']);
     if (f.hasLift === true) tags.push([typeof f.lift === 'number' && f.lift >= 0 ? 'Lift ' + Math.round(clamp(f.lift, 0, 1) * 100) + '%' : 'Lift unknown', f.liftMoving ? 'moving' : '']);
+    // Jelly's battery, as the control panel shows it: "~" marks a reading taken while the lift or wheels moved.
+    if (typeof f.battery === 'number' && f.battery >= 0) tags.push(f.batteryCharging ? ['Battery charging', 'ok'] : ['Battery ' + (f.batteryUnderLoad ? '~' : '') + Math.round(f.battery) + '%', f.battery <= 10 ? 'bad' : f.battery <= 25 ? 'warn' : '']);
     if (f.hasBase === true) tags.push(f.baseFault ? ['Base fault', 'bad'] : f.driving && f.driver && f.driver !== me ? [f.driver + ' driving', 'moving'] : f.baseMoving ? ['Base moving', 'moving'] : ['Base still', '']);
     const key = JSON.stringify(tags); if (box.dataset.key === key) return; box.dataset.key = key;
     box.replaceChildren(...tags.map(([text, tone, kind]) => kind === 'calibration'
