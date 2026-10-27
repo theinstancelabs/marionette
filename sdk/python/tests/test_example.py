@@ -49,7 +49,7 @@ def unwrap(degrees: list[float]) -> list[float]:
 def test_the_sim_arm_follows_a_phone_scaled_turns_on_and_stops(gateway: Gateway, sim_arm: subprocess.Popen[str]) -> None:
     with SimPhone(gateway) as phone:
         phone.wait_for(lambda p: p.html and p.html.get("source", {}).get("robotId") == "sim-arm", 10, "the robot's screen")
-        assert phone.control("teleop.translationScale")["max"] == 3
+        phone.wait_for(lambda p: (c := p.control("teleop.translationScale")) and c["max"] == 3, 5, "the robot's layout")
         # Its streams are published over WebRTC, and its state comes at 5 Hz.
         wait_until(lambda: all(s.get("publisher") == "sim-arm" for s in gateway.get("/api/config")["cameraStreams"]), 10, "the WebRTC streams")
         phone.wait_for(arm_state, 5, "robot state")

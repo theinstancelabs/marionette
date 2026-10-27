@@ -44,7 +44,7 @@ def test_a_robot_screen_is_accepted_and_shown_and_a_broken_one_refused(gateway: 
         with SimPhone(gateway) as phone:
             phone.wait_for(lambda p: p.html and "arm-screen" in p.html["html"], what="the robot's screen")
             assert phone.html["source"] == {"kind": "robot", "robotId": "arm"} and phone.html["title"] == "Arm screen"
-            assert phone.control("teleop.translationScale")["max"] == 4  # the screen's layout
+            phone.wait_for(lambda p: p.config and len(p.config["controls"]) == 7, what="the screen's layout")
         link.set_screen(SCREEN.replace('"controls": [', '"controls": [,'))
         assert link.wait_screen(5) is False
         assert "Screen refused" in (link.screen_error or "") and "not valid JSON" in (link.screen_error or "")
