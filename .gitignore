@@ -10,3 +10,5 @@ coverage
 logs
 __pycache__
 *.pyc
+*.tsbuildinfo
+tasks/
