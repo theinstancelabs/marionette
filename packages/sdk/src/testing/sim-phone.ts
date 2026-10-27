@@ -150,7 +150,9 @@ export class SimPhone {
   /** One action, as the screen sends it. `controlId` defaults to the control declaring the action. */
   act(action: string, value?: ControlValue, options: ActOptions = {}): void {
     this.send({ type: 'action', version: PROTOCOL_VERSION, sessionId: this.mirrorOf !== undefined ? 'mirror' : this.session, controlId: this.controlId(action, options.controlId), action,
-      ...(value !== undefined ? { value } : {}), ...(options.renew ? { renew: true } : {}), ...(options.live ? { live: true } : {}), sentAt: this.now() });
+      ...(value !== undefined ? { value } : {}), ...(options.renew ? { renew: true } : {}), ...(options.live ? { live: true } : {}),
+      // A mirror names the phone it means, so the gateway drops a press still in flight when it moves to another phone.
+      ...(this.mirrorOf !== undefined && this.id ? { phoneId: this.id } : {}), sentAt: this.now() });
   }
   /** A plain button press. */
   tap(action: string, options: { controlId?: string } = {}): void { this.act(action, undefined, options); }
