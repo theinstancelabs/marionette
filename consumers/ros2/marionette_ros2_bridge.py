@@ -2,8 +2,12 @@
 """Publishes a Marionette gateway's phones on ROS 2 topics.
 
     pip install websockets           # rclpy comes with your ROS 2 install
-    python3 marionette_ros2_bridge.py --gateway 192.168.1.20
-    python3 marionette_ros2_bridge.py --gateway 192.168.1.20 --dry-run   # no ROS needed; prints instead
+    python3 marionette_ros2_bridge.py --gateway 192.168.1.20 --token K7Q2-M9XD
+    python3 marionette_ros2_bridge.py --gateway "marionette://pair?v=1&host=…"   # the gateway's pairing link
+    python3 marionette_ros2_bridge.py --gateway localhost --dry-run   # no ROS needed; prints instead
+
+From another computer the gateway needs its pairing code: `--token`, or the pairing link it prints, which carries
+the code and every address it can be reached at. On the gateway's own computer it needs none.
 
 It connects as a console, so it only listens: Marionette relays poses and button
 presses and decides nothing. Stopping, scaling and what each button means are up
@@ -17,7 +21,8 @@ import json
 import re
 import sys
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, List, Optional, Tuple
+from urllib.parse import unquote
 
 from marionette_topics import Publish, Topics
 
@@ -35,6 +40,46 @@ def gateway_url(address: str) -> str:
     scheme, host, port, path = match.groups()
     secure = (scheme or "ws").lower() in ("wss", "https")
     return f"{'wss' if secure else 'ws'}://{host.lower()}:{int(port or DEFAULT_PORT)}{'/ws' if not path or path == '/' else path}"
+
+
+_HOST = re.compile(r"^(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)$", re.IGNORECASE)
+PAIRING_REQUIRED = 4401
+
+
+def normalize_code(code: str) -> str:
+    """A pairing code as the gateway compares it: case, spaces and dashes don't matter, O reads as 0, I and L as 1."""
+    return re.sub(r"[\s-]", "", code.upper()).replace("O", "0").replace("I", "1").replace("L", "1")
+
+
+def gateway_targets(address: str, token: Optional[str] = None) -> Tuple[List[str], Optional[str]]:
+    """The URLs to try and the pairing code, for a typed address or a pairing link
+    (`marionette://pair?v=1&host=a,b&port=8787&code=…`, read the way the app reads it). A link's hosts are tried
+    in turn; `token` wins over the link's code."""
+    match = re.match(r"^marionette://pair/?\?(.*)$", address.strip(), re.IGNORECASE)
+    if not match:
+        return [gateway_url(address)], normalize_code(token) if token else None
+    params = {}
+    for part in match.group(1).split("&"):
+        key, equals, value = part.partition("=")
+        if key and equals:
+            params[key] = unquote(value.replace("+", " "))
+    hosts = [host.strip() for host in params.get("host", "").split(",") if _HOST.match(host.strip())][:8]
+    try:
+        port = int(params.get("port", DEFAULT_PORT))
+    except ValueError:
+        port = 0
+    if not hosts or not 1 <= port <= 65535:
+        raise ValueError(f"not a usable pairing link: {address!r}")
+    code = token or params.get("code")
+    return [f"ws://{host.lower()}:{port}/ws" for host in hosts], normalize_code(code) if code else None
+
+
+def hello(token: Optional[str] = None) -> dict:
+    """A console that only listens; it has no use for camera frames."""
+    message = {"type": "hello", "version": 1, "role": "console", "cameras": False}
+    if token:
+        message["token"] = token
+    return message
 
 
 def ros_publisher() -> tuple[Callable[[Publish], None], Callable[[], None]]:
@@ -102,45 +147,60 @@ def print_publisher(skip_poses: bool) -> Callable[[Publish], None]:
     return publish
 
 
-async def run(url: str, publish: Callable[[Publish], None], topics: Topics | None = None) -> None:
+async def run(urls: "str | List[str]", publish: Callable[[Publish], None], topics: Topics | None = None, token: Optional[str] = None) -> None:
     import websockets
 
     topics = topics or Topics()
-    delay = 1.0
+    urls = [urls] if isinstance(urls, str) else list(urls)
+    delay, attempt = 1.0, 0
     while True:
-        reason = "the gateway closed the connection"
+        url = urls[attempt % len(urls)]
+        reason, code = "the gateway closed the connection", None
         try:
             async with websockets.connect(url, max_size=4 * 1024 * 1024, open_timeout=5, ping_interval=5, ping_timeout=5) as ws:
-                # A console that only listens; it has no use for camera frames.
-                await ws.send(json.dumps({"type": "hello", "version": 1, "role": "console", "cameras": False}))
-                print(f"connected to {url}", file=sys.stderr, flush=True)
-                delay = 1.0
-                async for raw in ws:
-                    try:
-                        items = topics.handle(json.loads(raw))
-                    except (ValueError, KeyError, TypeError) as error:
-                        print(f"skipped a message the bridge could not read ({error!r})", file=sys.stderr, flush=True)
-                        continue
-                    for item in items:
-                        publish(item)
+                await ws.send(json.dumps(hello(token)))
+                connected = False
+                try:
+                    async for raw in ws:
+                        if not connected:
+                            # The gateway says nothing to a client it refuses, so the first message means we're in.
+                            print(f"connected to {url}", file=sys.stderr, flush=True)
+                            connected, delay = True, 1.0
+                        try:
+                            items = topics.handle(json.loads(raw))
+                        except (ValueError, KeyError, TypeError) as error:
+                            print(f"skipped a message the bridge could not read ({error!r})", file=sys.stderr, flush=True)
+                            continue
+                        for item in items:
+                            publish(item)
+                finally:
+                    code = getattr(ws, "close_code", None)
         # asyncio.TimeoutError is not an OSError before Python 3.11 (ROS 2 Humble runs 3.10).
         except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as error:
             reason = str(error) or type(error).__name__
+            code = code or getattr(getattr(error, "rcvd", None), "code", None)
         for item in topics.gateway_lost():
             publish(item)
-        print(f"gateway unavailable ({reason}); retrying in {delay:.0f} s", file=sys.stderr, flush=True)
-        await asyncio.sleep(delay)
-        delay = min(delay * 2, 10.0)
+        wait = delay
+        if code == PAIRING_REQUIRED:
+            # Five wrong codes a minute shut an address out for a minute, so retry slowly.
+            reason, wait = "pairing code missing or wrong: pass --token with the code the gateway prints, or its pairing link", 15.0
+        else:
+            delay = min(delay * 2, 10.0)
+        attempt += 1
+        print(f"gateway unavailable at {url} ({reason}); retrying in {wait:.0f} s", file=sys.stderr, flush=True)
+        await asyncio.sleep(wait)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--gateway", default="localhost", help="gateway address: IP, host:port or ws:// URL (default localhost:8787)")
+    parser.add_argument("--gateway", default="localhost", help="gateway address (IP, host:port or ws:// URL; default localhost:8787) or its pairing link")
+    parser.add_argument("--token", help="the gateway's pairing code (needed from another computer, unless the pairing link has it)")
     parser.add_argument("--dry-run", action="store_true", help="print what would be published instead of using ROS 2")
     parser.add_argument("--quiet-poses", action="store_true", help="with --dry-run, leave poses out of the printout")
     args = parser.parse_args()
     try:
-        url = gateway_url(args.gateway)
+        urls, token = gateway_targets(args.gateway, args.token)
     except ValueError as error:
         parser.error(str(error))
     if args.dry_run:
@@ -148,7 +208,7 @@ def main() -> None:
     else:
         publish, close = ros_publisher()
     try:
-        asyncio.run(run(url, publish))
+        asyncio.run(run(urls, publish, token=token))
     except KeyboardInterrupt:
         pass
     finally:
