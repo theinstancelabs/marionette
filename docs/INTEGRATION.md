@@ -153,6 +153,25 @@ Every action a phone sends is forwarded verbatim, including actions no control d
 - `GET /health` returns `{ok, gatewayId, name, clients, phones, robots, poseCount}`.
 - `/screen?phone=phone-2` serves the phone screen in a desktop browser, acting as that phone.
 
+## Option D: the TypeScript SDK
+
+For a robot or console in TypeScript (Node, or a browser page), `packages/sdk` (`@marionette/sdk`) has the parts this document describes, already written and tested. It has the same semantics as the Python SDK:
+
+- **`GatewayClient`**: a reconnecting connection. It accepts an address or a pairing link, a token, and role `console` or `robot`. It answers pings and measures the clock offset, and has a coalescing outbox and clear errors for 4401 and 4409.
+- **`PhoneTracker`**: one `Phone` per id, built from configs, poses and inputs, with the rules for holds, drags, Stop, desktop mirrors and gateway restarts already applied (`holding`, `stick`, `presses`, `stop`, `pose.age`).
+- **Teleop parts**: `gate()` (the gates in step 3 of the recommended consumer below), `Clutch` (the clutch, with scale, rotation scale, a frame and continuous turns), `cameraFrame`, `JumpDetector`, `PressTracker`, `follow` (a rate limiter) and an opt-in `owners`.
+- **`RobotLink`**: the robot connection. It keeps your screen and state and re-sends them, and sends notices and JPEG frames. There's no WebRTC publishing in TypeScript: send JPEG, or use the Python SDK's video publisher.
+- **`@marionette/sdk/testing`**: the real gateway in-process (`startGateway()`) and scriptable phones (`SimPhone`), for your robot's tests.
+
+```ts
+import { RobotLink, gate } from '@marionette/sdk';
+const link = new RobotLink('localhost', { robotId: 'humanoid', name: 'Humanoid', tracker: true });
+await link.setScreen(html, 'Humanoid');
+setInterval(() => { const now = link.tracker!.now(); for (const phone of link.tracker!.snapshot().values()) { /* gate(phone, now), Stop, the clutch… */ } }, 8);
+```
+
+See [packages/sdk/README.md](../packages/sdk/README.md).
+
 ## Frames and calibration
 
 - **Operator frame (per phone)**: REP-103, +X forward, +Y left, +Z up, metres. Identity rotation is the phone lying flat, screen up, with its top edge pointing forward. Rolling, pitching and yawing the phone read as rotation about +X, +Y and +Z.
