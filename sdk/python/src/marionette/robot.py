@@ -219,22 +219,22 @@ class RobotLink:
             return {phone: copy.deepcopy(entry[1]) for phone, entry in self._states.items()}
 
     def _send_state(self, phone: str | None) -> None:
+        # Read and queue under one lock: otherwise the periodic re-send, reading the state just before the control
+        # thread changes it, could queue the old state over the new one (Stop on, overwritten by Stop off).
         with self._lock:
             entry = self._states.get(phone)
             if entry is None:
                 return
-            state = entry[1]
-        message: dict[str, Any] = {
-            "type": "robot_state",
-            "version": PROTOCOL_VERSION,
-            "state": state,
-            "everyMs": round(self.every * 1000),
-            "sentAt": wall_ms(),
-        }
-        if phone is not None:
-            message["phoneId"] = phone
-        if self.client.queue(f"state:{phone or ''}", message):
-            with self._lock:
+            message: dict[str, Any] = {
+                "type": "robot_state",
+                "version": PROTOCOL_VERSION,
+                "state": entry[1],
+                "everyMs": round(self.every * 1000),
+                "sentAt": wall_ms(),
+            }
+            if phone is not None:
+                message["phoneId"] = phone
+            if self.client.queue(f"state:{phone or ''}", message):
                 self._sent[phone] = time.monotonic()
 
     def notice(self, message: str, phone: str | None = None, **values: Any) -> bool:
