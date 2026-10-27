@@ -234,6 +234,15 @@ def fixtures() -> dict[str, dict[str, Any]]:
     s.expect("a roster it can't read doesn't drop anyone", {"phone-1": {"connected": True}})
     add("py-roster-gone", "Phones gone from the roster (Python)", "An older app without a device id leaves the roster without a disconnect; it is dropped, unless its Stop was on.", s)
 
+    s = Steps().config(["phone-1"]).config(["phone-1"], "phone-1", values={"arm.select": "right"})
+    s.input("phone-1", "safety.estop", True)
+    s.config(["phone-1"], "phone-1", values={"safety.estop": True, "arm.select": "right"})
+    s.config(["phone-1", "phone-2"], "phone-1", values={"safety.estop": True, "arm.select": "right"})
+    s.expect("a phone first named in another phone's config doesn't take that phone's Stop", {"phone-1": {"stop": True}, "phone-2": {"stop": False}}, any_stop=True)
+    s.config(["phone-1", "phone-2"], "phone-2")
+    s.expect("its own config brings its values", {"phone-2": {"stop": False, "values": {"arm.select": "left", "safety.estop": False}}, "phone-1": {"values": {"arm.select": "right"}}})
+    add("py-new-phone", "A new phone doesn't start from another phone's values (Python)", "A phone the tracker first sees in another phone's config starts from the screen's defaults (or nothing), never from that phone's Stop or values, until its own config.", s)
+
     s = Steps().config(["phone-1"], "phone-1", values={"safety.estop": True})
     s.expect("a tracker that starts late learns Stop from the config", {"phone-1": {"stop": True}}, any_stop=True)
     s.config([msg.phone_info("phone-1", connected=False)])

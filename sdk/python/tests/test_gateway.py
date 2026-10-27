@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import os
+import queue
+import re
+import signal
+import socket
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -68,6 +74,63 @@ def test_a_port_in_use_fails_with_the_gateways_words() -> None:
     with Gateway() as first:
         with pytest.raises(RuntimeError, match="didn't start"):
             runner.start(first.port, mdns=False, auth="off", home=first._dir / "h2", log_dir=first._dir / "l2", ready_timeout=10)  # type: ignore[operator]
+
+
+PARENTS = {
+    "start": "from marionette import gateway; g = gateway.start(0, mdns=False, auth='off', home=sys.argv[1])",
+    "testing.Gateway": "from marionette.testing import Gateway; g = Gateway().start()",
+}
+
+
+def _gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _listening(port: int) -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+    except OSError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("how", ["start", "testing.Gateway", "console script"])
+@pytest.mark.parametrize("kill", [signal.SIGTERM, signal.SIGKILL], ids=["SIGTERM", "SIGKILL"])
+def test_the_gateway_stops_when_the_python_process_that_ran_it_ends(how: str, kill: signal.Signals, tmp_path: Path) -> None:
+    if how == "console script":
+        command = [sys.executable, "-m", "marionette.gateway", "--port", "0", "--no-mdns", "--auth", "off", "--home", str(tmp_path)]
+    else:
+        command = [sys.executable, "-c", f"import sys, time\n{PARENTS[how]}\nprint('gateway', g.port, g.pid, flush=True)\ntime.sleep(60)", str(tmp_path)]
+    parent = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env={**os.environ, "TMPDIR": str(tmp_path)})
+    lines: queue.Queue[str] = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line) for line in parent.stdout], daemon=True).start()  # type: ignore[union-attr]
+    try:
+        port = pid = None
+        while port is None:
+            line = lines.get(timeout=20)
+            if line.startswith("gateway "):
+                port, pid = (int(word) for word in line.split()[1:3])
+            elif match := re.search(r"listening on http://0\.0\.0\.0:(\d+)", line):
+                port = int(match.group(1))
+                pid = int(subprocess.run(["pgrep", "-P", str(parent.pid)], capture_output=True, text=True, check=True).stdout.split()[0])
+        assert pid is not None and _listening(port) and not _gone(pid)
+        parent.send_signal(kill)
+        parent.wait(5)
+        started = time.monotonic()
+        while not _gone(pid) and time.monotonic() - started < 3:
+            time.sleep(0.02)
+        took = time.monotonic() - started
+        assert _gone(pid) and not _listening(port), f"the gateway outlived its parent ({kill.name}, {how})"
+        assert took < 1.5, f"the gateway took {took:.2f} s to stop"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        if pid is not None and not _gone(pid):
+            os.kill(pid, signal.SIGKILL)
 
 
 def test_the_console_script() -> None:
