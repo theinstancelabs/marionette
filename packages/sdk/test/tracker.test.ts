@@ -99,6 +99,54 @@ describe('PhoneTracker', () => {
     tracker.apply(messages.config({ phone: 'phone-1', values: { estop: true } })); expect(phone().stop).toBe(true);
   });
 
+  it('clears Stop only on offline phones that have it on, so a Stop that comes later still counts', () => {
+    const tracker = new PhoneTracker(); const offline = messages.phone('phone-2', { connected: false });
+    tracker.apply(messages.config({ phones: [messages.phone('phone-1'), offline], phone: offline }));
+    tracker.clearStaleStops();
+    // The robot's link blips, and meanwhile phone-2's Stop goes on (from a mirror): the gateway's config says so.
+    tracker.lostGateway(); tracker.apply(messages.config({ phones: [messages.phone('phone-1'), offline], phone: offline, values: { estop: true } }));
+    expect(tracker.get('phone-2')!.stop).toBe(true); expect(tracker.anyStop()).toBe(true);
+  });
+
+  it('takes values the gateway would keep: on a slider’s step grid, and one of a select’s options', () => {
+    const { tracker, phone } = setup();
+    tracker.apply(messages.config({ phone: 'phone-1', controls: [
+      { id: 'gain', type: 'slider', label: 'Gain', action: 'arm.gain', value: 0.5, min: 0, max: 1, step: 0.25 },
+      { id: 'mode', type: 'select', label: 'Mode', action: 'arm.mode', value: 'a', options: [] },
+      { id: 'pick', type: 'select', label: 'Pick', action: 'arm.pick', value: 'x', options: [{ label: 'X', value: 'x' }, { label: 'Y', value: 'y' }] }] }));
+    expect(phone().value('arm.gain')).toBe(0.5);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 0.3)); expect(phone().value('arm.gain')).toBe(0.5);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 1.0000001)); expect(phone().value('arm.gain')).toBe(0.5);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 0.75, { live: true })); expect(phone().value('arm.gain')).toBe(0.75);
+    tracker.apply(messages.input('phone-1', 'arm.gain', 0.25 + 1e-9)); expect(phone().value('arm.gain')).toBe(0.25 + 1e-9); // on the grid within 1e-6 steps
+    // A select with no options takes nothing; one with options only those.
+    expect(phone().value('arm.mode')).toBeUndefined();
+    tracker.apply(messages.input('phone-1', 'arm.mode', 'anything')); expect(phone().value('arm.mode')).toBeUndefined();
+    tracker.apply(messages.input('phone-1', 'arm.pick', 'z')); expect(phone().value('arm.pick')).toBe('x');
+    tracker.apply(messages.input('phone-1', 'arm.pick', 'y')); expect(phone().value('arm.pick')).toBe('y');
+  });
+
+  it('lets a desk mirror change values neither by its inputs nor by the configs the gateway republishes, unless allowed', () => {
+    for (const mirror of ['stop-only', 'deny', 'allow'] as const) {
+      const { tracker, phone } = setup({ mirror });
+      // The gateway applies a mirror's changes and republishes the phone's config.
+      tracker.apply(messages.input('phone-1', 'arm.select', 'right', { source: 'mirror' }));
+      tracker.apply(messages.input('phone-1', 'teleop.translationScale', 4, { source: 'mirror' }));
+      tracker.apply(messages.input('phone-1', 'lift.toggle', false, { source: 'mirror' }));
+      tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'right', sensitivity: 4, lift: false } }));
+      const expected = mirror === 'allow' ? { 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false } : { 'arm.select': 'left', 'teleop.translationScale': 1, 'lift.toggle': true };
+      expect(phone().values, mirror).toMatchObject(expected);
+      // A mirror's drag the gateway ends: its value isn't taken either.
+      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'mirror', live: true }));
+      tracker.apply(messages.input('phone-1', 'base.speedLimit', 90, { source: 'gateway', reason: 'samples stopped' }));
+      expect(phone().value('base.speedLimit'), mirror).toBe(mirror === 'allow' ? 90 : 50);
+      // The phone's own changes always count, and a lost gateway seeds the values afresh.
+      tracker.apply(messages.input('phone-1', 'arm.select', 'right')); expect(phone().value('arm.select')).toBe('right');
+      tracker.lostGateway(); tracker.apply(messages.config({ phone: 'phone-1', values: { arm: 'left', sensitivity: 2 } }));
+      expect(phone().values, mirror).toMatchObject({ 'arm.select': 'left', 'teleop.translationScale': 2 });
+    }
+  });
+
   it('forgets phones that leave a complete roster, keeping one with Stop on', () => {
     const tracker = new PhoneTracker(); const roster = ['phone-1', 'phone-2', 'phone-3'].map(id => messages.phone(id));
     for (const phone of roster) tracker.apply(messages.config({ sessionId: 'gw', phones: roster, phone }));

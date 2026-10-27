@@ -6,7 +6,9 @@ import type { GatewayClient } from './client.js';
 /**
  * Who may act through a desktop mirror of a phone's screen (the gateway's `/screen`): `allow` treats its presses like
  * the phone's; `stop-only` (the default) lets it turn Stop on and nothing else, because someone at a desk would
- * otherwise drive a robot with a phone nobody may be holding; `deny` ignores it.
+ * otherwise drive a robot with a phone nobody may be holding; `deny` ignores it. Unless it is `allow`, a phone's
+ * values are only seeded from configs (the gateway republishes them after a mirror's changes too), and then follow
+ * the phone's own inputs.
  */
 export type MirrorPolicy = 'allow' | 'stop-only' | 'deny';
 export type CalibrationStatus = 'uncalibrated' | 'capturing' | 'captured';
@@ -156,7 +158,7 @@ export type ConformancePhone = {
 };
 
 type Kind = 'hold' | 'button' | 'toggle' | 'select' | 'slider' | 'joystick';
-type Control = { kind: Kind; options?: string[]; min?: number; max?: number };
+type Control = { kind: Kind; options?: string[]; min?: number; max?: number; step?: number };
 
 /**
  * Folds the gateway's `config`, `pose` and `input` messages into one `Phone` per id. It decides nothing: read
@@ -173,9 +175,13 @@ type Control = { kind: Kind; options?: string[]; min?: number; max?: number };
  * - A restarted gateway names phones afresh; a phone left with Stop on is kept, offline, as `<id>@<old gateway
  *   session>` until `clearStaleStops()`. A phone that leaves the roster (an app too old to say hello) is forgotten
  *   the same way, kept as `<id>@<gateway session>` if its Stop is on.
- * - The mirror policy decides what a desktop mirror's inputs may do. Unless it is `allow`, a config (which the
- *   gateway republishes after a mirror's presses too) may turn Stop on but not off once the phone is known: only the
- *   phone itself turns it off.
+ * - The mirror policy decides what a desktop mirror's inputs may do. Unless it is `allow`, the configs the gateway
+ *   republishes after a mirror's changes can't carry them either: a phone's toggles, selects, sliders and sticks are
+ *   only seeded from a config (the first time the tracker sees the phone, after `lostGateway()` or a gateway restart,
+ *   for controls new to the layout, and for values that no longer suit their control), and then follow the phone's
+ *   own inputs and the gateway's ends of drags the tracker saw live. A config may turn Stop on, but not off once the
+ *   phone is known: only the phone itself turns it off.
+ * - The gateway's own inputs only end holds and drags.
  * - `clearStaleStops()` (the desktop clearing Stop) holds for a phone while it stays offline.
  * - Presses and values of actions no control declares are counted and kept too.
  * - Malformed messages are ignored.
@@ -191,7 +197,12 @@ export class PhoneTracker {
   private phones = new Map<string, Phone>();
   private readonly layout = new Map<string, Control>();
   /** Phones whose config has been seen since the gateway was (re)joined: a config can't turn their Stop off. */
-  private readonly seeded = new Set<string>();
+  private readonly known = new Set<string>();
+  /**
+   * Per phone, the actions whose values came from a config or the phone's own inputs since the gateway was (re)joined.
+   * Unless mirrors may act, a config doesn't change them again (the gateway republishes a mirror's changes).
+   */
+  private readonly seeded = new Map<string, Set<string>>();
   /** Offline phones whose Stop the desktop cleared: a config can't turn it back on until they reconnect. */
   private readonly cleared = new Set<string>();
 
@@ -218,15 +229,15 @@ export class PhoneTracker {
   anyStop(): boolean { return [...this.phones.values()].some(phone => phone.stop); }
 
   /** The gateway went away: nobody is connected or holding anything. */
-  lostGateway(): void { this.seeded.clear(); for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
+  lostGateway(): void { this.known.clear(); this.seeded.clear(); for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
   /**
    * Forgets the phones kept for their Stop (from before a gateway restart, or gone from the roster) and turns Stop off
-   * on phones that are offline, until they reconnect: what a desktop "clear Stop" does.
+   * on offline phones that have it on, until they reconnect: what a desktop "clear Stop" does.
    */
   clearStaleStops(): void {
     for (const [id, phone] of [...this.phones]) {
       if (phone.stale) this.phones.delete(id);
-      else if (!phone.connected) { phone.values[this.stopAction] = false; this.cleared.add(id); }
+      else if (!phone.connected && phone.stop) { phone.values[this.stopAction] = false; this.cleared.add(id); }
     }
   }
 
@@ -247,6 +258,9 @@ export class PhoneTracker {
       if (m.phones.every(info => isObject(info) && typeof info.id === 'string' && info.id)) this.forgetAbsent(new Set([...m.phones.map(info => (info as Json).id as string), ...(isObject(m.phone) && typeof m.phone.id === 'string' ? [m.phone.id] : [])]));
     }
     const phone = this.info(m.phone); if (!phone) return;
+    // Unless mirrors may act, a config only seeds a value: the gateway republishes the config after a mirror's changes
+    // too. A value that no longer suits its control (the layout changed) is seeded again.
+    const seeds = (action: string, control: Control) => this.mirror === 'allow' || !this.seeded.get(phone.id)?.has(action) || !valid(control, phone.values[action]);
     if (Array.isArray(m.controls)) for (const control of m.controls) {
       if (!isObject(control) || typeof control.action !== 'string' || !control.action) continue;
       const action = control.action; const known = this.layout.get(action); if (!known) continue;
@@ -259,17 +273,18 @@ export class PhoneTracker {
         const drag = phone.drags[action] ??= { kind: known.kind, live: false, dropped: false, at: -Infinity };
         if (control.live === false && drag.live) { drag.live = false; if (known.kind === 'joystick') setValue(phone, action, rest()); }
         // During a drag the samples are newer than any config.
-        if (!drag.live && valid(known, control.value)) setValue(phone, action, control.value as ControlValue);
+        if (!drag.live && valid(known, control.value) && seeds(action, known)) { setValue(phone, action, control.value as ControlValue); this.seed(phone, action); }
       } else if (valid(known, control.value)) {
         if (action === this.stopAction) {
           // A cleared offline phone stays cleared; a mirror's Stop off, republished by the gateway, doesn't count.
           if (control.value === true && this.cleared.has(phone.id) && !phone.connected) continue;
-          if (control.value === false && phone.stop && this.mirror !== 'allow' && this.seeded.has(phone.id)) continue;
-        }
+          if (control.value === false && phone.stop && this.mirror !== 'allow' && this.known.has(phone.id)) continue;
+        } else if (!seeds(action, known)) continue;
+        else this.seed(phone, action);
         phone.values[action] = clone(control.value as ControlValue);
       }
     }
-    this.seeded.add(phone.id);
+    this.known.add(phone.id);
     const calibration = m.calibration;
     if (isObject(calibration)) {
       if (typeof calibration.status === 'string' && CALIBRATION.includes(calibration.status)) phone.calibration = calibration.status as CalibrationStatus;
@@ -277,8 +292,9 @@ export class PhoneTracker {
     }
   }
 
-  /** The layout: what each action is, from the controls every config carries. */
+  /** The layout: what each action is, from the controls every config carries. Controls new to it are seeded again. */
   private learn(controls: unknown[]): void {
+    const before = new Map(this.layout);
     this.layout.clear();
     for (const control of controls) {
       if (!isObject(control) || typeof control.action !== 'string' || !control.action || this.layout.has(control.action)) continue;
@@ -286,9 +302,19 @@ export class PhoneTracker {
       const kind: Kind | undefined = type === 'button' ? (control.hold === true ? 'hold' : 'button') : type === 'toggle' || type === 'select' || type === 'slider' || type === 'joystick' ? type : undefined;
       if (!kind) continue;
       this.layout.set(control.action, { kind,
-        ...(kind === 'select' && Array.isArray(control.options) ? { options: control.options.filter(isObject).map(option => option.value).filter((value): value is string => typeof value === 'string') } : {}),
-        ...(kind === 'slider' && finite(control.min) && finite(control.max) ? { min: control.min, max: control.max } : {}) });
+        ...(kind === 'select' ? { options: (Array.isArray(control.options) ? control.options : []).filter(isObject).map(option => option.value).filter((value): value is string => typeof value === 'string') } : {}),
+        ...(kind === 'slider' && finite(control.min) && finite(control.max) && finite(control.step) && control.step > 0 ? { min: control.min, max: control.max, step: control.step } : {}) });
     }
+    for (const [action, control] of this.layout) {
+      if (before.get(action)?.kind === control.kind) continue;
+      for (const actions of this.seeded.values()) actions.delete(action);
+    }
+  }
+
+  /** The tracker holds a value for this action from a config or from the phone itself. */
+  private seed(phone: Phone, action: string): void {
+    let actions = this.seeded.get(phone.id); if (!actions) this.seeded.set(phone.id, actions = new Set());
+    actions.add(action);
   }
 
   private info(info: unknown): Phone | undefined {
@@ -310,7 +336,7 @@ export class PhoneTracker {
   private forgetAbsent(present: Set<string>): void {
     for (const [id, phone] of [...this.phones]) {
       if (phone.stale || present.has(id)) continue;
-      this.phones.delete(id); this.seeded.delete(id); this.cleared.delete(id);
+      this.phones.delete(id); this.known.delete(id); this.seeded.delete(id); this.cleared.delete(id);
       if (!phone.stop) continue;
       phone.connected = false; letGo(phone); phone.id = `${id}@${this.gateway ?? 'gateway'}`; this.phones.set(phone.id, phone);
     }
@@ -318,7 +344,7 @@ export class PhoneTracker {
 
   /** A restarted gateway names phones afresh. A phone that left Stop on stays, offline, under its old id and gateway. */
   private restarted(old: string): void {
-    this.seeded.clear(); this.cleared.clear();
+    this.known.clear(); this.seeded.clear(); this.cleared.clear();
     const kept = new Map<string, Phone>();
     for (const phone of this.phones.values()) {
       if (!phone.stop) continue;
@@ -362,6 +388,8 @@ export class PhoneTracker {
     // Stop acts from the press itself; the config follows.
     if (action === this.stopAction) { if (typeof value === 'boolean') phone.values[action] = value; return; }
     const control = this.layout.get(action);
+    // The gateway itself only ends holds and drags; it never presses or sets anything.
+    if (source === 'gateway' && control?.kind !== 'hold' && control?.kind !== 'slider' && control?.kind !== 'joystick') return;
     if (!control) {
       // An action no control declares: counted as a press, and its value kept.
       if (!renew) phone.pressCounts[action] = (phone.pressCounts[action] ?? 0) + 1;
@@ -371,29 +399,33 @@ export class PhoneTracker {
     switch (control.kind) {
       case 'hold': {
         const hold = phone.holds[action] ??= { down: false, at: -Infinity, presses: 0 };
-        if (value === true && renew) { if (hold.down) hold.at = now; }
-        else if (value === true) { if (!hold.down) hold.presses++; hold.down = true; hold.at = now; }
-        else hold.down = false;
+        if (source === 'gateway' || value !== true) hold.down = false;
+        else if (renew) { if (hold.down) hold.at = now; }
+        else { if (!hold.down) hold.presses++; hold.down = true; hold.at = now; }
         return;
       }
       case 'button': if (!renew) phone.pressCounts[action] = (phone.pressCounts[action] ?? 0) + 1; return;
-      case 'toggle': case 'select': if (valid(control, value)) phone.values[action] = value as ControlValue; return;
+      case 'toggle': case 'select': if (valid(control, value)) { phone.values[action] = value as ControlValue; this.seed(phone, action); } return;
       case 'slider': case 'joystick': {
         const drag = phone.drags[action] ??= { kind: control.kind, live: false, dropped: false, at: -Infinity };
         if (source === 'gateway') {
           // The gateway stopped hearing the drag. It stays ended until the operator lets go, whatever samples still arrive.
+          // A stick rests. A slider keeps the gateway's last value, unless mirrors can't act and this tracker never saw
+          // the drag live: then it was a mirror's.
+          const seen = drag.live || this.mirror === 'allow';
           drag.dropped = drag.live || drag.dropped; drag.live = false;
-          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (valid(control, value)) setValue(phone, action, value as ControlValue);
+          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (seen && valid(control, value)) setValue(phone, action, value as ControlValue);
           return;
         }
         if (!live) {
           // Let go: the final value (a stick springs back to rest), and samples count again from the next touch.
           drag.live = false; drag.dropped = false;
-          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (valid(control, value)) setValue(phone, action, value as ControlValue);
+          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (valid(control, value)) setValue(phone, action, value as ControlValue); else return;
+          this.seed(phone, action);
           return;
         }
         if (drag.dropped || !valid(control, value) || (renew && !drag.live)) return;
-        setValue(phone, action, value as ControlValue); drag.live = true; drag.at = now;
+        setValue(phone, action, value as ControlValue); drag.live = true; drag.at = now; this.seed(phone, action);
       }
     }
   }
@@ -402,8 +434,13 @@ export class PhoneTracker {
 function valid(control: Control, value: unknown): boolean {
   switch (control.kind) {
     case 'toggle': return typeof value === 'boolean';
-    case 'select': return typeof value === 'string' && (!control.options?.length || control.options.includes(value));
-    case 'slider': return finite(value) && (control.min === undefined || (value >= control.min - 1e-9 && value <= control.max! + 1e-9));
+    case 'select': return typeof value === 'string' && !!control.options?.includes(value);
+    case 'slider': {
+      // The gateway's rule: within the range and on the step grid.
+      const { min, max, step } = control;
+      if (!finite(value) || min === undefined || max === undefined || step === undefined || value < min || value > max) return false;
+      const steps = (value - min) / step; return Math.abs(steps - Math.round(steps)) < 1e-6;
+    }
     case 'joystick': return isStickInRange(value);
     default: return false;
   }

@@ -1,8 +1,8 @@
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { CLOSE_CODES } from '@marionette/protocol';
-import { GatewayClient, resolveAddress, type GatewayMessage } from '../src/index.js';
+import { GatewayClient, resolveAddress, type GatewayMessage, type SocketLike } from '../src/index.js';
 
 /** A stand-in gateway that records what clients send; `onHello` decides what happens next. */
 async function fakeGateway(onHello: (socket: WebSocket, hello: any, count: number) => void = socket => socket.send(JSON.stringify({ type: 'config', version: 1, sessionId: 'fake' }))) {
@@ -82,18 +82,16 @@ describe('GatewayClient', () => {
     expect(seen.map(m => m.type)).toEqual(['config']);
   });
 
-  it('reconnects with backoff, says why for 4401 and 4409, and reports a lost connection once', async () => {
+  it('reconnects with backoff, says why for 4409, and reports a lost connection once', async () => {
     const gateway = await fakeGateway((socket, _hello, count) => {
-      if (count === 1) socket.close(CLOSE_CODES.pairingRequired, 'Wrong pairing code');
-      else if (count === 2) socket.close(CLOSE_CODES.robotIdInUse, 'A robot with id axol is already connected');
+      if (count <= 2) socket.close(CLOSE_CODES.robotIdInUse, 'A robot with id axol is already connected');
       else socket.send(JSON.stringify({ type: 'config', version: 1, sessionId: 'fake' }));
     }); track(gateway);
-    const client = track(new GatewayClient(gateway.url, { role: 'robot', robotId: 'axol', token: 'nope' }));
+    const client = track(new GatewayClient(gateway.url, { role: 'robot', robotId: 'axol', token: 'k7q2-m9xd' }));
     const errors: [string, number | undefined][] = []; client.on('error', (message, code) => errors.push([message, code]));
     let lost = 0; client.on('lost', () => lost++);
     await client.whenConnected(5000);
-    expect(errors[0][1]).toBe(4401); expect(errors[0][0]).toMatch(/refused the pairing code \(Wrong pairing code\)/);
-    expect(errors[1][1]).toBe(4409); expect(errors[1][0]).toMatch(/robot with id "axol" is already connected/);
+    expect(errors).toHaveLength(1); expect(errors[0][1]).toBe(4409); expect(errors[0][0]).toMatch(/robot with id "axol" is already connected/);
     expect(client.error).toBeUndefined();
     // 0.5 s, then 1 s.
     expect(gateway.opened[1] - gateway.opened[0]).toBeGreaterThanOrEqual(450); expect(gateway.opened[2] - gateway.opened[1]).toBeGreaterThanOrEqual(950);
@@ -101,6 +99,37 @@ describe('GatewayClient', () => {
     await waitFor(() => !client.connected); expect(lost).toBe(1); expect(client.error).toMatch(/Lost the gateway/);
     // Back after the shortest wait, since it had connected.
     const dropped = Date.now(); await client.whenConnected(3000); expect(Date.now() - dropped).toBeLessThan(1000);
+  });
+
+  it('backs off from 5 s doubling to 30 s while its pairing code is refused, and starts over once connected', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    /** A gateway that refuses the code (4401) after each hello until `accept`. */
+    let accept = false; const opened: number[] = []; const sockets: FakeSocket[] = [];
+    class FakeSocket implements SocketLike {
+      readyState = 0; bufferedAmount = 0;
+      onopen: SocketLike['onopen'] = null; onmessage: SocketLike['onmessage'] = null; onclose: SocketLike['onclose'] = null; onerror: SocketLike['onerror'] = null;
+      constructor(readonly url: string) { opened.push(Date.now()); sockets.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); }); }
+      send(data: string) {
+        if (JSON.parse(data).type !== 'hello') return;
+        queueMicrotask(() => accept ? this.onmessage?.({ data: JSON.stringify({ type: 'config', version: 1, sessionId: 'fake' }) }) : this.drop(CLOSE_CODES.pairingRequired, 'Wrong pairing code'));
+      }
+      drop(code: number, reason: string) { this.readyState = 3; this.onclose?.({ code, reason }); }
+      close() { this.readyState = 3; }
+    }
+    const client = new GatewayClient('ws://127.0.0.1:18928/ws', { token: 'AAAA-BBBB', WebSocket: FakeSocket });
+    const errors: [string, number | undefined][] = []; client.on('error', (message, code) => errors.push([message, code]));
+    try {
+      await vi.advanceTimersByTimeAsync(100_000);
+      expect(errors[0][1]).toBe(4401); expect(errors[0][0]).toMatch(/refused the pairing code \(Wrong pairing code\)/);
+      // Never more than five tries a minute: 5, 10, 20, then 30 s apart.
+      expect(opened.slice(1).map((at, i) => at - opened[i])).toEqual([5000, 10_000, 20_000, 30_000, 30_000]);
+      accept = true; await vi.advanceTimersByTimeAsync(30_000);
+      expect(client.connected).toBe(true); expect(client.error).toBeUndefined();
+      // Once connected the backoff starts over: a dropped connection is back at once, and a refusal waits 5 s again.
+      accept = false; const dropped = Date.now(); sockets.at(-1)!.drop(1006, '');
+      await vi.advanceTimersByTimeAsync(600); expect(opened.at(-1)! - dropped).toBe(500);
+      await vi.advanceTimersByTimeAsync(5000); expect(opened.at(-1)! - opened.at(-2)!).toBe(5000);
+    } finally { client.close(); vi.useRealTimers(); }
   });
 
   it('drops a connection that goes quiet, and tries each host of a pairing link', async () => {

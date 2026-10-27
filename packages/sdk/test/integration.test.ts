@@ -171,6 +171,26 @@ describe('SimPhone and the tracker against the real gateway', () => {
     expect(p()).toMatchObject({ pose: null, stop: true }); expect(p().hold('teleop.deadman').down).toBe(false);
   }, 15_000);
 
+  it('keeps a desk mirror from changing values through the configs the gateway republishes', async () => {
+    const gateway = await gatewayFor({ streamTimeoutMs: 300 });
+    const trackers = Object.fromEntries((['stop-only', 'deny', 'allow'] as const).map(mirror => {
+      const tracker = new PhoneTracker({ mirror }); tracker.attach(track(new GatewayClient(gateway.url, { cameras: false }))); return [mirror, tracker];
+    }));
+    const phone = await phoneOn(gateway); const all = Object.values(trackers);
+    await waitFor(() => all.every(tracker => tracker.get('phone-1')?.connected));
+    const mirror = await phoneOn(gateway, { mirrorOf: 'phone-1' });
+    mirror.set('arm.select', 'right'); mirror.set('teleop.translationScale', 4); mirror.set('lift.toggle', false);
+    // A drag the mirror lets go of by going quiet: the gateway ends it with the mirror's last value.
+    mirror.drag('base.speedLimit', 90); mirror.pauseRenewals();
+    await waitFor(() => trackers.allow.get('phone-1')!.drag('base.speedLimit')?.dropped, 3000);
+    // The phone's own change comes after all of that on every connection.
+    phone.set('camera.view', 'arms'); await waitFor(() => all.every(tracker => tracker.get('phone-1')!.value('camera.view') === 'arms'));
+    for (const policy of ['stop-only', 'deny'] as const) {
+      expect(trackers[policy].get('phone-1')!.values, policy).toMatchObject({ 'arm.select': 'left', 'teleop.translationScale': 1, 'lift.toggle': true, 'base.speedLimit': 50 });
+    }
+    expect(trackers.allow.get('phone-1')!.values).toMatchObject({ 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false, 'base.speedLimit': 90 });
+  });
+
   it('keeps Stop through a gateway restart until cleared, and the robot puts its screen and state back', async () => {
     const gateway = await gatewayFor(); const link = await robotOn(gateway, { minBackoffMs: 100 }); const tracker = link.tracker!;
     await link.setScreen(SCREEN('Axol'), 'Axol'); link.state({ ready: true });
