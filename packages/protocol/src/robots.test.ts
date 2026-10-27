@@ -4,7 +4,7 @@ import { CLOSE_CODES, HTML_BRIDGE_VERSION, PROTOCOL_VERSION, buildQuickReference
 
 const pose = { type: 'pose', version: 1, sessionId: 's', seq: 1, monotonicTs: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, covariance: [0, 0, 0, 0, 0, 0], source: 'arkit', trackingState: 'normal', calibrationVersion: 'v', heartbeat: true };
 
-describe('round 8 protocol additions', () => {
+describe('robots, pairing, latency and signaling', () => {
   it('accepts robots in the hello only with a valid robot id', () => {
     expect(validateHello({ type: 'hello', version: 1, role: 'robot', robotId: 'axol', name: 'Axol', token: 'K7Q2M9XD' })).toBe(true);
     expect(validateHello({ type: 'hello', version: 1, role: 'robot' })).toBe(false);

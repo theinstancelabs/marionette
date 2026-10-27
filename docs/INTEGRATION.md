@@ -122,7 +122,7 @@ Only one connection may use a robot id at a time: a second is closed with code 4
 ```
 
 - `monotonicTs` is the phone's clock in seconds, monotonic within a `sessionId`.
-- `sentAt` is the phone's wall clock when it sent the pose, `receivedAt` the gateway's when it arrived (milliseconds with fractions). `latencyMs` is the gateway's estimate of the time in between: it pings each phone every second and works out the phone's clock offset from the fastest of the last 16 round trips. It is missing until the first answer, and on poses from an app without pings. For your own hop, ping the gateway (`{"type":"ping","version":1,"id":1,"sentAt":<your clock>}`; the `pong` echoes `id` and `sentAt` and adds `at`, the gateway's clock) and do the same sum: the pose's age when you use it is `latencyMs` plus your clock now, minus your offset, minus `receivedAt`.
+- `sentAt` is the phone's wall clock when it sent the pose, `receivedAt` the gateway's when it arrived (milliseconds with fractions). `latencyMs` is the gateway's estimate of the time in between: it pings each phone every second and works out the phone's clock offset from the fastest of the last 16 round trips. It is missing until the first answer, and on poses from an app without pings. For your own hop, ping the gateway (`{"type":"ping","version":1,"id":1,"sentAt":<your clock>}`; the `pong` echoes `id` and `sentAt` and adds `at`, the gateway's clock) and take your offset as (`sentAt` + round trip / 2) − `at`, your clock minus the gateway's: the pose's age when you use it is `latencyMs` plus your clock now, minus your offset, minus `receivedAt`.
 - `seq` restarts when the session changes, which means a new ARKit world. Calibration is cleared then. A phone that reconnects inside the same session keeps its calibration and its `calibrationVersion`.
 - `covariance` is a nominal diagonal (m², rad²) per tracking state; ARKit reports none.
 - When a phone's stream stops for 1.5 s, or the phone disconnects, you get one pose with `heartbeat:false`, `trackingState:"unavailable"` and a `calibrationVersion` ending in `-stale`.
@@ -140,7 +140,7 @@ Every action a phone sends is forwarded verbatim, including actions no control d
 {"type":"input","version":1,"phoneId":"phone-1","controlId":"drive","action":"base.drive","value":{"x":0.5,"y":-0.2},"live":true,"source":"phone","sentAt":1793087775690,"receivedAt":1793087775692}
 ```
 
-**Status**: gateway replies, tagged `phoneId` when they concern one phone (mostly calibration progress), with `values.accepted` true or false.
+**Status**: gateway replies, tagged `phoneId` when they concern one phone (mostly calibration progress). Replies to an action carry `values.accepted` true or false; the greeting sent on connect doesn't.
 
 **Robot state**: what robots say about themselves (see Feedback to phones below). You get each one as it is sent, and the latest of each right after the configs when you connect.
 
@@ -283,7 +283,7 @@ Build a single node that owns all decisions:
    - The gateway keeps the latest of each (per phone, and for every phone), also after you disconnect, and gives it to every phone, mirror and console that connects later. So send the whole state each time, not changes.
    - Re-send it every `everyMs` milliseconds even when nothing changes: a screen calls the robot unresponsive after `max(1500, 3 × everyMs)` ms without one, and offline when the roster says it disconnected.
    - The phone screen gets it with `Marionette.on('robot_state', …)` (each message) or `Marionette.on('robots', …)` (every robot's latest state for all phones and for this phone, its name and whether it is connected, with when it last arrived). The screen kit's `robot()` adds staleness on top.
-   - For a one-off notice ("Lift at its top"), send a `status` instead: `{"type":"status","version":1,"sessionId":"humanoid","controlId":"robot.notice","message":"Lift at its top"}`, with `phoneId` for one phone. It reaches the phones and mirrors (never consoles) and isn't kept. Its `values` may be any JSON up to 16 KB. Use your own `controlId`s so the screen can tell your notices from the gateway's replies.
+   - For a one-off notice ("Lift at its top"), send a `status` instead: `{"type":"status","version":1,"sessionId":"humanoid","controlId":"robot.notice","message":"Lift at its top"}`, with `phoneId` for one phone. It reaches the phones and mirrors (never consoles) and isn't kept. Its `values` may be any JSON object up to 16 KB; a status that doesn't fit is dropped without a reply. Use your own `controlId`s so the screen can tell your notices from the gateway's replies.
    - A console can send the same `status` messages, which is how a consumer that isn't a robot connection talks to the phones. Older iPhone apps receive `status` but not `robot_state`.
 
 ## Customizing the phone screen for your robot
@@ -295,7 +295,7 @@ The phone screen is an HTML page served by the gateway, and the app has no nativ
    ```html
    <script type="application/json" id="marionette-config">
    { "controls": [
-       { "id": "drive", "type": "button", "label": "Drive", "action": "base.drive", "hold": true },
+       { "id": "lift-down", "type": "button", "label": "Lift down", "action": "lift.down", "hold": true },
        { "id": "vx", "type": "slider", "label": "Forward speed", "action": "base.vx", "value": 0, "min": -0.5, "max": 0.5, "step": 0.05, "unit": " m/s" },
        { "id": "lift-up", "type": "button", "label": "Lift up", "action": "lift.up", "hold": true }
      ] }
