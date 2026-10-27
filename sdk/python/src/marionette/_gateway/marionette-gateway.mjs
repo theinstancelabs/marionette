@@ -37963,4 +37963,8 @@ if (process.env.MARIONETTE_EXIT_WITH_PARENT === "1") {
   for (const event of ["end", "close", "error"]) process.stdin.once(event, stop);
   process.stdin.resume();
   process.stdin.unref?.();
+  const parent = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parent) stop();
+  }, 1e3).unref();
 }

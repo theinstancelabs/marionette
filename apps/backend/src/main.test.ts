@@ -50,6 +50,37 @@ describe('the gateway as a child process', () => {
     expect(await listening(port)).toBe(false);
   }, 20_000);
 
+  it('stops when its parent is killed though a child of the parent still holds the pipe', async () => {
+    const dir = tempDir();
+    // A parent that runs the gateway, then starts a child that inherits the pipe's write end (as a forked worker would).
+    const script = `const { spawn } = require('node:child_process');
+      const gateway = spawn(process.execPath, [${JSON.stringify(file)}], { stdio: ['pipe', 'inherit', 'inherit'] });
+      const holder = spawn('sleep', ['30'], { stdio: [gateway.stdin, 'ignore', 'ignore'] });
+      console.log('pids ' + gateway.pid + ' ' + holder.pid); setInterval(() => {}, 1000);`;
+    const parent = spawn(process.execPath, ['-e', script], { cwd: dir, env: { PATH: process.env.PATH, HOME: dir, PORT: '0', MARIONETTE_HOME: dir, MARIONETTE_LOG_DIR: dir, MARIONETTE_MDNS: 'off', MARIONETTE_AUTH: 'off', MARIONETTE_EXIT_WITH_PARENT: '1' } });
+    let text = ''; parent.stdout.on('data', d => { text += d; }); parent.stderr.on('data', d => { text += d; });
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    let pids: number[] = [];
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        const timer = setInterval(() => { const found = /listening on http:\/\/0\.0\.0\.0:(\d+)/.exec(text); if (found && /pids \d+ \d+/.test(text)) { clearInterval(timer); resolve(Number(found[1])); } }, 20);
+        setTimeout(() => { clearInterval(timer); reject(new Error(`no gateway: ${text}`)); }, 15_000);
+      });
+      pids = /pids (\d+) (\d+)/.exec(text)!.slice(1).map(Number);
+      expect(await listening(port)).toBe(true);
+      parent.kill('SIGKILL');
+      const started = Date.now();
+      while (alive(pids[0]) && Date.now() - started < 4000) await sleep(20);
+      expect(alive(pids[0])).toBe(false); expect(alive(pids[1])).toBe(true); // the pipe was still open
+      expect(Date.now() - started).toBeLessThan(2500);
+      expect(await listening(port)).toBe(false);
+    } finally {
+      if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL');
+      for (const pid of pids) if (alive(pid)) process.kill(pid, 'SIGKILL');
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('still exits when it can\'t listen, though the pipe stays open', async () => {
     const { port } = await gateway();
     const { exited } = run({ PORT: String(port), MARIONETTE_EXIT_WITH_PARENT: '1' });

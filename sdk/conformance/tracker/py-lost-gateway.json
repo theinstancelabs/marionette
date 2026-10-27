@@ -1,6 +1,6 @@
 {
  "name": "A lost gateway lets go of everything (Python)",
- "description": "When the connection to the gateway drops, every phone is offline and lets go; Stop stays until the gateway says otherwise.",
+ "description": "When the connection to the gateway drops, every phone is offline and lets go; Stop stays until the phone itself turns it off.",
  "options": {
   "mirror": "stop-only",
   "stop_action": "safety.estop"
@@ -583,7 +583,7 @@
    }
   },
   {
-   "note": "back on the same gateway, the configs say how things are",
+   "note": "back on the same gateway, the configs say who is connected, but can't turn Stop off",
    "expect": {
     "phones": {
      "phone-1": {
@@ -591,6 +591,32 @@
      },
      "phone-2": {
       "connected": true,
+      "stop": true
+     }
+    },
+    "any_stop": true
+   }
+  },
+  {
+   "message": {
+    "type": "input",
+    "version": 1,
+    "phoneId": "phone-2",
+    "sessionId": "iphone-phone-2",
+    "controlId": "estop",
+    "action": "safety.estop",
+    "value": false,
+    "source": "phone",
+    "sentAt": 1793100000034.5,
+    "receivedAt": 1793100000037.5,
+    "latencyMs": 2.5
+   }
+  },
+  {
+   "note": "the phone itself can",
+   "expect": {
+    "phones": {
+     "phone-2": {
       "stop": false
      }
     },

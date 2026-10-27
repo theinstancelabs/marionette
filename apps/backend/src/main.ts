@@ -24,8 +24,12 @@ const stop = () => { if (stopping) return; stopping = true; setTimeout(() => pro
 process.once('SIGINT', stop); process.once('SIGTERM', stop);
 // A program that runs the gateway as its child (the Python SDK does) sets MARIONETTE_EXIT_WITH_PARENT=1 and keeps a
 // pipe to its stdin open. However the parent ends, even killed outright, the pipe closes and the gateway stops with it.
-// The pipe alone doesn't keep the gateway running (one that couldn't listen still exits).
+// A child the parent forked (a multiprocessing worker, a process pool) inherits the pipe and can keep it open after the
+// parent is gone, so the gateway also watches its parent: once it is reparented, its parent has ended. Neither the pipe
+// nor the watch keeps the gateway running (one that couldn't listen still exits).
 if (process.env.MARIONETTE_EXIT_WITH_PARENT === '1') {
   for (const event of ['end', 'close', 'error'] as const) process.stdin.once(event, stop);
   process.stdin.resume(); (process.stdin as { unref?: () => void }).unref?.();
+  const parent = process.ppid;
+  setInterval(() => { if (process.ppid !== parent) stop(); }, 1000).unref();
 }

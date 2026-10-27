@@ -47,8 +47,8 @@ class Steps(list[dict[str, Any]]):
         self.append({"message": message})
         return self
 
-    def config(self, phones: list[Any], phone: Any = None, session: str = GATEWAY, **fields: Any) -> Steps:
-        return self.message(msg.config(phones, phone, CONTROLS, session=session, server_name="Python fixtures", **fields))
+    def config(self, phones: list[Any], phone: Any = None, session: str = GATEWAY, controls: list[dict[str, Any]] | None = None, **fields: Any) -> Steps:
+        return self.message(msg.config(phones, phone, CONTROLS if controls is None else controls, session=session, server_name="Python fixtures", **fields))
 
     def input(self, phone: str, action: str, value: Any = None, **fields: Any) -> Steps:
         control = next((c["id"] for c in CONTROLS if c["action"] == action), action.rsplit(".", 1)[-1])
@@ -163,7 +163,7 @@ def fixtures() -> dict[str, dict[str, Any]]:
     s = Steps().config(["phone-1"], "phone-1")
     for action, value, live in (("teleop.deadman", True, False), ("base.drive", {"x": 1, "y": 0}, True), ("teleop.translationScale", 3.0, True), ("arm.resetLeft", None, False), ("arm.select", "right", False)):
         s.input("phone-1", action, value, live=live, source="mirror")
-    s.expect("a mirror can't hold, drag, press or set", {"phone-1": {"holds": {"teleop.deadman": hold(False, 0)}, "drags": {"base.drive": drag(False, False, REST)}, "presses": {"arm.resetLeft": 0}, "values": {"arm.select": "left", "teleop.translationScale": 1}}}, any_stop=False)
+    s.expect("a mirror's input can't hold, drag, press or set",{"phone-1": {"holds": {"teleop.deadman": hold(False, 0)}, "drags": {"base.drive": drag(False, False, REST)}, "presses": {"arm.resetLeft": 0}, "values": {"arm.select": "left", "teleop.translationScale": 1}}}, any_stop=False)
     s.input("phone-1", "safety.estop", True, source="mirror")
     s.expect("but it can turn Stop on", {"phone-1": {"stop": True}}, any_stop=True)
     s.config(["phone-1"], "phone-1", values={"safety.estop": True})
@@ -183,9 +183,81 @@ def fixtures() -> dict[str, dict[str, Any]]:
     add("py-mirror-allow", "A mirror allowed to act as its phone (Python)", "With mirror: allow, a mirror's presses count like the phone's own.", s, mirror="allow")
 
     s = Steps().config(["phone-1"], "phone-1")
-    s.input("phone-1", "safety.estop", True, source="mirror").input("phone-1", "teleop.deadman", True, source="mirror")
-    s.expect("deny: nothing from a mirror", {"phone-1": {"stop": False, "holds": {"teleop.deadman": hold(False, 0)}}}, any_stop=False)
-    add("py-mirror-deny", "A mirror denied (Python)", "With mirror: deny, a mirror's inputs change nothing.", s, mirror="deny")
+    s.input("phone-1", "safety.estop", True, source="mirror").input("phone-1", "teleop.deadman", True, source="mirror").input("phone-1", "arm.select", "right", source="mirror")
+    s.expect("deny: nothing from a mirror's input", {"phone-1": {"stop": False, "holds": {"teleop.deadman": hold(False, 0)}, "values": {"arm.select": "left"}}}, any_stop=False)
+    s.config(["phone-1"], "phone-1", values={"safety.estop": True, "arm.select": "right"}, held=["teleop.deadman"])
+    s.expect("but the phone shows what the gateway applied: its settings, and Stop on", {"phone-1": {"stop": True, "holds": {"teleop.deadman": hold(False, 0)}, "values": {"arm.select": "right"}}}, any_stop=True)
+    s.input("phone-1", "safety.estop", False, source="mirror")
+    s.config(["phone-1"], "phone-1", values={"safety.estop": False, "arm.select": "right"})
+    s.expect("never Stop off", {"phone-1": {"stop": True}}, any_stop=True)
+    s.input("phone-1", "safety.estop", False)
+    s.expect("the phone itself turns it off", {"phone-1": {"stop": False}}, any_stop=False)
+    add("py-mirror-deny", "A mirror denied (Python)", "With mirror: deny, a mirror's inputs change nothing. Its changes still reach the phone's config, which the tracker follows for settings and for Stop on, never for Stop off.", s, mirror="deny")
+
+    s = Steps().config(["phone-1"], "phone-1")
+    s.input("phone-1", "arm.select", "right", source="mirror")
+    s.expect("a mirror's input sets nothing itself", {"phone-1": {"values": {"arm.select": "left"}}})
+    s.config(["phone-1"], "phone-1", values={"arm.select": "right"})
+    s.expect("the config the gateway sends after it does: the phone's screen shows it", {"phone-1": {"values": {"arm.select": "right"}}})
+    s.input("phone-1", "teleop.translationScale", 3.0, live=True, source="mirror")
+    s.config(["phone-1"], "phone-1", values={"arm.select": "right", "teleop.translationScale": 3.0}, live=["teleop.translationScale"])
+    s.expect("a slider a mirror drags shows its value, but isn't a live drag", {"phone-1": {"values": {"teleop.translationScale": 3.0}, "drags": {"teleop.translationScale": drag(False, False, 3.0)}}})
+    s.input("phone-1", "teleop.translationScale", 3.5, live=True, source="mirror")
+    s.expect("the mirror's samples set nothing", {"phone-1": {"values": {"teleop.translationScale": 3.0}}})
+    s.input("phone-1", "teleop.translationScale", 3.5, source="mirror")
+    s.config(["phone-1"], "phone-1", values={"arm.select": "right", "teleop.translationScale": 3.5})
+    s.expect("its final value comes with the config", {"phone-1": {"values": {"teleop.translationScale": 3.5}, "drags": {"teleop.translationScale": drag(False, False, 3.5)}}})
+    s.input("phone-1", "base.drive", {"x": 0.8, "y": 0}, live=True, source="mirror").input("phone-1", "teleop.deadman", True, source="mirror").input("phone-1", "arm.resetLeft", source="mirror")
+    s.config(["phone-1"], "phone-1", values={"arm.select": "right", "teleop.translationScale": 3.5, "base.drive": {"x": 0.8, "y": 0}}, held=["teleop.deadman"], live=["base.drive"])
+    s.expect("motion doesn't follow: a stick a mirror drags rests, a hold it presses isn't held, its presses don't count", {
+        "phone-1": {"drags": {"base.drive": drag(False, False, REST)}, "values": {"base.drive": REST}, "holds": {"teleop.deadman": hold(False, 0)}, "presses": {"arm.resetLeft": 0}}})
+    s.advance(0.45).gateway_end("phone-1", "base.drive", REST, "samples stopped").gateway_end("phone-1", "teleop.deadman", False, "renewals stopped")
+    s.config(["phone-1"], "phone-1", values={"arm.select": "right", "teleop.translationScale": 3.5})
+    s.expect("the gateway ending the mirror's drag and hold drops nothing", {"phone-1": {"drags": {"base.drive": drag(False, False, REST)}, "holds": {"teleop.deadman": hold(False, 0)}}})
+    s.input("phone-1", "arm.select", "left")
+    s.expect("the phone's own change counts at once, before its config", {"phone-1": {"values": {"arm.select": "left"}}})
+    s.config(["phone-1"], "phone-1", values={"teleop.translationScale": 3.5})
+    s.input("phone-1", "teleop.translationScale", 2.0, live=True)
+    s.config(["phone-1"], "phone-1", values={"teleop.translationScale": 2.0}, live=["teleop.translationScale"])
+    s.input("phone-1", "teleop.translationScale", 2.5, live=True)
+    s.config(["phone-1"], "phone-1", values={"arm.select": "right", "teleop.translationScale": 2.0}, live=["teleop.translationScale"])
+    s.expect("while the phone drags, its samples are newer than a config (here after a mirror's change)", {
+        "phone-1": {"values": {"teleop.translationScale": 2.5, "arm.select": "right"}, "drags": {"teleop.translationScale": drag(True, False, 2.5)}}})
+    add("py-mirror-settings", "Settings follow the phone's config; a mirror's motion doesn't count (Python)",
+        "Under stop-only the gateway still applies a desk mirror's changes and republishes the phone's config: the tracker's toggles, selects and sliders follow it, so the robot uses what the phone shows. A mirror never holds, drags, presses or moves the stick, through its input or the config.", s)
+
+    s = Steps().config(["phone-1"], "phone-1")
+    s.input("phone-1", "safety.estop", True)
+    s.config(["phone-1"], "phone-1", values={"safety.estop": True})
+    s.append({"lost": True})
+    s.config(["phone-1"], "phone-1", values={"safety.estop": False, "teleop.translationScale": 2.0, "arm.select": "right"})
+    s.expect("back on the gateway, the settings follow its config, but it can't turn Stop off (a mirror may have)", {"phone-1": {"connected": True, "stop": True, "values": {"teleop.translationScale": 2.0, "arm.select": "right"}}}, any_stop=True)
+    s.append({"lost": True})
+    s.config(["phone-1"], "phone-1", values={"safety.estop": False})
+    s.expect("nor after another reconnect", {"phone-1": {"stop": True}}, any_stop=True)
+    s.input("phone-1", "safety.estop", False)
+    s.expect("only the phone itself turns it off", {"phone-1": {"stop": False}}, any_stop=False)
+    s.config(["phone-1"], "phone-1", values={"safety.estop": True})
+    s.expect("a config still turns it on", {"phone-1": {"stop": True}}, any_stop=True)
+    add("py-reconnect-stop", "Stop survives a reconnect; settings follow it (Python)", "After lost_gateway() the configs bring every value back, except that once Stop is on, a config can't turn it off: the tracker can't tell whether the phone or a mirror did it.", s)
+
+    lights = msg.toggle("lights", "robot.lights", False, label="Lights")
+    speed = msg.slider("speed", "teleop.speed", 0.5, 0, 1, 0.1, label="Speed")
+    mode = msg.select("mode", "robot.mode", "manual", [("Manual", "manual"), ("Auto", "auto")], label="Mode")
+    one = [CONTROLS[2], lights, speed, mode]
+    two = [CONTROLS[2], lights, {**speed, "value": 0.3}, {**mode, "value": "auto"}]
+    renamed = [CONTROLS[2], {**lights, "id": "lamp"}, {**speed, "value": 0.3}, {**mode, "value": "auto"}]
+    retyped = [CONTROLS[2], {**lights, "id": "lamp"}, {**speed, "value": 0.3}, msg.toggle("mode", "robot.mode", True, label="Auto")]
+    s = Steps().config(["phone-1"], controls=one).config(["phone-1"], "phone-1", controls=one)
+    s.input("phone-1", "robot.lights", True).config(["phone-1"], "phone-1", controls=one, values={"robot.lights": True})
+    s.expect("the first screen", {"phone-1": {"values": {"robot.lights": True, "teleop.speed": 0.5, "robot.mode": "manual"}}})
+    s.config(["phone-1"], controls=two).config(["phone-1"], "phone-1", controls=two, values={"robot.lights": True})
+    s.expect("a new screen's defaults reach the tracker; a value the phone set stays as its config says", {"phone-1": {"values": {"robot.lights": True, "teleop.speed": 0.3, "robot.mode": "auto"}}})
+    s.config(["phone-1"], controls=renamed).config(["phone-1"], "phone-1", controls=renamed)
+    s.expect("a control under a new id starts from its default, as the gateway sends it", {"phone-1": {"values": {"robot.lights": False}}})
+    s.config(["phone-1"], controls=retyped).config(["phone-1"], "phone-1", controls=retyped)
+    s.expect("a control of another kind takes its new value", {"phone-1": {"values": {"robot.mode": True}}})
+    add("py-new-screen", "A new screen's values reach the tracker (Python)", "When the robot changes the screen, the gateway sends each phone the new defaults (keeping what that phone set); the tracker follows each phone's config.", s)
 
     s = Steps().config(["phone-1", "phone-2"], "phone-1").config(["phone-1", "phone-2"], "phone-2")
     s.pose("phone-1", 1).input("phone-1", "teleop.deadman", True).input("phone-1", "base.drive", {"x": 0.4, "y": 0}, live=True).input("phone-2", "safety.estop", True)
@@ -194,8 +266,10 @@ def fixtures() -> dict[str, dict[str, Any]]:
         "phone-1": {"connected": False, "pose": None, "holds": {"teleop.deadman": hold(False, 1)}, "drags": {"base.drive": drag(False, False, REST)}},
         "phone-2": {"connected": False, "stop": True}}, any_stop=True)
     s.config(["phone-1", "phone-2"], "phone-1").config(["phone-1", "phone-2"], "phone-2", values={"safety.estop": False})
-    s.expect("back on the same gateway, the configs say how things are", {"phone-1": {"connected": True}, "phone-2": {"connected": True, "stop": False}}, any_stop=False)
-    add("py-lost-gateway", "A lost gateway lets go of everything (Python)", "When the connection to the gateway drops, every phone is offline and lets go; Stop stays until the gateway says otherwise.", s)
+    s.expect("back on the same gateway, the configs say who is connected, but can't turn Stop off", {"phone-1": {"connected": True}, "phone-2": {"connected": True, "stop": True}}, any_stop=True)
+    s.input("phone-2", "safety.estop", False)
+    s.expect("the phone itself can", {"phone-2": {"stop": False}}, any_stop=False)
+    add("py-lost-gateway", "A lost gateway lets go of everything (Python)", "When the connection to the gateway drops, every phone is offline and lets go; Stop stays until the phone itself turns it off.", s)
 
     s = Steps().config(["phone-1", "phone-2"], "phone-1").config(["phone-1", "phone-2"], "phone-2")
     s.input("phone-1", "safety.estop", True).input("phone-2", "teleop.deadman", True)

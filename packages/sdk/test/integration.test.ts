@@ -171,7 +171,7 @@ describe('SimPhone and the tracker against the real gateway', () => {
     expect(p()).toMatchObject({ pose: null, stop: true }); expect(p().hold('teleop.deadman').down).toBe(false);
   }, 15_000);
 
-  it('keeps a desk mirror from changing values through the configs the gateway republishes', async () => {
+  it('follows a desk mirror\'s settings through the configs the gateway republishes, but not its motion or Stop off', async () => {
     const gateway = await gatewayFor({ streamTimeoutMs: 300 });
     const trackers = Object.fromEntries((['stop-only', 'deny', 'allow'] as const).map(mirror => {
       const tracker = new PhoneTracker({ mirror }); tracker.attach(track(new GatewayClient(gateway.url, { cameras: false }))); return [mirror, tracker];
@@ -181,14 +181,28 @@ describe('SimPhone and the tracker against the real gateway', () => {
     const mirror = await phoneOn(gateway, { mirrorOf: 'phone-1' });
     mirror.set('arm.select', 'right'); mirror.set('teleop.translationScale', 4); mirror.set('lift.toggle', false);
     // A drag the mirror lets go of by going quiet: the gateway ends it with the mirror's last value.
-    mirror.drag('base.speedLimit', 90); mirror.pauseRenewals();
+    mirror.drag('base.speedLimit', 90); mirror.stick('base.drive', { x: 0.6, y: 0 });
+    await waitFor(() => all.every(tracker => tracker.get('phone-1')!.value('base.speedLimit') === 90));
+    // While the mirror drags, only allow treats it as live motion.
+    for (const policy of ['stop-only', 'deny'] as const) {
+      const p = trackers[policy].get('phone-1')!;
+      expect(p.drag('base.speedLimit')?.live, policy).toBe(false); expect(p.stick('base.drive', trackers[policy].now()), policy).toEqual({ x: 0, y: 0 });
+    }
+    expect(trackers.allow.get('phone-1')!.stick('base.drive', trackers.allow.now())).toEqual({ x: 0.6, y: 0 });
+    mirror.pauseRenewals();
     await waitFor(() => trackers.allow.get('phone-1')!.drag('base.speedLimit')?.dropped, 3000);
     // The phone's own change comes after all of that on every connection.
     phone.set('camera.view', 'arms'); await waitFor(() => all.every(tracker => tracker.get('phone-1')!.value('camera.view') === 'arms'));
-    for (const policy of ['stop-only', 'deny'] as const) {
-      expect(trackers[policy].get('phone-1')!.values, policy).toMatchObject({ 'arm.select': 'left', 'teleop.translationScale': 1, 'lift.toggle': true, 'base.speedLimit': 50 });
-    }
-    expect(trackers.allow.get('phone-1')!.values).toMatchObject({ 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false, 'base.speedLimit': 90 });
+    // Every policy now has what the phone's screen shows.
+    const shown = Object.fromEntries(phone.config!.controls.filter(control => 'value' in control).map(control => [control.action, (control as { value: unknown }).value]));
+    expect(shown).toMatchObject({ 'arm.select': 'right', 'teleop.translationScale': 4, 'lift.toggle': false, 'base.speedLimit': 90, 'camera.view': 'arms' });
+    for (const tracker of all) expect(tracker.get('phone-1')!.values).toMatchObject(shown);
+    for (const policy of ['stop-only', 'deny'] as const) expect(trackers[policy].get('phone-1')!.drag('base.speedLimit')).toMatchObject({ live: false, dropped: false });
+    // Stop: on from the config under every policy, off only from the phone itself unless allowed.
+    mirror.pauseRenewals(false); mirror.set('safety.estop', true); await waitFor(() => all.every(tracker => tracker.anyStop()));
+    mirror.set('safety.estop', false); await waitFor(() => !trackers.allow.anyStop() && phone.config!.controls.some(control => control.action === 'safety.estop' && (control as { value?: unknown }).value === false));
+    await sleep(100); expect(trackers['stop-only'].anyStop()).toBe(true); expect(trackers.deny.anyStop()).toBe(true);
+    phone.set('safety.estop', true); phone.set('safety.estop', false); await waitFor(() => all.every(tracker => !tracker.anyStop()));
   });
 
   it('keeps Stop through a gateway restart until cleared, and the robot puts its screen and state back', async () => {

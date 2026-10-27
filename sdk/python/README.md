@@ -102,8 +102,8 @@ everything else is read by control type, so the same tracker serves any screen. 
 
 - `value(action, default)`, `number(action, default, lo, hi)`, `choice(action, options, default)`, `flag(action)`;
 - `hold(action)` (`down`, `at`, `presses`) and `holding(action, now, timeout=0.6)`;
-- `drag(action)` (`value`, `live`, `dropped`, `at`, and `updates`: new values the tracker took from inputs so far,
-  not counting repeats, configs, or anything a mirror did unless mirrors may act) and
+- `drag(action)` (`value`, `live`, `dropped`, `at`, and `updates`: new values from the phone's own inputs so far,
+  not counting repeats, configs, the gateway's end of a drag, or anything a mirror did unless mirrors may act) and
   `stick(action, now=None, timeout=0.25)`;
 - `presses(action)` for plain buttons and holds alike;
 - `stop`; `connected`, `name`, `color`, `index` (2 for `phone-2`), `session`; `calibration` (`uncalibrated`,
@@ -120,23 +120,32 @@ The rules, each learned on a robot:
   release can't restart the hold. The gateway's `held: false` ends a hold; its `held: true` never starts one.
 - Press edges are counted, for hold buttons and plain buttons alike.
 - A drag the gateway ended (its samples stopped for 400 ms) stays ended, `dropped`, until the finger lifts, whatever
-  samples still arrive. A stick comes back to rest; a slider keeps its value.
-- Slider and stick values come from the live inputs; the gateway's config only follows a drag's start and end.
-- Stop acts from the press itself, not from the config that follows it.
+  samples still arrive. A stick comes back to rest; a slider's value follows the config.
+- While a drag is live its samples set its value; the gateway's config only follows a drag's start and end.
+- Settings follow the phone's screen. A toggle, select or slider takes its value from the phone's config, whoever
+  set it: the phone, a desk mirror, a new screen's defaults (`set_screen`, an edited screen file, a renamed control),
+  or anything that happened while the tracker was away (a robot restart, a reconnect). The gateway applies all of
+  these to the phone and the phone's screen shows the config, so a robot that ignored them would act on settings
+  nobody can see (the phone showing 0.25× and the Head frame while the robot moves at 1× in its own). The phone's own
+  inputs set values sooner. A stick follows the config too, except while the config has it dragged by someone the
+  tracker doesn't hear (a mirror): a stick is motion, so it stays at rest. A config's value is never an `update`.
+- Stop acts from the press itself, not from the config that follows it. A config may turn Stop on, but unless
+  `mirror="allow"`, never off once it is on, not even the first config after `lost_gateway()`: the gateway applies a
+  mirror's Stop off too, and after a reconnect the tracker can't tell whose it was. Only the phone itself turns it
+  off. (If the phone turned it off while the robot's link was down, its screen shows Stop off while the robot stays
+  stopped: turn it on and off again.)
 - `lost_gateway()` (called for you when the connection drops): everyone is offline and lets go. Stop stays on.
 - A restarted gateway names phones afresh, but a phone left with Stop on survives, offline, as
   `<id>@<old gateway session>` until `clear_stale_stops()`. So does a phone that vanishes from the roster with Stop on.
 - `clear_stale_stops()` forgets those, and turns Stop off on offline phones of this gateway (they can't turn it off
   themselves) until they come back.
-- A desktop mirror of a phone's screen (the gateway's `/screen`) acts as that phone. `mirror="allow"` treats it like
-  the phone; `"stop-only"` (the default) lets it turn Stop on and nothing else; `"deny"` ignores it.
-- Unless mirrors may act, the configs the gateway republishes after a mirror's changes can't carry them either. A
-  phone's toggles, selects, sliders and sticks are only *seeded* from its config: the first time the tracker sees the
-  phone, after `lost_gateway()` or a gateway restart, after the phone left the roster, for a control new to the
-  screen (or now of another kind), and for a value that no longer suits its control. After that they follow the
-  phone's own inputs. A drag the gateway ends takes the gateway's value only if the tracker saw it live (otherwise it
-  was a mirror's): a slider keeps its value, a stick rests. A config may turn Stop on, but once the phone is known
-  only the phone itself turns it off.
+- A desktop mirror of a phone's screen (the gateway's `/screen`) acts as that phone. The mirror policy governs its
+  motion, not settings (those follow the config, as above), because someone at a desk shouldn't move a robot with a
+  phone nobody may be holding. `mirror="allow"` treats its input like the phone's. Under `"stop-only"` (the default)
+  a mirror's input never presses, renews or releases a hold (nor is a config's `held: true` ever a hold), never
+  starts, moves or ends a drag (nor is a config's `live: true` a live drag), never counts a press, and never turns
+  Stop off; its Stop on counts at once. `"deny"` ignores its input entirely, Stop on included (that still arrives
+  through the config the gateway republishes).
 - The gateway's own inputs only end holds and drags.
 - A new phone starts from the screen's defaults (the gateway's own config, without `phone`), never from another
   phone's values; its own config brings its values.
@@ -242,7 +251,10 @@ video.close()
 It publishes its streams on every connect, so the gateway marks them `transport: webrtc` and viewers (the phone
 screens, the `/screen` mirror, the desktop viewer) ask the robot for video instead of waiting for JPEG frames. Each
 request gets its own aiortc peer connection whose track serves the newest frame at `fps`, H.264 preferred (VP8 as the
-fallback; `codec="vp8"` swaps them), with a complete offer. `close` or the gateway going away closes it. There are no
+fallback; `codec="vp8"` swaps them), with a complete offer. A frame is repeated for at most `stale_after` (1 s) after
+its push: a camera that stops pushing sends nothing more until it pushes again, so the screens (which call a picture
+live while its frames keep decoding) show it as stalled instead of frozen but live. Timestamps follow the clock across
+the gap. `close` or the gateway going away closes it. There are no
 STUN servers by default, since phones and robots meet on a LAN or a tailnet; pass `ice_servers` to add some. Keep
 sending JPEG frames too if some viewers can't do WebRTC.
 

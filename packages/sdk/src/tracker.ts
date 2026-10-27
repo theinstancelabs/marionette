@@ -4,11 +4,12 @@ import { matrixFromQuaternion, type Mat3, type Vec3 } from './math.js';
 import type { GatewayClient } from './client.js';
 
 /**
- * Who may act through a desktop mirror of a phone's screen (the gateway's `/screen`): `allow` treats its presses like
+ * What a desktop mirror of a phone's screen (the gateway's `/screen`) may do through its input: `allow` treats it like
  * the phone's; `stop-only` (the default) lets it turn Stop on and nothing else, because someone at a desk would
- * otherwise drive a robot with a phone nobody may be holding; `deny` ignores it. Unless it is `allow`, a phone's
- * values are only seeded from configs (the gateway republishes them after a mirror's changes too), and then follow
- * the phone's own inputs.
+ * otherwise move a robot with a phone nobody may be holding; `deny` ignores it. The policy governs motion, not
+ * settings: the gateway applies a mirror's changes to the phone and the phone's screen shows them, so a phone's
+ * toggles, selects and sliders follow its config whoever set them. Stop off is the exception: unless it is `allow`, a
+ * config never turns Stop off once it is on.
  */
 export type MirrorPolicy = 'allow' | 'stop-only' | 'deny';
 export type CalibrationStatus = 'uncalibrated' | 'capturing' | 'captured';
@@ -168,19 +169,22 @@ type Control = { kind: Kind; options?: string[]; min?: number; max?: number; ste
  * - A repeat (`renew`) only extends a hold that is already down; it never starts one.
  * - Press edges are counted, for holds and plain buttons alike.
  * - A drag the gateway ended stays ended (`dropped`) until the operator lets go, whatever samples still arrive: a
- *   stick rests, a slider keeps its value.
- * - Slider and stick values come from the live inputs (the config only follows a drag's start and end).
- * - Stop acts from the press itself, before the config follows.
+ *   stick rests, a slider's value follows the config.
+ * - While a drag is live its samples set its value (the config only follows a drag's start and end).
+ * - Settings follow the phone's screen: a toggle, select or slider takes its value from the phone's config whoever set
+ *   it (a desk mirror, a new screen's defaults, anything while the tracker was away), so the robot never acts on a
+ *   value the phone doesn't show. A stick does too, except one the config has dragged by someone the tracker doesn't
+ *   hear (a mirror): it stays at rest. The phone's own inputs set values sooner.
+ * - Stop acts from the press itself, before the config follows. A config may turn it on, but (unless the mirror
+ *   policy is `allow`) never off once it is on, not even the first config after `lostGateway()`: only the phone itself
+ *   turns it off, or `clearStaleStops()` while it is offline.
  * - A lost gateway (`lostGateway()`), or a phone dropping, lets go of everything.
  * - A restarted gateway names phones afresh; a phone left with Stop on is kept, offline, as `<id>@<old gateway
  *   session>` until `clearStaleStops()`. A phone that leaves the roster (an app too old to say hello) is forgotten
  *   the same way, kept as `<id>@<gateway session>` if its Stop is on.
- * - The mirror policy decides what a desktop mirror's inputs may do. Unless it is `allow`, the configs the gateway
- *   republishes after a mirror's changes can't carry them either: a phone's toggles, selects, sliders and sticks are
- *   only seeded from a config (the first time the tracker sees the phone, after `lostGateway()` or a gateway restart,
- *   for controls new to the layout, and for values that no longer suit their control), and then follow the phone's
- *   own inputs and the gateway's ends of drags the tracker saw live. A config may turn Stop on, but not off once the
- *   phone is known: only the phone itself turns it off.
+ * - The mirror policy governs a desktop mirror's motion. Unless it is `allow`, a mirror's input never presses, renews
+ *   or releases a hold, never starts, moves or ends a drag, never counts a press and never turns Stop off; under
+ *   `stop-only` its Stop on counts, under `deny` nothing of it does.
  * - The gateway's own inputs only end holds and drags.
  * - `clearStaleStops()` (the desktop clearing Stop) holds for a phone while it stays offline.
  * - Presses and values of actions no control declares are counted and kept too.
@@ -196,13 +200,6 @@ export class PhoneTracker {
   private offset: () => number | undefined;
   private phones = new Map<string, Phone>();
   private readonly layout = new Map<string, Control>();
-  /** Phones whose config has been seen since the gateway was (re)joined: a config can't turn their Stop off. */
-  private readonly known = new Set<string>();
-  /**
-   * Per phone, the actions whose values came from a config or the phone's own inputs since the gateway was (re)joined.
-   * Unless mirrors may act, a config doesn't change them again (the gateway republishes a mirror's changes).
-   */
-  private readonly seeded = new Map<string, Set<string>>();
   /** Offline phones whose Stop the desktop cleared: a config can't turn it back on until they reconnect. */
   private readonly cleared = new Set<string>();
 
@@ -228,8 +225,11 @@ export class PhoneTracker {
   /** Whether any phone, connected or not (or kept from before a restart), has Stop on. */
   anyStop(): boolean { return [...this.phones.values()].some(phone => phone.stop); }
 
-  /** The gateway went away: nobody is connected or holding anything. */
-  lostGateway(): void { this.known.clear(); this.seeded.clear(); for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
+  /**
+   * The gateway went away: nobody is connected or holding anything. Stop stays on, and the configs that follow a
+   * reconnect can't turn it off (the tracker can't tell whether the phone or a mirror did meanwhile).
+   */
+  lostGateway(): void { for (const phone of this.phones.values()) { phone.connected = false; letGo(phone); } }
   /**
    * Forgets the phones kept for their Stop (from before a gateway restart, or gone from the roster) and turns Stop off
    * on offline phones that have it on, until they reconnect: what a desktop "clear Stop" does.
@@ -258,33 +258,32 @@ export class PhoneTracker {
       if (m.phones.every(info => isObject(info) && typeof info.id === 'string' && info.id)) this.forgetAbsent(new Set([...m.phones.map(info => (info as Json).id as string), ...(isObject(m.phone) && typeof m.phone.id === 'string' ? [m.phone.id] : [])]));
     }
     const phone = this.info(m.phone); if (!phone) return;
-    // Unless mirrors may act, a config only seeds a value: the gateway republishes the config after a mirror's changes
-    // too. A value that no longer suits its control (the layout changed) is seeded again.
-    const seeds = (action: string, control: Control) => this.mirror === 'allow' || !this.seeded.get(phone.id)?.has(action) || !valid(control, phone.values[action]);
+    // What the phone's screen shows. Settings follow it, whoever set them (the gateway applies a mirror's changes too);
+    // motion and Stop off don't.
     if (Array.isArray(m.controls)) for (const control of m.controls) {
       if (!isObject(control) || typeof control.action !== 'string' || !control.action) continue;
       const action = control.action; const known = this.layout.get(action); if (!known) continue;
       if (known.kind === 'hold') {
         const hold = phone.holds[action] ??= { down: false, at: -Infinity, presses: 0 };
-        // The gateway's view wins: it ends holds whose renewals stopped, and a repeat never restarts them.
+        // The gateway's view ends holds whose renewals stopped; its held: true never starts one (a mirror's hold isn't held here).
         if (control.held === false) hold.down = false;
       } else if (known.kind === 'button') phone.pressCounts[action] ??= 0;
       else if (known.kind === 'slider' || known.kind === 'joystick') {
         const drag = phone.drags[action] ??= { kind: known.kind, live: false, dropped: false, at: -Infinity };
         if (control.live === false && drag.live) { drag.live = false; if (known.kind === 'joystick') setValue(phone, action, rest()); }
-        // During a drag the samples are newer than any config.
-        if (!drag.live && valid(known, control.value) && seeds(action, known)) { setValue(phone, action, control.value as ControlValue); this.seed(phone, action); }
+        // During a drag here the samples are newer than any config. A stick someone else is dragging (a mirror, or a
+        // drag this tracker hasn't heard yet) is motion, not a setting: it stays where it is.
+        if (valid(known, control.value) && !drag.live && !(known.kind === 'joystick' && control.live === true)) setValue(phone, action, control.value as ControlValue);
       } else if (valid(known, control.value)) {
         if (action === this.stopAction) {
-          // A cleared offline phone stays cleared; a mirror's Stop off, republished by the gateway, doesn't count.
+          // A cleared offline phone stays cleared. Once Stop is on only the phone itself turns it off: the gateway
+          // applies a mirror's Stop off too, and after a reconnect the tracker can't tell whose it was.
           if (control.value === true && this.cleared.has(phone.id) && !phone.connected) continue;
-          if (control.value === false && phone.stop && this.mirror !== 'allow' && this.known.has(phone.id)) continue;
-        } else if (!seeds(action, known)) continue;
-        else this.seed(phone, action);
+          if (control.value === false && phone.stop && this.mirror !== 'allow') continue;
+        }
         phone.values[action] = clone(control.value as ControlValue);
       }
     }
-    this.known.add(phone.id);
     const calibration = m.calibration;
     if (isObject(calibration)) {
       if (typeof calibration.status === 'string' && CALIBRATION.includes(calibration.status)) phone.calibration = calibration.status as CalibrationStatus;
@@ -292,9 +291,8 @@ export class PhoneTracker {
     }
   }
 
-  /** The layout: what each action is, from the controls every config carries. Controls new to it are seeded again. */
+  /** The layout: what each action is, from the controls every config carries. */
   private learn(controls: unknown[]): void {
-    const before = new Map(this.layout);
     this.layout.clear();
     for (const control of controls) {
       if (!isObject(control) || typeof control.action !== 'string' || !control.action || this.layout.has(control.action)) continue;
@@ -305,16 +303,6 @@ export class PhoneTracker {
         ...(kind === 'select' ? { options: (Array.isArray(control.options) ? control.options : []).filter(isObject).map(option => option.value).filter((value): value is string => typeof value === 'string') } : {}),
         ...(kind === 'slider' && finite(control.min) && finite(control.max) && finite(control.step) && control.step > 0 ? { min: control.min, max: control.max, step: control.step } : {}) });
     }
-    for (const [action, control] of this.layout) {
-      if (before.get(action)?.kind === control.kind) continue;
-      for (const actions of this.seeded.values()) actions.delete(action);
-    }
-  }
-
-  /** The tracker holds a value for this action from a config or from the phone itself. */
-  private seed(phone: Phone, action: string): void {
-    let actions = this.seeded.get(phone.id); if (!actions) this.seeded.set(phone.id, actions = new Set());
-    actions.add(action);
   }
 
   private info(info: unknown): Phone | undefined {
@@ -336,7 +324,7 @@ export class PhoneTracker {
   private forgetAbsent(present: Set<string>): void {
     for (const [id, phone] of [...this.phones]) {
       if (phone.stale || present.has(id)) continue;
-      this.phones.delete(id); this.known.delete(id); this.seeded.delete(id); this.cleared.delete(id);
+      this.phones.delete(id); this.cleared.delete(id);
       if (!phone.stop) continue;
       phone.connected = false; letGo(phone); phone.id = `${id}@${this.gateway ?? 'gateway'}`; this.phones.set(phone.id, phone);
     }
@@ -344,7 +332,7 @@ export class PhoneTracker {
 
   /** A restarted gateway names phones afresh. A phone that left Stop on stays, offline, under its old id and gateway. */
   private restarted(old: string): void {
-    this.known.clear(); this.seeded.clear(); this.cleared.clear();
+    this.cleared.clear();
     const kept = new Map<string, Phone>();
     for (const phone of this.phones.values()) {
       if (!phone.stop) continue;
@@ -381,7 +369,7 @@ export class PhoneTracker {
     const source = m.source ?? 'phone'; if (source !== 'phone' && source !== 'mirror' && source !== 'gateway') return;
     const value = m.value; const renew = m.renew === true; const live = m.live === true; const now = this.clock();
     if (source === 'mirror' && this.mirror !== 'allow') {
-      // From a desk, only Stop: turning it on, never off.
+      // From a desk, only Stop: turning it on, never off. Its settings reach the phone's config, and come from there.
       if (this.mirror === 'stop-only' && action === this.stopAction && value === true) phone.values[action] = true;
       return;
     }
@@ -405,27 +393,25 @@ export class PhoneTracker {
         return;
       }
       case 'button': if (!renew) phone.pressCounts[action] = (phone.pressCounts[action] ?? 0) + 1; return;
-      case 'toggle': case 'select': if (valid(control, value)) { phone.values[action] = value as ControlValue; this.seed(phone, action); } return;
+      case 'toggle': case 'select': if (valid(control, value)) phone.values[action] = value as ControlValue; return;
       case 'slider': case 'joystick': {
         const drag = phone.drags[action] ??= { kind: control.kind, live: false, dropped: false, at: -Infinity };
         if (source === 'gateway') {
-          // The gateway stopped hearing the drag. It stays ended until the operator lets go, whatever samples still arrive.
-          // A stick rests. A slider keeps the gateway's last value, unless mirrors can't act and this tracker never saw
-          // the drag live: then it was a mirror's.
-          const seen = drag.live || this.mirror === 'allow';
+          // The gateway stopped hearing the drag. It stays ended until the operator lets go, whatever samples still arrive
+          // (a drag the tracker never had live, a mirror's, isn't dropped). A stick rests; a slider's value follows the
+          // config that comes next.
           drag.dropped = drag.live || drag.dropped; drag.live = false;
-          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (seen && valid(control, value)) setValue(phone, action, value as ControlValue);
+          if (control.kind === 'joystick') setValue(phone, action, rest());
           return;
         }
         if (!live) {
           // Let go: the final value (a stick springs back to rest), and samples count again from the next touch.
           drag.live = false; drag.dropped = false;
-          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (valid(control, value)) setValue(phone, action, value as ControlValue); else return;
-          this.seed(phone, action);
+          if (control.kind === 'joystick') setValue(phone, action, rest()); else if (valid(control, value)) setValue(phone, action, value as ControlValue);
           return;
         }
         if (drag.dropped || !valid(control, value) || (renew && !drag.live)) return;
-        setValue(phone, action, value as ControlValue); drag.live = true; drag.at = now; this.seed(phone, action);
+        setValue(phone, action, value as ControlValue); drag.live = true; drag.at = now;
       }
     }
   }

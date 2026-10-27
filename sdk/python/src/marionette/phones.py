@@ -12,16 +12,19 @@ The rules, each learned the hard way on a robot:
   can't press the button again.
 - Press edges are counted, for hold buttons and plain buttons alike, so a robot can consume each press once.
 - A drag the gateway ended (its samples stopped) stays ended, ``dropped``, until the finger lifts, however many
-  samples still arrive. A stick comes back to rest; a slider keeps its value.
-- Slider and stick values come from the live inputs: the gateway's config only follows a drag's start and end.
-- Stop acts from the press itself, not from the config that follows it.
+  samples still arrive. A stick comes back to rest; a slider's value follows the config.
+- While a drag is live, its samples set its value: the gateway's config only follows a drag's start and end.
+- Settings follow the phone's screen: a toggle, select, slider or stick takes its value from the phone's config
+  whoever set it, so the robot never acts on a value the phone doesn't show (a new screen's defaults, values after a
+  reconnect, a desk mirror's change). Live inputs from the phone update them sooner.
+- Stop acts from the press itself, not from the config that follows it. A config turns it on, but never off once it
+  is on (unless mirrors may act): only the phone itself, or :meth:`PhoneTracker.clear_stale_stops`, turns it off.
 - A lost gateway means everyone lets go, and a disconnected phone holds nothing.
 - A restarted gateway names phones afresh, but a phone that was left with Stop on survives, offline, as
   ``<id>@<old gateway session>`` until :meth:`PhoneTracker.clear_stale_stops`.
 - A desktop mirror of a phone's screen (the gateway's ``/screen``) acts as that phone. By default it may only turn
-  Stop on (``mirror="stop-only"``): someone at a desk shouldn't drive a robot with a phone nobody may be holding.
-  The gateway republishes the phone's config after a mirror's changes too, so unless mirrors may act, a config only
-  seeds a phone's values; after that they follow the phone's own inputs.
+  Stop on (``mirror="stop-only"``): someone at a desk shouldn't move a robot with a phone nobody may be holding. The
+  policy governs motion, not settings: a mirror never presses or holds, drags or counts a press, nor turns Stop off.
 - A new phone starts from the screen's defaults (the gateway's own config), never from another phone's values.
 """
 
@@ -115,8 +118,8 @@ class Drag:
     updates: int = 0
     """New values so far: samples and final values, not the app's repeats of a resting finger. A robot that acts
     on each value once (a slider used as a command, such as a gripper's closure) compares it with the count it last
-    acted on; the same value sent again counts too. Only values the tracker takes from inputs count: a config's
-    don't, nor (unless ``mirror="allow"``) anything a desk mirror did."""
+    acted on; the same value sent again counts too. Only values from the phone's own inputs count (and, with
+    ``mirror="allow"``, a desk mirror's): not a config's, nor the gateway's end of a drag."""
 
     def fresh(self, now: float, timeout: float = 0.25) -> bool:
         """Live, not dropped, and its samples (or repeats) still arriving."""
@@ -150,6 +153,8 @@ class Phone:
     stale: bool = False
     """Kept from an earlier gateway (or a phone gone from the roster) because its Stop was on."""
     _stop_known: bool = field(default=False, repr=False)
+    """Stop came from this phone's own config or an input (not only the screen's default). Kept through a lost
+    gateway: once Stop is known on, a config can't turn it off."""
     _stop_cleared: bool = field(default=False, repr=False)
 
     def copy(self) -> Phone:
@@ -298,17 +303,19 @@ class PhoneTracker:
     """Phones by id, folded from gateway messages. Thread-safe: feed it from the connection, read it anywhere.
 
     ``clock`` is the time base for ``received`` and every ``now`` argument (monotonic seconds by default).
-    ``mirror`` is the policy for a desktop mirror's presses: ``allow`` (like the phone's own), ``stop-only`` (it may
-    only turn Stop on) or ``deny``. ``stop_action`` names Stop. ``offset`` gives the gateway's clock minus this
-    computer's in milliseconds (a :class:`GatewayClient` measures it; :meth:`attach` wires it up), so pose ages
+    ``mirror`` is the policy for a desktop mirror's input: ``allow`` (like the phone's own), ``stop-only`` (it may
+    only turn Stop on) or ``deny`` (ignored). ``stop_action`` names Stop. ``offset`` gives the gateway's clock minus
+    this computer's in milliseconds (a :class:`GatewayClient` measures it; :meth:`attach` wires it up), so pose ages
     include the hop from the gateway.
 
-    Unless the policy is ``allow``, the configs the gateway republishes after a mirror's changes can't carry them
-    either. A phone's toggles, selects, sliders and sticks are only seeded from its config: when the tracker first
-    sees the phone, after :meth:`lost_gateway` or a gateway restart, after the phone left the roster, for controls
-    new to the layout (or of another kind), and for values that no longer suit their control. After that they follow the phone's own inputs (which
-    seed them too) and the gateway's ends of drags the tracker saw live. The gateway's own inputs only end holds and
-    drags.
+    Settings follow the phone's screen. A toggle's, select's or slider's value is whatever the phone's config says
+    (the gateway applies a mirror's changes too, and sends each phone a new screen's defaults), except while the
+    tracker has the slider's drag live, when its samples are newer. A stick's is too, unless the config has it
+    dragged by someone the tracker doesn't hear (a mirror): it stays at rest. The mirror policy governs motion: unless
+    it is ``allow`` a mirror's input never presses, renews or releases a hold, never starts, moves or ends a drag,
+    never counts a press, and never turns Stop off (under ``stop-only`` its Stop on counts). Once Stop is known on, a
+    config can't turn it off either (unless ``allow``), not even the first one after :meth:`lost_gateway`. The
+    gateway's own inputs only end holds and drags.
     """
 
     def __init__(
@@ -333,9 +340,6 @@ class PhoneTracker:
         """The first control with each action, without what a phone's config adds (:data:`_PER_PHONE`)."""
         self._defaults: dict[str, Any] = {}
         """Each control's value in the gateway's own config (without ``phone``): what a new phone starts from."""
-        self._seeded: dict[str, set[str]] = {}
-        """Per phone, the actions whose values came from its config or its own inputs since the gateway was (re)joined.
-        Unless mirrors may act, a config doesn't change them again (the gateway republishes a mirror's changes)."""
         self._gateway: str | None = None
 
     # -- wiring ----------------------------------------------------------------------------------------------------
@@ -396,13 +400,12 @@ class PhoneTracker:
     # -- changes from the robot ------------------------------------------------------------------------------------
 
     def lost_gateway(self) -> None:
-        """The gateway went away: nobody is connected, holding or dragging anything. Stops stay on. The configs that
-        follow a reconnect seed every value again (whatever happened meanwhile, the tracker didn't see it)."""
+        """The gateway went away: nobody is connected, holding or dragging anything. Stops stay on, and the configs
+        that follow a reconnect can't turn them off: the tracker can't tell whether the phone or a mirror did it
+        meanwhile. Every other value follows those configs."""
         with self._lock:
-            self._seeded.clear()
             for phone in self._phones.values():
                 phone.connected = False
-                phone._stop_known = False
                 _let_go(phone, self._layout)
 
     def clear_stale_stops(self) -> list[str]:
@@ -431,7 +434,6 @@ class PhoneTracker:
         """Drop one phone record (it comes back with the next config that names it)."""
         with self._lock:
             self._phones.pop(phone_id, None)
-            self._seeded.pop(phone_id, None)
 
     # -- messages --------------------------------------------------------------------------------------------------
 
@@ -480,8 +482,7 @@ class PhoneTracker:
 
     def _learn_layout(self, controls: Sequence[Any], defaults: bool) -> None:
         """The layout from a config's controls. Only the gateway's own config (``defaults``) gives the screen's
-        defaults; a phone's config carries that phone's values. An action new to the layout, or of another kind, is
-        seeded again from each phone's config."""
+        defaults; a phone's config carries that phone's values."""
         first: dict[str, dict[str, Any]] = {}
         for control in controls:
             if isinstance(control, dict) and isinstance(control.get("action"), str) and control["action"] and isinstance(control.get("type"), str):
@@ -490,12 +491,7 @@ class PhoneTracker:
         layout = {action: {key: value for key, value in control.items() if key not in _PER_PHONE} for action, control in first.items()}
         changed = layout != self._layout
         if changed:
-            before, self._layout = self._layout, copy.deepcopy(layout)
-            for action, control in layout.items():
-                previous = before.get(action)
-                if previous is None or _control_kind(previous) != _control_kind(control):
-                    for actions in self._seeded.values():
-                        actions.discard(action)
+            self._layout = copy.deepcopy(layout)
         if defaults:
             values = {action: c["value"] for action, c in first.items() if "value" in c and valid_value(c, c["value"])}
             if values != self._defaults:
@@ -507,7 +503,6 @@ class PhoneTracker:
 
     def _restart(self, old: str) -> None:
         """A new gateway session: its phone ids mean other phones. Keep only phones with Stop on, renamed."""
-        self._seeded.clear()
         kept: dict[str, Phone] = {}
         for phone_id, phone in self._phones.items():
             if phone.stale:
@@ -571,7 +566,6 @@ class PhoneTracker:
                 if phone.stale or phone_id in listed:
                     continue
                 del self._phones[phone_id]
-                self._seeded.pop(phone_id, None)
                 if phone.stop:
                     self._retire(phone, self._gateway)
                     self._phones[phone.id] = phone
@@ -589,27 +583,19 @@ class PhoneTracker:
             if isinstance(epoch, int) and not isinstance(epoch, bool):
                 phone.epoch = epoch
 
-    def _seeds(self, phone: Phone, action: str, control: dict[str, Any]) -> bool:
-        """Whether a config may set this value: always if mirrors may act, else only until the phone's config or its
-        own input has set it, or when the value no longer suits its control (the layout changed)."""
-        return self.mirror == "allow" or action not in self._seeded.get(phone.id, ()) or not valid_value(control, phone.values.get(action))
-
-    def _seed(self, phone: Phone, action: str) -> None:
-        self._seeded.setdefault(phone.id, set()).add(action)
-
     def _config_control(self, phone: Phone, control: dict[str, Any]) -> None:
-        """One control in a phone's own config: the gateway's view of its values, holds and drags. Unless mirrors may
-        act, a value only seeds (see :class:`PhoneTracker`): the gateway republishes the config after a mirror's
-        changes too."""
+        """One control in a phone's own config: what the phone's screen shows. Settings follow it, whoever set them
+        (the gateway applies a mirror's changes too); motion and Stop off don't (see :class:`PhoneTracker`)."""
         action: str = control["action"]
         known = self._layout.get(action)
         if known is None:
             return
         kind = known.get("type")
         if kind == "button":
-            # The gateway's view only ever ends a hold (its repeats stopped); a press starts one, never a config.
+            # The gateway's view only ever ends a hold (its repeats stopped); a press starts one, never a config, so a
+            # hold only a mirror pressed isn't held here. A held Stop stays on, like a Stop toggle.
             hold = phone.holds.get(action)
-            if hold is not None and control.get("held") is False:
+            if hold is not None and control.get("held") is False and not (action == self.stop_action and hold.down and self.mirror != "allow"):
                 hold.down = False
             return
         value = control.get("value")
@@ -621,24 +607,21 @@ class PhoneTracker:
                 drag.live = False
                 if kind == "joystick":
                     _set_value(phone, action, STICK_REST)
-            # While a drag is live its samples are newer than any config.
-            if not drag.live and usable and self._seeds(phone, action, known):
+            # While a drag is live here its samples are newer than any config. A stick someone else is dragging (a
+            # mirror's, or one this tracker hasn't heard yet) is motion, not a setting: it stays where it is.
+            if usable and not drag.live and not (kind == "joystick" and control.get("live") is True):
                 _set_value(phone, action, value)
-                self._seed(phone, action)
             return
         if not usable:
             return
         if action == self.stop_action:
             if value is True and phone._stop_cleared and not phone.connected:
                 return
-            # Past the first config, only a press turns Stop off (a mirror's can't, unless mirrors are allowed).
+            # Once Stop is known on, only the phone itself turns it off: the gateway applies a mirror's Stop off too,
+            # and after a reconnect the tracker can't tell whose it was.
             if self.mirror != "allow" and phone._stop_known and value is not True and phone.values.get(action) is True:
                 return
             phone._stop_known = True
-        elif not self._seeds(phone, action, known):
-            return
-        else:
-            self._seed(phone, action)
         phone.values[action] = copy.deepcopy(value)
 
     def _pose(self, message: dict[str, Any]) -> None:
@@ -700,7 +683,7 @@ class PhoneTracker:
         renew, live = message.get("renew") is True, message.get("live") is True
         now = self._clock()
         if source == "mirror" and self.mirror != "allow":
-            # From a desk, only Stop: turning it on, never off.
+            # From a desk, only Stop: turning it on, never off. Its settings reach the phone's config, and come from there.
             if self.mirror == "stop-only" and action == self.stop_action and value is True:
                 self._set_stop(phone, True, now)
             return
@@ -733,7 +716,6 @@ class PhoneTracker:
         if kind == "value":
             if valid_value(control, value):
                 phone.values[action] = copy.deepcopy(value)
-                self._seed(phone, action)
             return
         # A plain button, or an action no control declares: count presses (a repeat isn't one).
         if renew:
@@ -746,16 +728,13 @@ class PhoneTracker:
         drag = phone.drags.setdefault(action, Drag())
         stick = control.get("type") == "joystick"
         if ended:
-            # The gateway stopped hearing it: it stays ended until the finger lifts, whatever samples still come. A
-            # stick rests. A slider takes the gateway's last value only if this tracker saw the drag live (unless
-            # mirrors may act): a drag it never saw was a mirror's.
-            seen = drag.live or self.mirror == "allow"
+            # The gateway stopped hearing it: it stays ended until the finger lifts, whatever samples still come (a
+            # drag the tracker never had live, a mirror's, isn't dropped). A stick rests; a slider's value follows
+            # the config that comes next.
             drag.dropped = drag.live or drag.dropped
             drag.live = False
-            if stick or (seen and valid_value(control, value)):
-                _set_value(phone, action, STICK_REST if stick else value)
-                if seen:
-                    drag.updates += 1
+            if stick:
+                _set_value(phone, action, STICK_REST)
             return
         if not live:
             # Let go: the final value (a stick springs back to rest); samples count again from the next touch.
@@ -765,7 +744,6 @@ class PhoneTracker:
             if valid_value(control, final):
                 _set_value(phone, action, final)
                 drag.updates += 1
-                self._seed(phone, action)
             return
         if drag.dropped or (renew and not drag.live) or not valid_value(control, value):
             return
@@ -774,7 +752,6 @@ class PhoneTracker:
         if not renew:
             drag.updates += 1
         _set_value(phone, action, value)
-        self._seed(phone, action)
 
     def _set_stop(self, phone: Phone, on: bool, now: float) -> None:
         hold = phone.holds.get(self.stop_action)

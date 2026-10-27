@@ -5,8 +5,9 @@
 viewer) ask the gateway for a stream, and the publisher answers each request with its own aiortc peer connection:
 
 1. On every connect it publishes its streams (``rtc publish``), so the gateway marks them ``transport: webrtc``.
-2. A viewer's ``request`` gets a peer connection whose track serves the latest frame at ``fps``, H.264 preferred
-   (VP8 as the fallback), and a complete (non-trickle) ``offer``.
+2. A viewer's ``request`` gets a peer connection whose track serves the latest frame at ``fps`` while frames keep
+   coming (a camera that stops pushing for ``stale_after`` sends nothing until it resumes, so viewers see the
+   stall), H.264 preferred (VP8 as the fallback), and a complete (non-trickle) ``offer``.
 3. The viewer's ``answer`` completes it; ``close`` (or the gateway going away) closes it.
 
 The gateway only passes the signaling; the video goes from the robot to the viewer directly. There are no STUN
@@ -43,7 +44,12 @@ _TIME_BASE = fractions.Fraction(1, _CLOCK)
 
 
 class _LatestFrameTrack(MediaStreamTrack):
-    """A video track that serves the publisher's newest frame of one stream at a steady rate."""
+    """A video track that serves the publisher's newest frame of one stream at a steady rate, while it is fresh.
+
+    Once a stream stalls (no ``push`` for the publisher's ``stale_after``) the track sends nothing until the next
+    push: repeating the last frame would keep the picture looking live on the viewer, which only sees a stall when
+    frames stop decoding. Timestamps follow the clock, so they jump across the gap and RTP timing stays true.
+    """
 
     kind = "video"
 
@@ -52,24 +58,33 @@ class _LatestFrameTrack(MediaStreamTrack):
         self._publisher = publisher
         self._stream = stream
         self._start: float | None = None
-        self._count = 0
+        self._next = 0.0
+        """When the frame being sent is due (monotonic seconds); its pts is the time since ``_start``."""
 
     async def recv(self) -> VideoFrame:
         if self.readyState != "live":
             raise MediaStreamError
         fps = self._publisher.fps
+        now = time.monotonic()
         if self._start is None:
-            self._start = time.monotonic()
+            self._start = self._next = now
         else:
-            self._count += 1
-            wait = self._start + self._count / fps - time.monotonic()
-            if wait > 0:
-                await asyncio.sleep(wait)
-            elif wait < -0.5:
+            self._next += 1 / fps
+            if self._next > now:
+                await asyncio.sleep(self._next - now)
+            elif self._next < now - 0.5:
                 # Fell far behind (a busy loop): pick up from now rather than racing to catch up.
-                self._start = time.monotonic() - self._count / fps
-        frame = VideoFrame.from_ndarray(self._publisher._latest(self._stream), format="rgb24")
-        frame.pts = int(self._count * _CLOCK / fps)
+                self._next = now
+        image = self._publisher._fresh(self._stream, self._start)
+        while image is None:
+            # Stalled: wait for the next push (it comes from another thread, so look often), and resume from then.
+            await asyncio.sleep(min(1 / fps, 0.02))
+            if self.readyState != "live":
+                raise MediaStreamError
+            image = self._publisher._fresh(self._stream, self._start)
+            self._next = time.monotonic()
+        frame = VideoFrame.from_ndarray(image, format="rgb24")
+        frame.pts = int((self._next - self._start) * _CLOCK)
         frame.time_base = _TIME_BASE
         return frame
 
@@ -87,7 +102,9 @@ class VideoPublisher:
     :class:`~marionette.GatewayClient`). Each stream must be declared in the robot's screen (``cameraStreams``).
 
     ``fps`` is the rate each viewer's track runs at, whatever rate frames are pushed. ``codec`` is ``"h264"``
-    (preferred, VP8 as the fallback) or ``"vp8"``. Frames before the first push are black, ``size`` (width, height).
+    (preferred, VP8 as the fallback) or ``"vp8"``. A frame is repeated for ``stale_after`` seconds after its push;
+    after that a stalled camera sends nothing until its next frame, so the screens show it as stalled rather than a
+    frozen picture. Before a stream's first push a viewer gets black frames, ``size`` (width, height), for as long.
     """
 
     def __init__(
@@ -100,6 +117,7 @@ class VideoPublisher:
         size: tuple[int, int] = (640, 360),
         max_peers: int = 16,
         ice_servers: list[str] | None = None,
+        stale_after: float = 1.0,
     ) -> None:
         client: GatewayClient = getattr(link, "client", link)
         if client.role != "robot":
@@ -113,9 +131,13 @@ class VideoPublisher:
         if self.codec not in ("h264", "vp8"):
             raise ValueError("codec is 'h264' or 'vp8'")
         self.max_peers = max_peers
+        if not stale_after > 0:
+            raise ValueError("stale_after is a number of seconds above 0")
+        self.stale_after = float(stale_after)
         self._ice = [RTCIceServer(urls=url) for url in ice_servers or []]
         self._lock = threading.Lock()
-        self._frames: dict[str, tuple[np.ndarray, float]] = {}
+        self._frames: dict[str, tuple[np.ndarray, float, float]] = {}
+        """Per stream: the newest frame, its capture timestamp (wall ms) and when it was pushed (monotonic s)."""
         self._black = np.zeros((size[1] - size[1] % 2, size[0] - size[0] % 2, 3), dtype=np.uint8)
         self._peers: dict[tuple[str, str], _Peer] = {}
         self._pending: dict[str, float] = {}
@@ -139,12 +161,17 @@ class VideoPublisher:
         height, width = frame.shape[0] - frame.shape[0] % 2, frame.shape[1] - frame.shape[1] % 2
         frame = np.array(frame[:height, :width], dtype=np.uint8, order="C", copy=True)
         with self._lock:
-            self._frames[stream] = (frame, wall_ms() if timestamp is None else timestamp)
+            self._frames[stream] = (frame, wall_ms() if timestamp is None else timestamp, time.monotonic())
 
-    def _latest(self, stream: str) -> np.ndarray:
+    def _fresh(self, stream: str, since: float) -> np.ndarray | None:
+        """What a viewer's track sends now: the newest frame while it is fresh (pushed within ``stale_after``), black
+        before the first push for as long after ``since`` (the track's start), and None once the stream has stalled."""
+        now = time.monotonic()
         with self._lock:
             entry = self._frames.get(stream)
-        return self._black if entry is None else entry[0]
+        if entry is None:
+            return self._black if now - since <= self.stale_after else None
+        return entry[0] if now - entry[2] <= self.stale_after else None
 
     @property
     def peers(self) -> int:

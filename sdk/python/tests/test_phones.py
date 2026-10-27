@@ -183,51 +183,63 @@ def test_drag_updates_count_only_values_the_tracker_takes(clock: Clock) -> None:
         tracker.apply(msg.input("phone-1", "base.drive", {"x": 1, "y": 0}, live=True, source="mirror"))
         tracker.apply(msg.let_go("phone-1", "gripper.set", 0.9))
         tracker.apply(msg.let_go("phone-1", "base.drive", {"x": 0, "y": 0}))
-        tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, values={"gripper.set": 0.9}))
         assert updates(tracker) == (0, 0) and updates(tracker, "base.drive") == (0, {"x": 0, "y": 0}), policy
-        # The phone's own drag that the gateway ends counts once, and its value stays until the finger lifts.
+        # The slider then shows what the phone shows, but that's no update: nothing for the robot to act on.
+        tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, values={"gripper.set": 0.9}))
+        assert updates(tracker) == (0, 0.9) and updates(tracker, "base.drive") == (0, {"x": 0, "y": 0}), policy
+        # The phone's own drag that the gateway ends counts its sample once; the gateway's end isn't a new value.
         tracker.apply(msg.input("phone-1", "gripper.set", 0.4, live=True))
         tracker.apply(msg.let_go("phone-1", "gripper.set", 0.4))
         tracker.apply(msg.let_go("phone-1", "gripper.set", 0.8))  # again, for a drag it no longer has live: a mirror's
-        assert updates(tracker) == (2, 0.4), policy
+        assert updates(tracker) == (1, 0.4), policy
+        assert tracker.get("phone-1").drag("gripper.set").dropped, policy  # type: ignore[union-attr]
         tracker.apply(msg.input("phone-1", "gripper.set", 0.5))
-        assert updates(tracker) == (3, 0.5), policy
+        assert updates(tracker) == (2, 0.5), policy
 
     allow = PhoneTracker(clock, mirror="allow")
     allow.apply(msg.config(["phone-1"], "phone-1", CONTROLS))
     allow.apply(msg.input("phone-1", "gripper.set", 0.9, live=True, source="mirror"))
     allow.apply(msg.let_go("phone-1", "gripper.set", 0.9))
-    assert updates(allow) == (2, 0.9)  # allow: the mirror's sample, then the gateway's end
+    assert updates(allow) == (1, 0.9)  # allow: the mirror's sample counts; the gateway's end doesn't
     allow.apply(msg.config(["phone-1"], "phone-1", CONTROLS, values={"gripper.set": 0.3}))
-    assert updates(allow) == (2, 0.3)  # a config's value is taken, but isn't an update
+    assert updates(allow) == (1, 0.3)  # a config's value is taken, but isn't an update
 
 
-def test_a_mirror_cant_change_values_through_the_config_that_follows(tracker: PhoneTracker) -> None:
-    # The gateway applies a mirror's changes and republishes the phone's config; under stop-only that changes nothing.
+def test_settings_follow_the_config_whoever_set_them(tracker: PhoneTracker) -> None:
+    # The gateway applies a mirror's changes and republishes the phone's config. The mirror's input sets nothing...
     tracker.apply(msg.input("phone-1", "arm.select", "left", source="mirror"))
     tracker.apply(msg.input("phone-1", "gripper.set", 1.0, source="mirror"))
     tracker.apply(msg.input("phone-1", "lift.toggle", False, source="mirror"))
+    phone = tracker.get("phone-1")
+    assert phone.value("arm.select") == "right" and phone.number("gripper.set", -1) == 0 and phone.flag("lift.toggle") is True  # type: ignore[union-attr]
+    # ...but the config that follows does: the robot uses what the phone's screen shows.
     mirrored = {"arm.select": "left", "gripper.set": 1.0, "lift.toggle": False, "teleop.frame": "head"}
     tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, "captured", values=mirrored))
     phone = tracker.get("phone-1")
-    assert phone.value("arm.select") == "right" and phone.number("gripper.set", -1) == 0 and phone.flag("lift.toggle") is True  # type: ignore[union-attr]
-    assert phone.value("teleop.frame") == "robot"  # type: ignore[union-attr]
-    # The phone's own inputs count, and stay counted through the configs that follow.
-    send(tracker, "arm.select", "left")
-    send(tracker, "teleop.frame", "head")
+    assert phone.value("arm.select") == "left" and phone.number("gripper.set", -1) == 1.0 and phone.flag("lift.toggle") is False  # type: ignore[union-attr]
+    assert phone.value("teleop.frame") == "head" and phone.drag("gripper.set").updates == 0  # type: ignore[union-attr]
+    # The phone's own inputs count at once, and the configs after them say the same.
+    send(tracker, "arm.select", "right")
+    send(tracker, "teleop.frame", "left")
+    assert tracker.get("phone-1").value("arm.select") == "right"  # type: ignore[union-attr]
     tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, "captured", values={**mirrored, "arm.select": "right", "teleop.frame": "left"}))
     phone = tracker.get("phone-1")
-    assert phone.value("arm.select") == "left" and phone.value("teleop.frame") == "head"  # type: ignore[union-attr]
-    # A config still ends a drag the tracker has live: a stick comes back to rest, a slider keeps its last sample.
+    assert phone.value("arm.select") == "right" and phone.value("teleop.frame") == "left"  # type: ignore[union-attr]
+    # A mirror's drag in the config isn't motion: a slider shows its value, a stick stays at rest, neither is live.
+    tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, "captured", values={"base.drive": {"x": 0.9, "y": 0}, "base.speedLimit": 80}, live=["base.drive", "base.speedLimit"]))
+    phone = tracker.get("phone-1")
+    assert phone.value("base.speedLimit") == 80 and not phone.drag("base.speedLimit").live  # type: ignore[union-attr]
+    assert phone.value("base.drive") == {"x": 0, "y": 0} and phone.stick("base.drive") == (0.0, 0.0) and not phone.drag("base.drive").live  # type: ignore[union-attr]
+    # A config still ends a drag the tracker has live: a stick comes back to rest, a slider takes the config's value.
     send(tracker, "base.drive", {"x": 0.5, "y": 0}, live=True)
     send(tracker, "gripper.set", 0.3, live=True)
     tracker.apply(msg.config(["phone-1"], "phone-1", CONTROLS, "captured", values={"base.drive": {"x": 0.9, "y": 0}, "gripper.set": 0.9}))
     phone = tracker.get("phone-1")
-    assert not phone.drag("base.drive").live and phone.stick("base.drive") == (0.0, 0.0) and phone.value("base.drive") == {"x": 0, "y": 0}  # type: ignore[union-attr]
-    assert not phone.drag("gripper.set").live and phone.value("gripper.set") == 0.3 and phone.drag("gripper.set").value == 0.3  # type: ignore[union-attr]
+    assert not phone.drag("base.drive").live and phone.stick("base.drive") == (0.0, 0.0) and phone.value("base.drive") == {"x": 0.9, "y": 0}  # type: ignore[union-attr]
+    assert not phone.drag("gripper.set").live and phone.value("gripper.set") == 0.9 and phone.drag("gripper.set").value == 0.9  # type: ignore[union-attr]
 
 
-def test_values_are_seeded_again_when_the_tracker_cant_know_them(clock: Clock) -> None:
+def test_values_follow_every_config_but_a_known_stop_stays_on(clock: Clock) -> None:
     tracker = PhoneTracker(clock)
     tracker.apply(msg.config(["phone-1", "phone-2"], controls=CONTROLS))
     tracker.apply(msg.config(["phone-1", "phone-2"], "phone-1", CONTROLS, values={"arm.select": "right"}))
@@ -240,27 +252,19 @@ def test_values_are_seeded_again_when_the_tracker_cant_know_them(clock: Clock) -
         tracker.apply(msg.config(list(phones), phone, CONTROLS, values={"arm.select": value}, **fields))
 
     republish("left")
-    assert arm() == "right"
+    assert arm() == "left"
+    send(tracker, "safety.estop", True)
     tracker.lost_gateway()
-    republish("left")
-    assert arm() == "left"  # after a lost gateway
-    republish("right", session="marionette-new")
-    assert arm() == "right"  # after a restart
-    republish("left", phone="phone-2")
-    republish("left", phones=("phone-1",))  # phone-2 leaves the roster for good
-    republish("right", phone="phone-2")
-    assert arm("phone-2") == "right"  # back, as a new phone
-    tracker.forget("phone-1")
     republish("right")
-    assert arm() == "right"  # a forgotten phone starts afresh
-    # A control that leaves the layout and comes back (or comes back as another kind) is seeded again; one that is
-    # only restyled isn't.
+    assert arm() == "right" and tracker.get("phone-1").stop  # type: ignore[union-attr]  # after a lost gateway: Stop stays on
+    send(tracker, "safety.estop", False)
+    assert not tracker.any_stop()
+    send(tracker, "safety.estop", True)
+    republish("left", session="marionette-new")
+    assert arm() == "left" and not tracker.get("phone-1").stop  # type: ignore[union-attr]  # after a restart, another phone
+    assert tracker.get(f"phone-1@{msg.SESSION}").stop  # type: ignore[union-attr]
+    # A new screen: the defaults the gateway sends, a control of another kind.
     tracker.apply(msg.config(["phone-1", "phone-2"], "phone-1", [c for c in CONTROLS if c["action"] != "arm.select"]))
-    republish("left")
-    assert arm() == "left"
-    relabelled = [{**c, "label": "Which arm"} if c["action"] == "arm.select" else c for c in CONTROLS]
-    tracker.apply(msg.config(["phone-1", "phone-2"], "phone-1", relabelled, values={"arm.select": "right"}))
-    assert arm() == "left"
     toggled = [msg.toggle("arm", "arm.select", True) if c["action"] == "arm.select" else c for c in CONTROLS]
     tracker.apply(msg.config(["phone-1", "phone-2"], "phone-1", toggled))
     assert arm() is True
@@ -328,6 +332,22 @@ def test_mirror_policies() -> None:
     assert not deny.any_stop()
     with pytest.raises(ValueError):
         PhoneTracker(mirror="sometimes")  # type: ignore[arg-type]
+
+
+def test_a_held_stop_stays_on_through_a_config_like_a_stop_toggle(clock: Clock) -> None:
+    controls = [msg.button("halt", "safety.estop", hold=True), *CONTROLS[1:]]
+    trackers = {policy: PhoneTracker(clock, mirror=policy) for policy in ("allow", "stop-only")}  # type: ignore[arg-type]
+    for policy, tracker in trackers.items():
+        tracker.apply(msg.config(["phone-1"], "phone-1", controls))
+        tracker.apply(msg.input("phone-1", "safety.estop", True, source="mirror"))
+        assert tracker.any_stop(), policy
+        # The mirror lets go: its release is ignored (unless allowed), and so is the config the gateway sends after it.
+        tracker.apply(msg.input("phone-1", "safety.estop", False, source="mirror"))
+        tracker.apply(msg.config(["phone-1"], "phone-1", controls))
+        assert tracker.any_stop() is (policy != "allow"), policy
+    send(trackers["stop-only"], "safety.estop", True)
+    send(trackers["stop-only"], "safety.estop", False)
+    assert not trackers["stop-only"].any_stop()  # the phone's own press and release
 
 
 def test_a_new_phone_starts_from_the_screens_defaults_not_another_phones_values(clock: Clock) -> None:
