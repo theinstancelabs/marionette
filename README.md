@@ -120,9 +120,11 @@ The gateway keeps the latest sample as the phone's value. It republishes the pho
 
 ```sh
 pip install websockets                                   # rclpy comes with ROS 2
-python3 consumers/ros2/marionette_ros2_bridge.py --gateway 192.168.1.20
+python3 consumers/ros2/marionette_ros2_bridge.py --gateway 192.168.1.20 --token K7Q2-M9XD   # or --gateway "<pairing link>"
 python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost --dry-run   # no ROS needed; prints what it would publish
 ```
+
+**Python robots.** `sdk/python` is the Python SDK (`marionette-sdk`): the connection, a phone tracker, the teleop math, the robot's screen, state and WebRTC video, the gateway bundled, and test phones. See `sdk/python/README.md`.
 
 For each phone it publishes:
 
@@ -285,6 +287,7 @@ npm run typecheck
 npm --workspace @marionette/viewer run build
 npm --workspace @marionette/backend run bundle
 python3 -m unittest discover consumers/ros2
+sdk/python/.venv/bin/python -m pytest sdk/python      # the Python SDK (see sdk/python/README.md to set up the venv)
 ```
 
 Tests use real ARKit camera transforms to cover the camera-to-phone conversion, guided and quick calibration at arbitrary headings, and message validation. Gateway tests cover several phones at once (naming, colors, reconnects and takeovers, routing so no phone sees another's data, consoles hearing about every phone change), the verbatim input stream, holds and their inferred releases, consumer feedback relayed to one phone (and its mirrors) or to all of them, the `/screen` mirror and its address handling, the Axol screen's declared controls and cameras, camera views and the camera opt-out, custom layouts and live reloads, per-phone calibration on normal and limited tracking, cross-origin refusal, and malformed frames. They also cover robots (the roster and the 4409 refusal), robot state routing, replay and retention, robot screens (refusals, repeats, newest wins against a file), kit inlining with a fixture kit, pings, clock offsets and latency stamps, reconnecting in the same session or a new one, pairing (loopback, strict, codes in the address and the hello, 4401 on a wrong code or silence, the rate limit, HTTP, `/api/pairing`), WebRTC signaling (publishing, routing, pair checks, closes), the `/screen` mirror's bridge, and the single-file bundle run with plain `node`. The bridge tests cover the topic mapping, the latched per-phone state, what happens when the gateway is lost, and address parsing. Swift changes can be compile-checked with `xcodebuild -workspace apps/mobile/ios/Marionette.xcworkspace -scheme ArkitModule -sdk iphonesimulator build`.

@@ -28,7 +28,7 @@ Marionette provides:
 
 - **Gateway**: `apps/backend` (Node 22+, `npm install && npm --workspace @marionette/backend run start`), or the single file `npm --workspace @marionette/backend run bundle` builds (`node marionette-gateway.mjs`, Node 20+, nothing else needed; see the README). It listens on `0.0.0.0:8787` (`PORT` to change it). Run it on the robot's onboard computer if it has Wi-Fi reach to the operator. Your consumer then connects over localhost, and only the phones cross the network. Running it on an operator laptop also works, but the consumer then reaches it over the network and needs the pairing code. Phones need the gateway's pairing code (printed on start, with a QR code); clients on the gateway's own computer don't. There is no TLS, so keep it on a private network or a tailnet.
 - **Phones**: the iOS app in `apps/mobile`. The operator scans the gateway's QR code, picks it under Nearby, or types its IP and the pairing code.
-- **Consumer**: yours. Either connect to the WebSocket directly (any language), or run the provided ROS 2 bridge (`consumers/ros2/marionette_ros2_bridge.py`) and subscribe to topics.
+- **Consumer**: yours. Either connect to the WebSocket directly (any language), use the Python SDK (`sdk/python`, Option C), or run the provided ROS 2 bridge (`consumers/ros2/marionette_ros2_bridge.py`) and subscribe to topics.
 - **Camera producers**: small robot-side processes that push JPEG/PNG frames to the gateway (see Cameras).
 - **Viewer**: `apps/viewer`, an optional desktop monitor of every phone. Useful during bring-up.
 
@@ -36,7 +36,8 @@ Marionette provides:
 
 ```sh
 pip install websockets                      # rclpy comes with ROS 2 (Humble or later)
-python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost          # or the gateway's IP
+python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost          # on the gateway's own computer
+python3 consumers/ros2/marionette_ros2_bridge.py --gateway 192.168.1.20 --token K7Q2-M9XD   # from another; or --gateway "<pairing link>"
 python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost --dry-run # prints instead of publishing; no ROS needed
 ```
 
@@ -152,6 +153,34 @@ Every action a phone sends is forwarded verbatim, including actions no control d
 - `GET /api/pairing` returns `{gatewayId, name, code, addresses, port, url, qrSvg}`: the pairing link and its QR code.
 - `GET /health` returns `{ok, gatewayId, name, clients, phones, robots, poseCount}`.
 - `/screen?phone=phone-2` serves the phone screen in a desktop browser, acting as that phone.
+
+## Option C: the Python SDK
+
+For a robot written in Python, `sdk/python` (distribution `marionette-sdk`, import `marionette`) does the generic
+part of Option B for you, as parts your own control loop picks up: a reconnecting connection that pairs, measures the
+clock and keeps only the newest state and frames; a tracker that turns the input stream into each phone's holds,
+drags, presses and Stop by the rules this document describes (repeats, dropped drags, mirrors, a restarted gateway); the clutch,
+gates and jump detection from the recommended consumer; the robot's screen, state, notices and WebRTC video; the
+gateway itself, bundled; and test tools (the real gateway on a free port, scriptable phones). Python 3.12 or later.
+
+```sh
+pip install "marionette-sdk[video] @ git+https://github.com/theinstancelabs/marionette.git#subdirectory=sdk/python"
+```
+
+```python
+import time
+from pathlib import Path
+from marionette import PhoneTracker, RobotLink, gate
+
+tracker = PhoneTracker()
+link = RobotLink("localhost", "humanoid", "Humanoid", screen=Path("humanoid.html"), tracker=tracker).start()
+link.state({"engaged": False, "battery": 0.82, "lift": None})
+for phone in tracker.snapshot().values():
+    reason = gate(phone, time.monotonic())        # None, or why this phone can't drive
+```
+
+`sdk/python/README.md` documents every part, and `sdk/python/examples/sim_robot.py` is a complete simulated robot
+built from them.
 
 ## Frames and calibration
 
