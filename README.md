@@ -1,293 +1,109 @@
 # Marionette
 
-Marionette turns iPhones into teleoperation inputs. Each phone streams its ARKit pose and its inputs (button presses, and sliders and a drive stick that stream live while dragged) to a gateway, which publishes both, tagged with the phone they came from, to whatever consumes them: a ROS 2 bridge, a robot controller, the viewer. Marionette is only the relay. It keeps each phone's control values and runs the calibration that sets each phone's axes, and decides nothing else: stopping, scaling, which phone drives which arm and every safety check belong to the consumer. Several phones can connect at once, for example one in each hand driving one arm each.
+Marionette turns iPhones into teleoperation controllers for robots.
 
-The repository contains:
+Each phone streams its 6-DoF ARKit pose and the operator's inputs (buttons, holds, sliders and a drive stick) to a small gateway. The gateway relays them, tagged with the phone they came from, to whatever drives the robot: a Python or TypeScript program, a ROS 2 node, or the desktop viewer. The phone's screen is an HTML page that the gateway or the robot sends, so every robot gets exactly the controls it needs without a new app build. Several phones can connect at once, for example one in each hand driving one arm each.
 
-- `apps/mobile`: Expo + React Native + TypeScript iPhone app. It opens on a connect page (scan the gateway's QR code, pick it from the gateways nearby, or type its IP; recent addresses and pairing codes are remembered) and then shows the gateway's HTML screen full screen: every control, calibration, the camera return and Stop live in that page. A dropped connection is retried in place, keeping the screen and the ARKit session. The native `@marionette/arkit` Expo module streams ARKit world transforms at the camera frame rate, and `@marionette/discovery` finds gateways over Bonjour. On the simulator (or a build without the native module) it emits a `synthetic`, `limited` bring-up stream so the transport and controls can still be exercised; it is marked `synthetic` and never calibrates. A real ARKit failure, such as denied camera access, is reported instead of falling back.
-- `apps/backend`: small Express/WebSocket gateway. It names each phone, converts its poses into its operator frame, relays every pose and press to consoles, serves the HTML screen and the control layout, runs per-phone calibration, and routes camera streams (three simulated ones by default). A robot can connect to it and talk back: its own phone screen, its state, notices and WebRTC video. It asks phones for a pairing code and can be built into a single file that runs with plain `node`.
-- `apps/viewer`: Vite + React + Three.js desktop console. It opens on the same connect page (an address or a pasted pairing link; off the gateway's computer it asks for the pairing code once and remembers it), then shows a Rerun-style console of every phone in its own color: streams you can show or hide, a 3D/Top/Side view, position plots, the cameras (WebRTC video where a robot publishes it, JPEG frames otherwise), an inspector per phone (control values follow sliders and sticks live while they are dragged, and the link latency from the gateway's stamps), the robots with their state as a tree (for every phone and per phone, stale and offline marked), and a timeline with an event log. **Pair a phone** shows the QR code, the pairing code and the addresses. It only watches. Two simulated phones and a simulated robot are available from the connect page for trying the UI without hardware.
-- `consumers/ros2`: a ROS 2 bridge that publishes each phone's pose and inputs (including the stick's live samples) on topics.
-- `packages/sdk`: `@marionette/sdk`, the TypeScript SDK for robots and consoles. It has a reconnecting gateway client, a phone tracker, teleop safety and clutch parts, and a robot link. It also has testing tools: the real gateway in-process and scriptable phones. See [packages/sdk/README.md](packages/sdk/README.md).
+Marionette is only the relay. It keeps each phone's control values and runs the calibration that sets each phone's axes, and decides nothing else: stopping, scaling, which phone drives which arm and every safety check belong to the robot side.
 
-## Run the diagnostic loop
-
-```sh
-npm install
-npm run dev:backend       # listens on 0.0.0.0:8787
-npm run dev:viewer        # opens Vite on :5173
+```
+  iPhone ─┐                                        ┌─> your robot (Python or TypeScript SDK, any WebSocket client)
+  iPhone ─┼── Wi-Fi or Tailscale ──> gateway :8787 ┼─> ROS 2 bridge
+  iPhone ─┘   pose, inputs                         └─> viewer (desktop console)
+          <── screen, robot state, video ──
 ```
 
-Open the viewer, type `localhost` and press **Connect** (an address can be an IP, `host:port`, a full `ws://` URL or a pasted pairing link; the port defaults to 8787). This is the Marionette diagnostic loop; it does not connect to Axol. The iPhone should connect to the LAN or Tailscale address of the computer running `dev:backend`, while Axol's `10.1.10.220` remains unused by this diagnostic build. On start the gateway prints its pairing code, a pairing link and a QR code; phones need the code, clients on the same computer that connect to `localhost` don't (see [Pairing](#pairing)). There is no TLS, so keep the gateway on the local network or a private tailnet. Browsers may connect (WebSocket) and read the REST API only from loopback pages or pages served from the gateway's own host name; add other viewer origins with `MARIONETTE_ALLOWED_ORIGINS=http://host:5173`.
+## Try it without an iPhone
 
-## Build the iPhone app
-
-The ARKit bridge is a native module, so Expo Go is not enough. Build a development client on macOS with Xcode:
+You need Node 22 or later.
 
 ```sh
-cd /Users/yashas/Documents/Marionette
 npm install
+npm run dev:backend       # the gateway, on 0.0.0.0:8787
+npm run dev:viewer        # the desktop viewer, on http://localhost:5173
+```
+
+Open the viewer, type `localhost` and press **Connect**. The connect page can also start two simulated phones and a simulated robot, so you can try the console without hardware. `http://localhost:8787/screen` shows the phone screen in a desktop browser, acting as the first connected phone.
+
+To script phones from the command line (`HOST=` and `TOKEN=` point them at a gateway on another computer):
+
+```sh
+DEVICE=a ARM=left npx tsx tools/phone-sim.mts 8787 wander                    # Phone 1: hello, then ARKit poses
+DEVICE=b ARM=right PHASE=7 npx tsx tools/phone-sim.mts 8787 calibrate        # Phone 2: calibrates, then wanders
+npx tsx tools/act.mts 8787 phone-2 estop safety.estop true                   # turn Phone 2's Stop on
+npx tsx tools/act.mts 8787 phone-1 drive base.drive '{"x":0.5,"y":0}' 2000   # push Phone 1's stick half forward for 2 s
+```
+
+## Connect an iPhone
+
+ARKit needs a native module, so the app (`apps/mobile`) runs as a development build rather than in Expo Go. On a Mac with Xcode, with the iPhone plugged in:
+
+```sh
 cd apps/mobile
 npx expo prebuild --platform ios
 npx expo run:ios --device
 ```
 
-Before the last command, connect and unlock the iPhone over USB, tap **Trust** on the phone, and enable **Developer Mode** under Settings → Privacy & Security → Developer Mode. The first build may open Xcode for signing; select your Apple ID team under the Marionette target's **Signing & Capabilities**. A free Apple team gives a short-lived development install; a paid team gives the normal longer-lived device provisioning.
+Then scan the QR code the gateway prints, pick the gateway under **Nearby**, or type its address. The phone and the gateway's computer must be on the same Wi-Fi or tailnet. [docs/IPHONE-APP.md](docs/IPHONE-APP.md) covers signing, pairing codes, reconnecting and TestFlight.
 
-Start the gateway on the Mac in another terminal:
+## Drive a robot
 
-```sh
-cd /Users/yashas/Documents/Marionette
-npm run dev:backend
-ipconfig getifaddr en0       # LAN address of this Mac
-tailscale ip -4              # use this instead when both devices are on Tailscale
+With the Python SDK (`pip install "marionette-sdk @ git+https://github.com/theinstancelabs/marionette.git#subdirectory=sdk/python"`):
+
+```python
+import time
+from marionette import GatewayClient, PhoneTracker
+
+client = GatewayClient("localhost").start()   # an address, or the gateway's pairing link
+tracker = PhoneTracker()
+tracker.attach(client)
+
+while True:
+    now = time.monotonic()
+    for phone in tracker.snapshot().values():
+        if phone.holding("teleop.deadman", now) and phone.pose and not tracker.any_stop():
+            print(phone.name, phone.pose.position)   # move the robot here
+    time.sleep(0.02)
 ```
 
-Then connect the phone in whichever way is handiest. The Mac and iPhone must be on the same Wi-Fi, or both must be signed into the same Tailscale network.
+- **Python**: [sdk/python](sdk/python/README.md) also has a clutch for relative teleop, the robot's own screen and state, WebRTC video, the gateway bundled, and simulated phones for tests.
+- **TypeScript**: [packages/sdk](packages/sdk/README.md) has the connection, the phone tracker, the teleop parts, the robot's link and simulated phones.
+- **ROS 2**: `python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost` publishes each phone's pose and inputs on topics.
+- **Anything else**: connect to `ws://<gateway>:8787/ws` and send a `hello`. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
-- **Scan QR code.** The gateway prints a QR code when it starts, and the desktop viewer's **Pair a phone** button shows one. Tap **Scan QR code** on the connect page, or point the iPhone's Camera app at it. The code is a `marionette://pair?…` link with every address of the gateway, its port and its pairing code; the app tries all the addresses at once and keeps the first that answers.
-- **Nearby.** Gateways on the same Wi-Fi advertise themselves over Bonjour (`_marionette._tcp`) and are listed under **Nearby**; tap one. Bonjour doesn't reach across Tailscale, so use the QR code or the address there.
-- **Type the address.** Type the Mac's IP (for example `192.168.1.20`) and tap **Connect**. Do not use Axol's `10.1.10.220` and do not use `localhost`: on the phone, `localhost` points back to the phone.
+[docs/INTEGRATION.md](docs/INTEGRATION.md) walks through the data, the default controls, and a recommended consumer for a bimanual mobile manipulator (gating, clutching and safety).
 
-With pairing on (the gateway's default), a phone also needs the gateway's pairing code, eight characters like `K7Q2-M9XD`. The QR code carries it. Otherwise the app asks for it when the gateway turns the phone away (or tap **Pairing code?** to type it first): the gateway prints it when it starts, and the viewer's **Pair a phone** button shows it. Case, dashes and spaces don't matter. The app remembers each code that worked and the addresses where it worked, and sends a saved code only to those addresses: a gateway's id and name are public, so the app asks for the code again when a gateway turns up at a new address, and never sends it to another Nearby entry or link just because it carries the same name or id. If the gateway turns the code away, the app says why; it forgets the code only when the gateway calls it wrong, not when the address is shut out for a minute after too many wrong codes.
+## What's in the repository
 
-If macOS asks whether Node may accept incoming connections, allow it, and allow Local Network access when iOS asks (Nearby and every connection need it). If the gateway can't be reached within a few seconds, the app stays on the connect page and says why.
-
-Once connected, a dropped connection doesn't end the session. The screen and ARKit keep running under a **Reconnecting to …** banner with **Leave** at the foot of the screen (clear of the screen's Stop), and the app retries (0.5 s, doubling up to 5 s) until the gateway is back or you leave. It reconnects inside the same ARKit session, so the gateway keeps the phone's calibration. Held buttons and dragged controls are let go when the connection drops and need a fresh press. Nothing pressed or dragged while the gateway is away acts when it comes back: let go and touch it again. The exception is Stop: pressed while reconnecting, it is sent as soon as the gateway accepts the phone again, and the screen says so. A gateway that pings the phone and then says nothing for 3.5 s counts as dropped, even while iOS still thinks the socket is open. The gateway sends its screen on every connection, and the page only reloads when the screen changed. If a different gateway answers at the address, the app leaves and says so instead of carrying on with it. If the gateway no longer accepts the phone's code, the app goes back to the connect page and asks for the new one.
-
-The connect page turns with the phone. A screen can ask for an orientation with `<meta name="marionette-orientation" content="portrait|landscape|any">`, and the app holds it while that screen shows. The app also runs on iPad, full screen, since iPadOS only honours orientation locks for full-screen apps (and from iOS 27 may treat them as a preference).
-
-The iOS permission strings, the `marionette://` scheme and the Bonjour service are set by `app.json` and `app.plugin.js` (the camera is for ARKit and the QR scanner; the microphone string is there only because the scanner's library links a recording API, and the app never asks for it). The native modules are `modules/arkit` and `modules/discovery`. Use a physical iPhone for ARKit world tracking; the simulator only exercises the limited fallback and cannot validate real tracking or calibration geometry.
-
-In the simulator, `xcrun simctl openurl` stops at an "Open in Marionette?" prompt, so a headless run passes the pairing link at launch instead: `xcrun simctl launch <device> com.instancelabs.marionette -pairingLink 'marionette://pair?v=1&host=127.0.0.1&port=8787'`.
-
-`app.json` sets the bundle ID (`com.instancelabs.marionette`) and the signing team (`ios.appleTeamId`); change both to build under another Apple team.
-
-## Ship to TestFlight
-
-The app icon and launch screen are drawn from SVGs in `apps/mobile/assets/`: `icon.svg`, plus `icon-dark.svg` and `icon-tinted.svg` for the iOS dark and tinted home screens, and `splash-icon.svg`. The mark is the same one the connect page shows. After editing one, run `npm run icons` in `apps/mobile` to render the PNGs (it uses headless Google Chrome).
-
-```sh
-cd apps/mobile
-npm run testflight              # writes dist/testflight/Marionette.ipa
-npm run testflight -- --upload  # builds and uploads it to App Store Connect
-```
-
-The script regenerates `ios/` from `app.json` (`expo prebuild --clean`), stamps the build number with the UTC date and time (for example `20261027.0930`, so every build is new), archives a Release build and exports it signed for App Store Connect. Xcode must be signed in to the team (Xcode › Settings › Accounts); on first use it registers the App ID and creates the distribution certificate and profile. `app.json` declares no non-exempt encryption, so TestFlight doesn't ask the export-compliance question. For a new version, raise `version` in `app.json`.
-
-Before the first upload, create the app once in App Store Connect: Apps › + › New App, platform iOS, bundle ID `com.instancelabs.marionette`, any SKU (for example `marionette-ios`). The App Store name has to be unique across the store; the home-screen name stays "Marionette" either way. When an upload has finished processing, add internal testers under TestFlight. External testers also need the Test Information page (what to test, a feedback email) and a short beta review.
-
-## Protocol
-
-`packages/protocol/src/index.ts` is the single source of truth. Pose packets contain `version`, `sessionId`, `seq`, monotonic timestamp, translation, quaternion, covariance, `trackingState`, calibration version, heartbeat, the phone's send time (`sentAt`) and, on everything the gateway forwards, `phoneId`, the gateway's receive time (`receivedAt`) and its latency estimate (`latencyMs`, see [Latency](#latency-and-the-link)). The gateway rejects unknown versions, malformed values, and non-monotonic sequence numbers within a session; a new phone session may restart at sequence zero. Controls are declarative (`button`, `toggle`, `select`, `slider`, `joystick`, with `hold: true` for press-and-hold buttons), so a layout can change from the gateway or the screen without a new app binary. The app drops individual controls it cannot render instead of rejecting a newer layout. Every gateway reply carries `values.accepted` (true or false). A client introduces itself with a `hello`: its `role` (`phone`, `console` or `robot`), the pairing `token`, a phone's `deviceId` and current `sessionId`, a robot's `robotId` and `name`. The gateway closes a connection with code 4001 when a newer connection from the same phone replaces it, 4401 when the pairing code is missing or wrong, and 4409 when a robot with the same id is already connected. Everything added since the first release is optional, and clients ignore message types they don't know.
-
-### Frames
-
-Every pose the gateway publishes uses the operator frame, following ROS REP-103: +X forward, +Y left, +Z up, in metres (right-handed). Identity rotation is the phone flat, screen up, top edge pointing forward. The phone body frame is +X top edge, +Y left edge, +Z out of the screen. ARKit's camera frame is fixed to the sensor's landscape orientation (+X toward the bottom edge of a portrait phone, +Y toward its right edge, +Z out of the screen), so the conversion is a fixed 180° turn about Z; the raw packets on the wire are still ARKit's gravity-aligned world (+Y up, -Z initial heading). Uncalibrated output re-expresses that world in operator axes, with forward along ARKit's initial heading. Positive yaw turns left, positive pitch tips the top edge down, and positive roll dips the right edge.
-
-The viewer labels each axis and has **3D**, **Top** (forward is screen-up) and **Side** (forward is screen-right, up is screen-up) views. A forward move drawn in the angled 3D view goes into the screen, which can look like a lift. The telemetry panel also shows the dominant axis of the last half second of motion and where the phone's top edge and screen point.
-
-### Several phones
-
-Every phone says `hello` with a device id the app keeps, and the gateway names it in connection order: **Phone 1** (amber `#c98200`), **Phone 2** (orchid `#b04fc4`), then graphite for any more, which are told apart by name. The id (`phone-1`), name and color stay with that device for the gateway's lifetime, so a phone that drops off Wi-Fi and reconnects comes back as itself, with its control values (Stop stays on). Its hello names the ARKit session it is in (`sessionId`): back inside the same session it keeps its calibration, because the world hasn't changed; in a new session (or if its first pose is from one) it starts uncalibrated. Its holds and drags end when it drops either way. A second connection from the same phone replaces the first (close code 4001), with the same rule for the calibration, which covers a phone that reconnects before the gateway has noticed its old connection died. An older app that sends no hello still works, as a phone that leaves the roster when it disconnects. Each phone shows its name and color in its status strip and along the top edge of its screen, matching the viewer.
-
-Each phone has its own pose stream, calibration, control values (arm, cameras, scale, Stop, …), held buttons and dragged sliders and sticks. Nothing is shared and nothing is arbitrated: both phones may pick the same arm and hold their deadman at once, and one phone never blocks the other. Phones only receive their own config, replies and camera streams; consoles receive everything.
-
-### Consuming Marionette
-
-A consumer connects to `ws://<gateway>:8787/ws`, sends `{"type":"hello","version":1,"role":"console"}` (a client that sends nothing for 250 ms is treated as a console too; add `"cameras":false` if it has no use for camera frames), and receives:
-
-| Message | What it is |
+| Path | What it is |
 |---|---|
-| `config` without `phone` | The control layout, camera streams and views, the roster in `phones` (`{id, name, color, connected, sessionId}`) and `robots` (`{id, name, connected, screen, streams}`), the gateway's stable `gatewayId`, its name (`serverName`) and whether pairing is on (`auth`). Sent on connect and whenever a phone or robot joins or leaves. |
-| `config` with `phone` | One phone's state: whether it is connected, its control values, `held: true` on each hold button it is holding, `live: true` on each slider or stick being dragged, and its calibration. Sent on connect, whenever it changes and whenever the roster does; during a drag only when it starts and ends (the samples are in `input`). |
-| `pose` | Each phone's pose at the ARKit frame rate, tagged `phoneId`, in that phone's operator frame, with `receivedAt` and `latencyMs`. When a phone's stream stops (watchdog, 1.5 s) or it disconnects, one pose with `heartbeat: false` and `trackingState: 'unavailable'`. |
-| `input` | The input stream: every action a phone sends, verbatim, tagged `phoneId`, with `receivedAt` and (from the phone itself) `latencyMs`, including the 200 ms repeats of a held button (`renew: true`), every live sample of a slider or stick being dragged (`live: true`, see [Live values](#live-values-sliders-and-sticks)) and actions no control declares. `source` is `phone`, `mirror` (the desktop `/screen` mirror acting as that phone) or `gateway`, which marks a release or end of drag the gateway inferred, with a `reason`: the hold stopped being repeated for 600 ms or the drag's samples for 400 ms (`renewals stopped`, `samples stopped`; `MARIONETTE_HOLD_TIMEOUT_MS`, `MARIONETTE_STREAM_TIMEOUT_MS`), its phone or mirror went away (`phone disconnected`, `mirror disconnected`, `replaced by a newer connection`, `mirror moved to another phone`), or a saved screen removed the control (`screen changed`). A repeat never restarts a hold or drag the gateway has ended, so a consumer that follows the gateway's releases should do the same. |
-| `status` | Replies, tagged `phoneId` when they concern one phone (calibration progress and refusals). Feedback other consoles send to phones is not echoed to consoles. |
-| `robot_state` | Every robot's state, for every phone and for single phones (see [Robots](#robots)), the latest of each right after the configs on connect. |
-| `camera_frame` | Every camera stream, unless the hello said `"cameras":false`. |
-| `pong` | The answer to a `ping` you send (`{"type":"ping","version":1,"id":1,"sentAt":<your clock, ms>}`), with `at`, the gateway's clock: the round trip and your clock's offset from the gateway's. |
+| `apps/mobile` | The iPhone app (Expo, React Native). Its native modules are `modules/arkit` and `modules/discovery`. |
+| `apps/backend` | The gateway (Node, Express, WebSocket). |
+| `apps/viewer` | The desktop console (Vite, React, Three.js). |
+| `packages/protocol` | Message types and validation, shared by everything. |
+| `packages/kit` | The screen kit: parts for building phone screens. |
+| `packages/sdk` | The TypeScript SDK. |
+| `sdk/python` | The Python SDK. |
+| `consumers/ros2` | The ROS 2 bridge. |
+| `tools` | Scripted phones for development. |
 
-Consoles only watch: an action from a console is refused. A console can talk back to the phone screens, though: a `status` it sends (`{"type":"status","version":1,"sessionId":"…","phoneId":"phone-1","controlId":"…","message":"…","values":{…}}`, values any JSON up to 16 KB) goes to that phone and any `/screen` mirror of it, or to every phone and mirror without `phoneId`, and never to other consoles. The screen gets it with `Marionette.on('status', …)`, so a consumer can show notices on the phones without an app rebuild (see Feedback to phones in [docs/INTEGRATION.md](docs/INTEGRATION.md)); for state a screen should keep showing, connect as a robot and send `robot_state`. `GET /api/state` returns the same picture as JSON (`phones[]` with each phone's config, latest pose and link, `robots[]` and the retained `robotStates`). In the default layout Stop (`safety.estop`) is a per-phone toggle, `teleop.deadman` ("Hold to move"), `gripper.hold`, `base.turnLeft` and `base.turnRight` are holds, `base.drive` is a stick, and `arm.select`, `camera.view`, `lift.toggle`, `teleop.translationScale` and `base.speedLimit` are values; all of them are signals for the consumer to interpret.
+## Documentation
 
-### Live values: sliders and sticks
+- [Integrating with a robot](docs/INTEGRATION.md)
+- [The protocol](docs/PROTOCOL.md): messages, frames, calibration, pairing, robots, cameras and WebRTC
+- [Running the gateway](docs/GATEWAY.md): configuration, the single-file build and the diagnostics log
+- [Phone screens](docs/SCREENS.md) and [the screen kit](docs/SCREEN-KIT.md)
+- [The iPhone app](docs/IPHONE-APP.md)
+- SDKs: [Python](sdk/python/README.md), [TypeScript](packages/sdk/README.md)
 
-A slider or stick streams while the operator drags it, so a consumer can follow it in real time (a fast linear axis, a joint, a base). Each new value goes out as an `input` with `live: true`, at most once per screen frame (about 60 Hz on the phone) and only when it changed. While the finger rests on it, the app repeats the latest value every 50 ms (`live` and `renew`), so a consumer sees at least 20 samples a second for as long as it is touched. Letting go sends the final value without `live`. A stick's value is `{"x": …, "y": …}` in operator axes: `x` is up the pad (forward), `y` is to the left, each from −1 to 1 and never more than 1 together, and it returns to `{"x": 0, "y": 0}` when let go.
+## Security
 
-The gateway keeps the latest sample as the phone's value. It republishes the phone's config only when a drag starts and ends (`live: true`, then `false`), not for every sample. If the samples stop for 400 ms (Wi-Fi drops, the app freezes) it ends the drag itself, with an `input` from `source: gateway`, `reason: samples stopped`: a stick goes back to rest, and a slider keeps its last value. If the phone is still touching it, its samples are relayed but the gateway keeps the drag ended until the operator lets go, the same rule as a hold. The phone shows **Dropped** in red until then.
+The gateway asks phones for a pairing code but has no TLS, so keep it on a local network or a private tailnet. Phone screens are trusted HTML and are not sanitized. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-**ROS 2.** `consumers/ros2/marionette_ros2_bridge.py` is a ready consumer:
+## Contributing
 
-```sh
-pip install websockets                                   # rclpy comes with ROS 2
-python3 consumers/ros2/marionette_ros2_bridge.py --gateway 192.168.1.20 --token K7Q2-M9XD   # or --gateway "<pairing link>"
-python3 consumers/ros2/marionette_ros2_bridge.py --gateway localhost --dry-run   # no ROS needed; prints what it would publish
-```
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setting up, the checks, and how the pieces fit together.
 
-**Python robots.** `sdk/python` is the Python SDK (`marionette-sdk`): the connection, a phone tracker, the teleop math, the robot's screen, state and WebRTC video, the gateway bundled, and test phones. See `sdk/python/README.md`.
+## License
 
-For each phone it publishes:
-
-- `/marionette/phone_1/pose`: `geometry_msgs/PoseStamped`, frame `phone_1/operator`, only while the stream is live.
-- `/marionette/phone_1/buttons`: `std_msgs/String`, one JSON object per input event (`control`, `action`, `value`, `source`, `live` for samples of a drag, `repeat` for repeats, `reason` for inferred releases). The stick's samples arrive here, for example `{"control":"drive","action":"base.drive","value":{"x":0.5,"y":-0.2},"live":true,…}`.
-- `/marionette/phone_1/tracking`: `std_msgs/String`, latched, on change (`normal`, `limited`, …, `unavailable`).
-- `/marionette/phone_1/state`: `std_msgs/String`, latched, on change: whether the phone is connected, every control value (Stop included), which hold buttons it is holding and which sliders and sticks are being dragged (`live`), and its calibration (`status`, `epoch`, `mode`, `validated`; re-anchor when `epoch` changes). A node that starts late learns from this that Stop is already on.
-
-It also publishes the roster on `/marionette/phones` (latched). Topic names come from the phones' names. Every publisher is reliable (keep last), so it matches both the default reliable subscriptions and best-effort ones; latched topics are transient-local. The bridge reconnects with backoff. While the gateway is unreachable it does not leave the last values standing: each phone's tracking goes `unavailable`, every phone reads as disconnected, and each hold or drag the gateway had reported gets a release on `buttons` with `"source":"bridge"` (a stick back at rest).
-
-### Robots
-
-A robot is a console that talks back. It says hello with `"role":"robot"`, its own stable id (lower-case letters, digits and dashes) and a name:
-
-```json
-{"type":"hello","version":1,"role":"robot","robotId":"axol","name":"Axol"}
-```
-
-It receives what a console receives (camera frames only if its hello adds `"cameras":true`), and it may also send its own phone screen, its state, notices (`status`, as above), camera frames and WebRTC signaling. It stays in the roster (`config.robots`) for the gateway's lifetime, `connected: false` once it has gone. One connection per id: while a robot is connected, a second connection with its id is closed with code 4409 and the first stays. A client that retries takes over once the first has gone. The gateway still decides nothing for the robot; it routes, keeps and time-stamps what the robot says.
-
-**Robot state.** `{"type":"robot_state","version":1,"state":{…},"everyMs":200}` is whatever the robot wants the screens to show, as JSON up to 64 KB: nested objects, lists and `null` are fine. Without `phoneId` it is for every phone; with one, for that phone only. The gateway fills in `robotId` and `receivedAt` and sends it to the phone it names (with that phone's `/screen` mirrors and every console), or to every phone, mirror and console, never back to the robot. It keeps the latest one per robot and phone (and per robot for every phone), also after the robot disconnects, and replays them to whoever connects, right after the configs: a console gets all of them, a phone or mirror the ones for every phone and its own. `everyMs` says how often the robot re-sends it; a screen calls the robot unresponsive after `max(1500, 3 × everyMs)` ms without one (`staleAfterMs` in the protocol package), and offline when the roster says so. Only robots send state; the gateway never looks inside it.
-
-**Robot screens.** `{"type":"screen","version":1,"html":"…","title":"Axol"}` replaces the screen every phone shows, so the robot carries its own screen. It is handled like a screen file: its `marionette-config` block sets the layout (a broken block is refused and the previous screen stays), the screen kit is inlined, and a layout change resets values that no longer fit and ends holds on removed buttons (`screen changed`). The robot gets a `status` reply with `controlId: "screen"` and `values.accepted`, plus `values.warnings` naming anything in the block the gateway dropped. The same HTML again changes nothing, so a robot can send its screen every time it connects. The newest screen wins: a robot's push replaces the file's, and the next save of `MARIONETTE_HTML_FILE` replaces the robot's; the console and the diagnostics log say which. The screen stays when its robot disconnects. `robots[].screen` marks whose screen is showing, and each `html_config` says where its screen came from (`source: {"kind": "default" | "file" | "robot", "robotId"}`).
-
-### Latency and the link
-
-The gateway pings every phone and robot once a second (`{"type":"ping","version":1,"id":12,"sentAt":…,"rttMs":8.4}`) and answers anyone's `ping` with a `pong` that echoes `id` and `sentAt` and adds `at`, its own clock. Times are wall-clock milliseconds with fractions. Of the last 16 round trips to a client, the fastest gives the client's clock offset (NTP style: `at` − (`sentAt` + round trip / 2)). Each ping carries `rttMs`, the round trip last measured to that client, which the app shows as the link (good under 60 ms, fair under 150 ms, poor above). Forwarded poses carry `receivedAt`, the gateway's clock, and once the phone's offset is known `latencyMs`: the time from the phone sending the pose (its `sentAt`) to the gateway receiving it. A phone's inputs carry `latencyMs` the same way, from the action's `sentAt`. A consumer measures its own hop by pinging the gateway. `GET /api/state` shows each phone's and robot's `link`: `rttMs`, `quality`, whether the offset is known, and the offset.
-
-### Pairing
-
-The gateway has a stable id and an 8-character pairing code (Crockford base32, shown as `K7Q2-M9XD`; case, dashes and spaces don't matter, and O, I and L read as 0, 1 and 1), kept in `~/.marionette/gateway.json`. Pairing is on by default: phones and every other client off the gateway's computer need the code. A client on the same computer goes without it when it connects over loopback and asks for this computer by one of its names (its `Host` header): `localhost`, a loopback address, the computer's host name or `.local` name, one of its addresses, or, from a container on it, `host.docker.internal`, `gateway.docker.internal`, `host.orb.internal` or `host.containers.internal` (Docker Desktop and OrbStack hand a container's connections over from 127.0.0.1; `.internal` names can't be registered in public DNS). Anything else from loopback needs the code like a remote client, since a web page whose DNS was rebound to 127.0.0.1 still asks for the name it was loaded from; the gateway logs each such host once. On start the gateway prints the code, a pairing link and a QR code of the link:
-
-```
-marionette://pair?v=1&host=192.168.1.20,100.64.0.5&port=8787&code=K7Q2M9XD&id=gw-4k9q2m7xd1&name=lab-mac
-```
-
-The link lists every IPv4 address a phone might reach the computer at (the LAN first, then the tailnet), the port, the code, the gateway's id and its name. The iPhone camera opens a scanned QR code in the app. `GET /api/pairing` returns the same as JSON (`{gatewayId, name, code, addresses, port, url, qrSvg}`, with the QR code as SVG). The gateway also advertises itself over Bonjour as `_marionette._tcp` (TXT `id`, `name`, `v`, `auth`), so the app can list it under Nearby.
-
-A WebSocket client gives the code in the address (`ws://host:8787/ws?token=K7Q2M9XD`) or in its hello (`"token":"K7Q2-M9XD"`). Until then the gateway sends it nothing, and closes it with code 4401 if its first message is anything but a hello with the right code, or after 3 s of silence. Five wrong codes in a minute from one address shut that address out for a minute. `/api/*` and `/screen` need the code as well (`?token=` or `Authorization: Bearer <code>`); `/health` and the kit files don't. From another computer, open `/screen?token=K7Q2M9XD`; the mirror passes the code on. An app from before pairing still connects where pairing is off or from the gateway's own computer.
-
-| Variable | Default | |
-|---|---|---|
-| `MARIONETTE_AUTH` | `on` | `on`: everyone needs the code but clients on this computer that ask for it by name (above). `strict`: everyone does (use it behind a reverse proxy on the same computer, which makes every client look local). `off`: nobody does. |
-| `MARIONETTE_TOKEN` | the saved code | Fixes the code (4 to 64 characters). |
-| `MARIONETTE_NAME` | the host name | The name in the link, in Bonjour and in `config.serverName`. |
-| `MARIONETTE_HOME` | `~/.marionette` | Where `gateway.json` is kept. |
-| `MARIONETTE_ADDRESSES` | this computer's addresses | Comma-separated hosts for the link instead. |
-| `MARIONETTE_MDNS` | on | `off` stops the Bonjour advertisement. |
-
-### Calibration frame
-
-For a repeatable coordinate frame, connect the phone. On it, tap **Calibration**, then **Start calibration**, and follow the four full-screen steps: hold the phone roughly flat in your hand (within 30° of flat, `FLAT_TOLERANCE_DEGREES`; screen up, top edge forward) and capture; move it forward and capture; return to the flat reference, move it right and capture; return again, lift it upward and capture. Each capture is checked immediately (at least 30 mm of movement, right must be to the right of forward), so a bad step can be retaken. Up always comes from gravity; the forward and right moves only set the heading, so accidental lift during a move cannot tilt the frame. The flat capture becomes zero position and identity rotation, and rolling, pitching, or turning the phone reads as rotation about +X, +Y, or +Z at any heading. Each step shows a drawing of the move and a live meter of how far the phone has moved (from `config.calibration.anchor`, the flat spot in the current frame). The previous frame stays active until the up capture, and **Cancel** (`calibration.cancel`) puts it back. Calibration is complete at up: the new frame goes live. Calibration only roughly aligns the axes, so captures, checks and quick origin accept ARKit `normal` or `limited` tracking. A phone lying on a blank desk often blinds its camera and drops to limited; holding it up over the floor keeps tracking normal and the moves accurate. Each phone calibrates on its own, and the frame can change at any time (a consumer should re-anchor when `calibrationVersion` changes).
-
-Validation is optional and never gates anything. **Validate** (`calibration.check`, no value) asks for three moves, each starting from the flat spot like the captures: move forward and press **Check forward** (value `forward`), move right (`right`), lift up (`up`); `cancel` stops it. Each move is the calibrated position at the press, so repositioning in between doesn't count, and it passes when its largest component is on the expected axis: forward → +X, right → −Y, up → +Z. While it runs the phone draws itself moving in the calibrated frame, so a wrong frame shows as the drawing sliding the wrong way. The results (with the measured millimetres) are shown on the phone, in the viewer, and in that phone's `config.calibration.check`; a failed move says which way it actually went.
-
-**Quick capture origin** zeroes position at the current pose, takes up from gravity, and takes forward from the phone's heading (its top edge, or its back camera when held upright). **Reset calibration** returns to the uncalibrated gravity-aligned frame. Every frame change increments `calibration.epoch`, which also appears in each pose's `calibrationVersion` (for example `guided-v2:3`). A new phone session clears any finished or half-finished calibration: reconnecting in a new session does this (back inside the same session, the calibration stays), and so does the app after an ARKit interruption (backgrounding, a phone call), because the native module restarts tracking rather than relocalizing into a possibly different world origin.
-
-### Diagnostics log
-
-`npm run dev:backend` / `start` writes a JSONL log to `logs/gateway-<time>.jsonl` (override the directory with `MARIONETTE_LOG_DIR`) and prints its path. It records each phone's poses at 10 Hz (`MARIONETTE_POSE_LOG_HZ`, `0` disables), each with the raw ARKit position and quaternion, the published operator position and quaternion, and where the phone's top edge, left edge and screen point in both frames. Every record names its phone. It also records every calibration capture or rejection (with the ARKit-world move from the flat reference), the frame each calibration builds (its forward, left and up axes in ARKit world and its heading from the uncalibrated forward), each validation move, every phone, session, tracking and hold change, robots joining and leaving (and a refused second connection), every screen change and refusal, pairing refusals, and WebRTC publishers. Non-pose events are echoed to the console. For example, to list calibration events: `grep '"calibration"' logs/gateway-*.jsonl`.
-
-### Cameras
-
-The gateway can carry any number of camera streams at once. A camera process (on the robot, say) connects like any client and sends `camera_frame` messages for a declared stream id; frames for undeclared ids are ignored. Streams are grouped into views, and each phone picks a view with the `camera.view` control: by default **Head cam** (one stream, `head`) or **Arm cams** (`arm-left` and `arm-right`, shown side by side). The three default streams are simulated and only rendered while someone is watching. A phone receives only the streams in its own view; consoles receive all of them (unless they opt out), and the viewer picks its own view without changing any phone's. On the phone screen the streams of a view sit side by side, uncropped; with more than one, a tap stacks them full width.
-
-**WebRTC video.** JPEG frames through the gateway suit a few streams at 10–15 Hz. For real video a robot serves a stream over WebRTC, straight to each viewer: the gateway passes only the signaling (`rtc` messages) and never touches the media. Every connection to the gateway has a client id (`c1`, `c2`, …).
-
-1. The robot sends `{"type":"rtc","version":1,"kind":"publish","streams":["head"]}` for streams the screen declares (send the screen first; an undeclared stream gets an `error`). The config then marks those streams `"transport":"webrtc","publisher":"axol"`, `robots[].streams` lists them, and the gateway stops drawing a published `sim://` stream. `unpublish` (with `streams`, or without for all of them) undoes it, and so does the robot disconnecting. A stream has one publisher, the latest.
-2. A viewer (a phone screen through `Marionette.rtc`, a `/screen` mirror, the desktop viewer, any client) sends `{"kind":"request","stream":"head","peer":"head-1"}`, `peer` being its own name for that connection. The gateway passes it to the publisher with `from`, the viewer's client id, or answers `error` when nobody publishes the stream.
-3. The publisher answers the viewer (say `c3`) with `{"kind":"offer","to":"c3","peer":"head-1","sdp":"…"}` and the viewer answers the publisher (`c7`) with `{"kind":"answer","to":"c7","peer":"head-1","sdp":"…"}`; either may send `candidate` (`{"candidate":"…","sdpMid":"0","sdpMLineIndex":0}`) and `close`. The gateway checks that both ends belong to one request and stamps `from`, so no third client can reach into the connection; anything else is answered with `error`.
-4. When either end goes away the other gets a `close` for each of their connections, and when a robot stops publishing a stream, its viewers do.
-
-A robot may keep sending JPEG frames for a published stream as the fallback; they are relayed as before.
-
-## The phone screen is HTML
-
-The gateway sends a `html_config` message beside the `config` message, and the iPhone shows that document full screen in `react-native-webview`. There are no native controls behind it: the default screen (`apps/backend/src/sample-controls.html`) has Stop (this phone's toggle, with a banner and Reset while it is on), the hold-to-move pad, a grip, live pose, the cameras, **Drive base** (the stick between Turn left and Turn right, what it is sending, and the speed limit), every other control as a row, and full-screen guided calibration and optional validation. Hold buttons show what the gateway knows: **Holding…** until the gateway reports the hold, **Holding** once it does, and **Hold dropped** if the gateway lets go while the button is still pressed (its repeats stopped arriving), which needs a fresh press. The stick and sliders work the same way: blue once the gateway hears them live, red (**Dropped**) if it stops hearing them mid-drag. The stick follows the finger anywhere on the pad and springs back when let go; on the desktop mirror the arrow keys push it too. It finds controls in the config by action rather than by id, so a different layout still gets a working screen; anything it doesn't know is drawn as a generic button, switch, choice, slider or stick. The point is that the screen is yours: make it send exactly the buttons your consumer needs. HTML is trusted developer content: keep the gateway on a private network; the document is not sanitized. The protocol validates the message schema, bridge version, and a 512 KB UTF-8 size limit. The WebView cannot navigate away from the supplied document; http(s) links open in Safari.
-
-To make your own screen, copy the default document and point the gateway at it (relative paths resolve from the directory you run the command in). For a complete robot screen built on the screen kit, see `sdk/python/examples/sim_robot.html`, which the example robot sends as its own screen; a robot normally sends its screen itself (see [Robots](#robots)) rather than the gateway loading a file. The gateway pushes the file to every phone again whenever you save it:
-
-```sh
-MARIONETTE_HTML_FILE=./config/operator.html npm run dev:backend
-# or a fixed string
-MARIONETTE_HTML='<!doctype html><button>Developer UI</button>' npm run dev:backend
-```
-
-The default screen is built on the **screen kit** (`packages/kit`): hold buttons, live sliders and sticks, Stop, the status strip, toasts, robot state, cameras over JPEG or WebRTC, guided calibration and generic rows, as parts you can use in any layout. A screen opts in with `<link rel="stylesheet" href="marionette-kit.css">` and `<script src="marionette-kit.js"></script>`, and the gateway puts the kit inline. See [docs/SCREEN-KIT.md](docs/SCREEN-KIT.md).
-
-A screen can declare its own controls and cameras in a JSON block; anything it leaves out keeps the default, except that streams declared without views get one view each. The gateway refuses to start if the block is broken and keeps the previous screen if a saved edit breaks it; entries it cannot use (a control without an `id`, say) are dropped and named in the console and the diagnostics log. When a saved screen changes the layout, a value the control no longer accepts returns to its default and a hold whose button is gone is released (`reason: 'screen changed'`).
-
-```html
-<script type="application/json" id="marionette-config">
-{ "controls": [{ "id": "horn", "type": "button", "label": "Horn", "action": "horn.honk" },
-               { "id": "speed", "type": "slider", "label": "Speed", "action": "base.speed", "value": 0.5, "min": 0, "max": 1, "step": 0.1 }],
-  "cameraStreams": [{ "id": "deck", "label": "Deck", "url": "camera://deck", "status": "live" }],
-  "cameraViews": [{ "id": "deck", "label": "Deck cam", "streams": ["deck"] }] }
-</script>
-```
-
-Declared toggles, selects and sliders get per-phone values and declared holds get repeat tracking, but nothing has to be declared to reach the consumer: any `sendAction` is relayed as `input`. Calibration actions (`calibration.*`) work whatever control id a screen uses.
-
-Whichever screen is showing (the default, a file, `MARIONETTE_HTML` or a robot's, see [Robots](#robots)), the gateway does three things to it before sending it. It replaces `<script src="marionette-kit.js"></script>` and `<link rel="stylesheet" href="marionette-kit.css">` (other attributes, and a leading `/` or `./`, are fine) with inline copies of the screen kit from `packages/kit`, so the phone needs nothing but the document; the 512 KB limit counts the inlined kit, `MARIONETTE_KIT_DIR` reads the kit from another directory, and saving a kit file pushes the screen again. Both files are also served at `/marionette-kit.js` and `/marionette-kit.css`. It reads `<meta name="marionette-orientation" content="portrait|landscape|any">` into `html_config.orientation`, which the app locks to. And it says where the screen came from in `html_config.source`.
-
-Open `http://localhost:8787/screen` in a desktop browser to work on the screen without the phone. It is the same document with the same bridge, carried over the gateway's WebSocket. It mirrors the first connected phone (or the one in `?phone=phone-2`), shows that phone's state, and acts as that phone: its presses reach consumers with `source: 'mirror'`. Each action it sends names that phone (`phoneId`): when the gateway moves the mirror to another phone, what it still had on the way for the old one is dropped instead of reaching the new one. A mirror whose actions name no phone (an older page, the SDK's `SimPhone`) has them dropped for a second after a move instead. It gets robot state and can play WebRTC video like the app, shows its own link to the gateway, and reconnects in place when the gateway restarts, reloading only when the screen itself changed. From another computer, add the pairing code (`/screen?token=K7Q2M9XD`). The document is also available as JSON at `GET /api/html-config`.
-
-The page talks to the app through `window.Marionette` (bridge version 1). Wait for it with the `marionette-ready` event if it isn't there yet:
-
-```js
-Marionette.sendAction('deadman', 'teleop.deadman', true);   // press; send false on release
-Marionette.sendAction('sensitivity', 'teleop.translationScale', 1.5);
-Marionette.sendAction('horn', 'horn.honk');                  // undeclared actions are relayed too
-
-// A value being dragged: update() sends the newest value at most once a frame, only when it changed,
-// marked live; end() sends the final value. The app repeats the latest sample while the finger rests.
-const drive = Marionette.stream('drive', 'base.drive');
-drive.update({ x: 0.5, y: -0.2 });   // half forward, a little right
-drive.end({ x: 0, y: 0 });           // let go: back to rest
-const speed = Marionette.stream('speed-limit', 'base.speedLimit');
-speed.update(62); speed.end();       // end() with no value sends the last one
-
-const unsubscribe = Marionette.on('pose', pose => renderPose(pose));          // operator frame, ~15 Hz
-Marionette.on('config', config => renderConfig(config));                      // config.phone is this phone
-Marionette.on('status', status => renderStatus(status.message));   // gateway replies, and feedback from consumers
-Marionette.on('camera_frame', frame => { panes[frame.cameraId].src = frame.dataUrl; });
-Marionette.on('tracking', t => renderTracking(t.state, t.reason, t.message)); // ARKit as the phone sees it
-Marionette.on('connection', c => renderGateway(c.gateway));
-Marionette.latest('config');   // the last config, or undefined
-Marionette.disconnect();       // back to the connect page
-```
-
-`on` calls a new listener straight away with the last value of that type, so a page that subscribes late still starts from the current state. `sendAction` accepts a control id, action name, an optional string, number, boolean or stick (`{x, y}`) value, and `{ live: true }` for a sample of a value being dragged (`stream` does this for you). For a control the config marks `hold: true`, send `true` on press and `false` on release; the app repeats the press while it is held and releases it if the document reloads or the app leaves the foreground. A drag is ended the same way: a stick at rest, a slider at its last value. A calibration capture names the step the gateway is waiting for (`config.calibration.step`) and a validation move names `config.calibration.check.step`. The app converts bridge actions into the version 1 WebSocket `action` message.
-
-## The gateway as one file
-
-```sh
-npm --workspace @marionette/backend run bundle      # writes apps/backend/dist/marionette-gateway.mjs
-node apps/backend/dist/marionette-gateway.mjs       # Node 20 or later, from any directory
-```
-
-The bundle carries every dependency, the default screen and the screen kit, so a robot can run the gateway without this repository (copy the one file). It reads the same environment as `npm run dev:backend`: `PORT` (`0` picks a free port, and the start line says which), the `MARIONETTE_*` variables above, and `MARIONETTE_LOG_DIR` for the diagnostics log, which otherwise goes to `./logs`. `dist/` is not committed; build it again after changing the gateway or the kit.
-
-## Developing without iPhones
-
-`tools/phone-sim.mts` is a scripted phone: it says hello, streams ARKit poses and sends actions like the app. `tools/act.mts` presses one control as a given phone, through a desktop mirror of it. Both are built on the SDK's `SimPhone` (`@marionette/sdk/testing`), which a test can also use directly. `HOST=` points them at another machine, and `TOKEN=` gives the pairing code there. From the repo root:
-
-```sh
-DEVICE=a ARM=left npx tsx tools/phone-sim.mts 8787 wander          # Phone 1, left arm
-DEVICE=b ARM=right PHASE=7 npx tsx tools/phone-sim.mts 8787 calibrate   # Phone 2: full calibration and validation, then wander
-npx tsx tools/act.mts 8787 phone-2 estop safety.estop true          # turn Phone 2's Stop on
-npx tsx tools/act.mts 8787 phone-1 drive base.drive '{"x":0.5,"y":0}' 2000   # push Phone 1's stick half forward for 2 s
-```
-
-For integrating a robot (what the streams are, where things run, and a recommended consumer for a bimanual mobile manipulator), see [docs/INTEGRATION.md](docs/INTEGRATION.md).
-
-## Checks
-
-```sh
-npm test
-npm run typecheck
-npm --workspace @marionette/viewer run build
-npm --workspace @marionette/backend run bundle
-python3 -m unittest discover consumers/ros2
-sdk/python/.venv/bin/python -m pytest sdk/python      # the Python SDK (see sdk/python/README.md to set up the venv)
-```
-
-Tests use real ARKit camera transforms to cover the camera-to-phone conversion, guided and quick calibration at arbitrary headings, and message validation. Gateway tests cover several phones at once (naming, colors, reconnects and takeovers, routing so no phone sees another's data, consoles hearing about every phone change), the verbatim input stream, holds and their inferred releases, consumer feedback relayed to one phone (and its mirrors) or to all of them, the `/screen` mirror and its address handling, camera views and the camera opt-out, custom layouts and live reloads, per-phone calibration on normal and limited tracking, cross-origin refusal, and malformed frames. They also cover robots (the roster and the 4409 refusal), robot state routing, replay and retention, robot screens (refusals, repeats, newest wins against a file), kit inlining with a fixture kit, pings, clock offsets and latency stamps, reconnecting in the same session or a new one, pairing (loopback, strict, codes in the address and the hello, 4401 on a wrong code or silence, the rate limit, HTTP, `/api/pairing`), WebRTC signaling (publishing, routing, pair checks, closes), the `/screen` mirror's bridge, and the single-file bundle run with plain `node`. The bridge tests cover the topic mapping, the latched per-phone state, what happens when the gateway is lost, and address parsing. The TypeScript SDK's tests cover the teleop math (scaled turns past 180°, rescaling and reframing without a jump, camera frames), the tracker's conformance fixtures (shared with the Python SDK), the client's outbox, pings and reconnects, and robots and simulated phones against the real gateway in-process: screens, state, notices, 4409, calibration, latency stamps and a gateway restart with Stop on, and `fetchPairing` in every pairing mode (the Python SDK's `fetch_pairing` has the same tests). Swift changes can be compile-checked with `xcodebuild -workspace apps/mobile/ios/Marionette.xcworkspace -scheme ArkitModule -sdk iphonesimulator build`.
+[MIT](LICENSE)

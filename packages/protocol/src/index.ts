@@ -863,7 +863,7 @@ export const phoneColor = (index: number): string => PHONE_COLORS[index] ?? EXTR
  * The default layout. Apart from the calibration buttons, which drive Marionette's own
  * calibration, every control is only a signal: the gateway keeps each phone's values
  * and forwards every press, and the consumer decides what Stop, the scale or a hold
- * mean. A custom screen can declare its own controls (see the README).
+ * mean. A custom screen can declare its own controls (see docs/SCREENS.md).
  */
 export const defaultConfig = (): ConfigMessage => ({ type: 'config', version: PROTOCOL_VERSION, sessionId: '', serverName: 'Marionette local gateway',
   controls: [

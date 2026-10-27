@@ -1,6 +1,6 @@
 # Integrating Marionette with a robot
 
-This is for whoever builds the robot side: here, the software for a bimanual wheeled humanoid with a lift. It covers what Marionette gives you, how to connect to it, the exact data, and a recommended way to turn that data into robot motion. The README covers running and developing Marionette itself.
+This is for whoever builds the robot side: here, the software for a bimanual wheeled humanoid with a lift. It covers what Marionette gives you, how to connect to it, the exact data, and a recommended way to turn that data into robot motion. [GATEWAY.md](GATEWAY.md) covers running the gateway, and [CONTRIBUTING.md](../CONTRIBUTING.md) developing Marionette itself.
 
 ## What Marionette is, and what it isn't
 
@@ -26,7 +26,7 @@ Marionette provides:
                                                  └─< camera processes push frames
 ```
 
-- **Gateway**: `apps/backend` (Node 22+, `npm install && npm --workspace @marionette/backend run start`), or the single file `npm --workspace @marionette/backend run bundle` builds (`node marionette-gateway.mjs`, Node 20+, nothing else needed; see the README). It listens on `0.0.0.0:8787` (`PORT` to change it). Run it on the robot's onboard computer if it has Wi-Fi reach to the operator. Your consumer then connects over localhost, and only the phones cross the network. Running it on an operator laptop also works, but the consumer then reaches it over the network and needs the pairing code. Phones need the gateway's pairing code (printed on start, with a QR code); clients on the gateway's own computer don't. There is no TLS, so keep it on a private network or a tailnet.
+- **Gateway**: `apps/backend` (Node 22+, `npm install && npm --workspace @marionette/backend run start`), or the single file `npm --workspace @marionette/backend run bundle` builds (`node marionette-gateway.mjs`, Node 20+, nothing else needed; see [GATEWAY.md](GATEWAY.md)). It listens on `0.0.0.0:8787` (`PORT` to change it). Run it on the robot's onboard computer if it has Wi-Fi reach to the operator. Your consumer then connects over localhost, and only the phones cross the network. Running it on an operator laptop also works, but the consumer then reaches it over the network and needs the pairing code. Phones need the gateway's pairing code (printed on start, with a QR code); clients on the gateway's own computer don't. There is no TLS, so keep it on a private network or a tailnet.
 - **Phones**: the iOS app in `apps/mobile`. The operator scans the gateway's QR code, picks it under Nearby, or types its IP and the pairing code.
 - **Consumer**: yours. Either connect to the WebSocket directly (any language), use the Python SDK (`sdk/python`, Option C), or run the provided ROS 2 bridge (`consumers/ros2/marionette_ros2_bridge.py`) and subscribe to topics.
 - **Camera producers**: small robot-side processes that push JPEG/PNG frames to the gateway (see Cameras).
@@ -70,6 +70,8 @@ A sample of the drive stick being pushed looks like this. `x` is forward and `y`
 - `bridge`: the bridge lost the gateway and released every hold and drag it knew about.
 
 `repeat: true` marks the 200 ms re-send of a held button, or the 50 ms re-send of a slider or stick the operator is touching but not moving. `live: true` marks a sample of a drag in progress (see [Live values](#live-values-sliders-and-sticks)). Typed message definitions would be a sensible follow-up; for now the JSON is the contract.
+
+The bridge reconnects with backoff. While the gateway is unreachable it does not leave the last values standing: each phone's tracking goes `unavailable`, every phone reads as disconnected, and each hold or drag the gateway had reported gets a release on `buttons` with `"source":"bridge"` (a stick back at rest).
 
 The bridge has only been exercised in dry-run mode (it was written without a ROS install). Expect to verify it on the robot.
 
@@ -288,7 +290,7 @@ Build a single node that owns all decisions:
 
 The phone screen is an HTML page served by the gateway, and the app has no native controls. To give the operator robot-specific controls:
 
-1. Copy `apps/backend/src/sample-controls.html` to `config/humanoid.html` and edit it. It uses the `window.Marionette` bridge, documented in the README. For a complete robot screen on the screen kit (a hold-to-move pad, Stop, calibration, cameras over WebRTC and robot state), see `sdk/python/examples/sim_robot.html`; `docs/SCREEN-KIT.md` documents the kit. A robot can send its screen itself when it connects, so the screen lives and deploys with the robot.
+1. Copy `apps/backend/src/sample-controls.html` to `config/humanoid.html` and edit it. It uses the `window.Marionette` bridge, documented in [SCREENS.md](SCREENS.md). For a complete robot screen on the screen kit (a hold-to-move pad, Stop, calibration, cameras over WebRTC and robot state), see `sdk/python/examples/sim_robot.html`; `docs/SCREEN-KIT.md` documents the kit. A robot can send its screen itself when it connects, so the screen lives and deploys with the robot.
 2. Declare your controls in the page, so they get per-phone values and hold liveness:
    ```html
    <script type="application/json" id="marionette-config">

@@ -97,7 +97,7 @@ def gateway_env(
     log_dir: str | Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """The environment the gateway reads (see the README): ``PORT`` and the ``MARIONETTE_*`` variables, over this
+    """The environment the gateway reads (see docs/GATEWAY.md): ``PORT`` and the ``MARIONETTE_*`` variables, over this
     process's environment and ``env``. Paths are made absolute here, so the gateway's working directory doesn't
     matter. The diagnostics log goes to ``<home>/logs`` (``~/.marionette/logs``) unless ``log_dir`` or
     ``MARIONETTE_LOG_DIR`` says otherwise."""

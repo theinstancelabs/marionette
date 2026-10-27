@@ -1,6 +1,6 @@
 # The screen kit
 
-The phone shows an HTML screen that the gateway sends, and the screen talks to the app through `window.Marionette` (the page bridge; see "The phone screen is HTML" in the README). The screen kit is a set of parts for building such a screen: hold buttons, live sliders and sticks, Stop, the status strip, toasts, robot state, cameras (JPEG or WebRTC), guided calibration, sheets and generic control rows. They come from Marionette's default screen (`apps/backend/src/sample-controls.html`, which is now built on the kit), so they behave the way the default screen already does on the phone.
+The phone shows an HTML screen that the gateway sends, and the screen talks to the app through `window.Marionette` (the page bridge; see [SCREENS.md](SCREENS.md)). The screen kit is a set of parts for building such a screen: hold buttons, live sliders and sticks, Stop, the status strip, toasts, robot state, cameras (JPEG or WebRTC), guided calibration, sheets and generic control rows. They come from Marionette's default screen (`apps/backend/src/sample-controls.html`, which is now built on the kit), so they behave the way the default screen already does on the phone.
 
 It is a set of parts, not a framework. Use any of them on their own, in your own layout. None of them assumes the default screen's DOM, and your screen keeps its own script, markup and style.
 

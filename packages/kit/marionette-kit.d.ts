@@ -2,7 +2,7 @@
  * Types for Marionette phone screens: the page bridge (`window.Marionette`, bridge version 1) and the screen kit
  * (`window.MarionetteKit`). Self-contained, so a screen author can point an editor at this one file:
  *   /// <reference path="marionette-kit.d.ts" />
- * The shapes mirror `@marionette/protocol`; docs/SCREEN-KIT.md and the README ("The phone screen is HTML") describe them.
+ * The shapes mirror `@marionette/protocol`; docs/SCREEN-KIT.md and docs/SCREENS.md describe them.
  */
 export {};
 

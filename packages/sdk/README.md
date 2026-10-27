@@ -179,7 +179,7 @@ await gateway.close();
 - `SimPhone` says hello with a device id and session, and streams raw ARKit poses at 60 Hz, converted from operator-frame targets (`moveTo`, `glideTo`) through the protocol's `rawPoseFor`, or placed physically relative to where it started (`place`, `glide`). It answers pings, optionally with a clock offset (`clockOffsetMs`). The controls: `press`/`release`/`hold`, `tap`, `set`, `drag`/`stick`/`letGo`, `act`, and `request(action, value)`, which waits for the gateway's reply. Calibration: `calibrate()`, `validate()`, `quickOrigin()`. Connection: `setTracking`, `disconnect`, `reconnect`. With `mirrorOf: 'phone-1'` it is a desktop mirror instead. `messages`, `statuses()`, `robotStates()`, `config` and `waitFor()` show what it received.
 - `messages.config / phone / pose / input / robotState` build gateway messages for unit tests.
 
-`tools/phone-sim.mts` and `tools/act.mts` are built on `SimPhone` (see the README's "Developing without iPhones").
+`tools/phone-sim.mts` and `tools/act.mts` are built on `SimPhone` (see "Try it without an iPhone" in the [README](../../README.md#try-it-without-an-iphone)).
 
 ## Conformance fixtures
 

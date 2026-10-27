@@ -36791,7 +36791,7 @@ function parseLayout(html) {
   const pick2 = (key, kept, defaults) => {
     const list = declared[key];
     if (!Array.isArray(list)) return defaults;
-    if (kept.length < list.length) warnings.push(`ignored ${list.length - kept.length} of ${list.length} ${key} (each needs the fields in the README)`);
+    if (kept.length < list.length) warnings.push(`ignored ${list.length - kept.length} of ${list.length} ${key} (each needs the fields in docs/SCREENS.md)`);
     return kept;
   };
   const controls = pick2("controls", checked.controls, fallback.controls);
