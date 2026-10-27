@@ -10,10 +10,28 @@
     "ios": {
       "supportsTablet": false,
       "deploymentTarget": "16.4",
-      "bundleIdentifier": "com.anonymous.marionette"
+      "bundleIdentifier": "com.instancelabs.marionette",
+      "buildNumber": "1",
+      "appleTeamId": "U4GRN6C57F",
+      "icon": {
+        "light": "./assets/icon.png",
+        "dark": "./assets/icon-dark.png",
+        "tinted": "./assets/icon-tinted.png"
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "plugins": [
-      "./app.plugin.js"
+      "./app.plugin.js",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 120,
+          "backgroundColor": "#fafaf6"
+        }
+      ]
     ]
   }
 }

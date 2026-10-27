@@ -46,6 +46,22 @@ In the iPhone app, type the Mac's IP (for example `192.168.1.20`) and tap **Conn
 
 The iOS permission string and ARKit module are registered by `app.plugin.js` and `modules/arkit`. Use a physical iPhone for ARKit world tracking; the simulator only exercises the limited fallback and cannot validate real tracking or calibration geometry.
 
+`app.json` sets the bundle ID (`com.instancelabs.marionette`) and the signing team (`ios.appleTeamId`); change both to build under another Apple team.
+
+## Ship to TestFlight
+
+The app icon and launch screen are drawn from SVGs in `apps/mobile/assets/`: `icon.svg`, plus `icon-dark.svg` and `icon-tinted.svg` for the iOS dark and tinted home screens, and `splash-icon.svg`. The mark is the same one the connect page shows. After editing one, run `npm run icons` in `apps/mobile` to render the PNGs (it uses headless Google Chrome).
+
+```sh
+cd apps/mobile
+npm run testflight              # writes dist/testflight/Marionette.ipa
+npm run testflight -- --upload  # builds and uploads it to App Store Connect
+```
+
+The script regenerates `ios/` from `app.json` (`expo prebuild --clean`), stamps the build number with the UTC date and time (for example `20261027.0930`, so every build is new), archives a Release build and exports it signed for App Store Connect. Xcode must be signed in to the team (Xcode › Settings › Accounts); on first use it registers the App ID and creates the distribution certificate and profile. `app.json` declares no non-exempt encryption, so TestFlight doesn't ask the export-compliance question. For a new version, raise `version` in `app.json`.
+
+Before the first upload, create the app once in App Store Connect: Apps › + › New App, platform iOS, bundle ID `com.instancelabs.marionette`, any SKU (for example `marionette-ios`). The App Store name has to be unique across the store; the home-screen name stays "Marionette" either way. When an upload has finished processing, add internal testers under TestFlight. External testers also need the Test Information page (what to test, a feedback email) and a short beta review.
+
 ## Protocol
 
 `packages/protocol/src/index.ts` is the single source of truth. Pose packets contain `version`, `sessionId`, `seq`, monotonic timestamp, translation, quaternion, covariance, `trackingState`, calibration version, heartbeat and (on everything the gateway forwards) `phoneId`. The gateway rejects unknown versions, malformed values, and non-monotonic sequence numbers within a session; a new phone session may restart at sequence zero. Controls are declarative (`button`, `toggle`, `select`, `slider`, `joystick`, with `hold: true` for press-and-hold buttons), so a layout can change from the gateway or the screen without a new app binary. The app drops individual controls it cannot render instead of rejecting a newer layout. Every gateway reply carries `values.accepted` (true or false).

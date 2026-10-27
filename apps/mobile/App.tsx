@@ -154,16 +154,16 @@ export default function App() {
 const PAPER='#fafaf6', GRID='#e6ebf2', INK='#2e3033', INK2='#6b6f73', RULE='#cfd3d6', BLUE='#2f53b5', RED='#cf3f35';
 /** The faint 24 pt graph-paper grid behind native pages, matching the gateway's screen. */
 function Paper(){ const {width,height}=useWindowDimensions(); return <View style={StyleSheet.absoluteFill} pointerEvents="none">{Array.from({length:Math.ceil(height/24)},(_,i)=><View key={`h${i}`} style={[styles.gridH,{top:i*24}]}/>)}{Array.from({length:Math.ceil(width/24)},(_,i)=><View key={`v${i}`} style={[styles.gridV,{left:i*24}]}/>)}</View>; }
-/** The Marionette mark: a control bar with three strings, the middle one holding a ring. */
-function Mark(){ return <View style={styles.mark}><View style={styles.markBar}/><View style={styles.markHandle}/><View style={[styles.markString,{left:4,height:9}]}/><View style={[styles.markString,{left:12,top:10,height:6}]}/><View style={[styles.markString,{left:20,height:11}]}/><View style={styles.markRing}/></View>; }
+/** The Marionette mark, as on the app icon (assets/icon.svg): a control bar whose strings end in beads, the middle one holding a blue ring. */
+function Mark(){ return <View style={styles.mark}><View style={[styles.markString,{left:3.2,height:13.8}]}/><View style={[styles.markString,{left:12.4,height:8}]}/><View style={[styles.markString,{left:21.5,height:16}]}/><View style={[styles.markBead,{left:2.6,top:19.8}]}/><View style={[styles.markBead,{left:20.8,top:22.1}]}/><View style={styles.markHandle}/><View style={styles.markBar}/><View style={styles.markRing}/></View>; }
 
 const styles=StyleSheet.create({
   flex:{flex:1}, live:{flex:1,backgroundColor:PAPER}, webview:{flex:1,backgroundColor:PAPER}, loading:{position:'absolute',top:0,left:0,right:0,bottom:0,alignItems:'center',justifyContent:'center',backgroundColor:PAPER},
   page:{flex:1,backgroundColor:PAPER}, content:{paddingHorizontal:22,paddingBottom:40},
   gridH:{position:'absolute',left:0,right:0,height:StyleSheet.hairlineWidth,backgroundColor:GRID}, gridV:{position:'absolute',top:0,bottom:0,width:StyleSheet.hairlineWidth,backgroundColor:GRID},
   markRow:{flexDirection:'row',alignItems:'center',gap:10,marginTop:40}, markText:{color:INK,fontSize:18,fontWeight:'600'},
-  mark:{width:26,height:26}, markBar:{position:'absolute',left:3,right:3,top:5,height:2,borderRadius:1,backgroundColor:INK}, markHandle:{position:'absolute',left:12,top:1,width:2,height:5,borderRadius:1,backgroundColor:INK},
-  markString:{position:'absolute',top:7,width:0,borderLeftWidth:1.5,borderStyle:'dashed',borderColor:INK}, markRing:{position:'absolute',left:9.5,top:16,width:7,height:7,borderRadius:4,borderWidth:1.8,borderColor:INK},
+  mark:{width:26,height:26}, markBar:{position:'absolute',left:2.5,right:2.5,top:5.8,height:2.9,borderRadius:1.45,backgroundColor:INK}, markHandle:{position:'absolute',left:11.9,top:1.6,width:2.2,height:5.6,borderRadius:1.1,backgroundColor:INK},
+  markString:{position:'absolute',top:7.2,width:1.2,borderRadius:0.6,backgroundColor:INK}, markBead:{position:'absolute',width:2.4,height:2.4,borderRadius:1.2,backgroundColor:INK}, markRing:{position:'absolute',left:8.7,top:14.4,width:8.6,height:8.6,borderRadius:4.3,borderWidth:1.8,borderColor:BLUE},
   title:{color:INK,fontSize:30,lineHeight:35,fontWeight:'600',letterSpacing:-0.3,marginTop:56,marginBottom:10,maxWidth:320},
   body:{color:INK2,fontSize:16,lineHeight:23,marginBottom:28,maxWidth:300},
   input:{backgroundColor:'#fff',borderColor:INK,borderWidth:1.5,borderRadius:12,paddingHorizontal:16,paddingVertical:15,fontFamily:'Menlo',fontSize:20,color:INK},

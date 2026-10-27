@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Tinted app icon: grayscale on black; iOS applies the tint. -->
+  <rect width="1024" height="1024" fill="#000000"/>
+  <g fill="none" stroke="#ffffff" stroke-linecap="round">
+    <path d="M256 320V704M768 320V768M512 320V544" stroke-width="30"/>
+    <path d="M512 192V320" stroke-width="60"/>
+    <path d="M256 320H768" stroke-width="80"/>
+    <circle cx="512" cy="640" r="96" stroke="#c8c8c8" stroke-width="50"/>
+  </g>
+  <g fill="#ffffff"><circle cx="256" cy="704" r="32"/><circle cx="768" cy="768" r="32"/></g>
+</svg>

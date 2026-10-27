@@ -212,3 +212,26 @@ Design (same shape as holds: Marionette relays and tracks liveness, the consumer
 - **Deployed:** gateway 8787 restarted on the new code (no clients connected). Device build r10 installed on the iPhone.
 - **Follow-up (user):** the fixed graph-paper background behind the 3D view was distracting (it stayed put while the scene orbited). Removed it from `.space`; the scene's own floor grid remains and can be hidden with the grid toggle.
 - **Not done:** on-device feel of the stick (touch latency, Wi-Fi gaps on the real network); no reviewer subagent this round.
+
+# Round 7: app icon and TestFlight
+
+## Plan
+- [x] Logo: build the icon from the connect page's existing mark (control bar, strings, ring) on the app's graph paper. SVG sources plus dark and tinted variants and a launch-screen mark; `npm run icons` renders the PNGs with headless Chrome.
+- [x] Connect page mark redrawn to match the icon (solid strings with beads, blue ring).
+- [x] Launch screen: `expo-splash-screen` with the mark on the paper color, so launch matches the first page instead of flashing white.
+- [x] Release config in `app.json`: bundle ID `com.instancelabs.marionette`, team `U4GRN6C57F`, build number, icon variants, `usesNonExemptEncryption: false`. Remove the unused Expo template images.
+- [x] `npm run testflight [-- --upload]`: prebuild --clean, timestamp build number, archive, export for App Store Connect.
+- [x] Docs: README "Ship to TestFlight".
+- [x] Verify: typecheck, lint, archive and export an App Store IPA; check icon, Info.plist and signing in the export; install on the iPhone.
+- [ ] Upload: needs the App Store Connect app record (user) and the user's go-ahead.
+
+## Review (round 7)
+- **Logo:** the connect page's mark (control bar, three strings, a blue ring) drawn bold on the app's graph paper. Light, dark and tinted icons and a launch-screen mark, all from SVGs in `apps/mobile/assets/`. Strokes were thickened after a first pass lost the strings at 29 px. The connect page mark now matches the icon.
+- **Launch screen:** `expo-splash-screen` (installed through the workspace root; one package) shows the mark on `#fafaf6`.
+- **Release config:** bundle ID `com.instancelabs.marionette`, team `U4GRN6C57F`, `ITSAppUsesNonExemptEncryption = false`, version 1.0.0. The unused Expo template images are gone.
+- **`npm run testflight`:** prebuild --clean, build number from the UTC time, archive, export (`--upload` to send). First run: build `20261027.0859` archived and exported with no changes needed. Xcode registered the App ID and made the App Store profile on the way.
+- **Checked in the IPA:** signed "Apple Distribution: Yashas Salankimatt (U4GRN6C57F)", profile "iOS Team Store Provisioning Profile: com.instancelabs.marionette", `beta-reports-active` true, `get-task-allow` false, JS bundle included. Assets.car has the light, dark and tinted AppIcon plus the splash mark.
+- **Device:** a development-signed copy of the same project is installed and launches on the iPhone (next to the old `com.anonymous.marionette` app, which is untouched).
+- **Checks:** mobile typecheck and lint, gateway 28, viewer 70, protocol 22.
+- **Not done:** the upload. It needs the app record in App Store Connect and the user's go-ahead. Apple's server-side checks (privacy manifest, purpose strings) only run on upload.
+- **Follow-up (user):** the bundle ID is `com.instancelabs.marionette`, not `io.`. Rebuilt as build `20261027.0905` (App Store profile for the `com.` ID, checked as above). The phone now has only the `com.` app; the `io.` and the old `com.anonymous` apps are uninstalled. The `io.instancelabs.marionette` App ID Xcode registered stays in the developer portal, unused.

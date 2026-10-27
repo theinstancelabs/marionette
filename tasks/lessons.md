@@ -1,5 +1,9 @@
 # Lessons
 
+## 2026-10-27 — Permanent identifiers: use the user's convention, flag before registering
+- **What happened:** For TestFlight I set the bundle ID to `io.instancelabs.marionette`, derived from the website domain (instancelabs.io), and let the archive register it with Apple. The user wanted `com.instancelabs.marionette`.
+- **Rule:** Instance Labs bundle IDs are `com.instancelabs.<app>`. For any identifier that becomes permanent (bundle IDs, App Store records, package names), state the exact value in the plan before anything registers it, and don't infer it from a domain.
+
 ## 2026-10-27 — Don't dismiss a visual symptom with aggregate numbers
 - **What happened:** The user said the phone in the viewer moved "the same directions" after calibration, then "forward goes upwards in Z". I answered "not a bug" using the gateway's numbers (calibrated heading 3.7° from default). The numbers were right, but the user was describing what the **viewer** drew: forward motion going into an angled 3D view looks like a lift, and the axes had no labels.
 - **Rule:** When the user reports what they *see*, look at that same view with the same data (screenshot the viewer while replaying the motion) before concluding. Make the display unambiguous (labels, top/side views, a numeric "moving along" readout) rather than explaining it away.

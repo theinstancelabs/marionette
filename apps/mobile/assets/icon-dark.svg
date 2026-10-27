@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Dark-mode app icon. -->
+  <rect width="1024" height="1024" fill="#17191c"/>
+  <path d="M64 0V1024M0 64H1024M128 0V1024M0 128H1024M192 0V1024M0 192H1024M256 0V1024M0 256H1024M320 0V1024M0 320H1024M384 0V1024M0 384H1024M448 0V1024M0 448H1024M512 0V1024M0 512H1024M576 0V1024M0 576H1024M640 0V1024M0 640H1024M704 0V1024M0 704H1024M768 0V1024M0 768H1024M832 0V1024M0 832H1024M896 0V1024M0 896H1024M960 0V1024M0 960H1024" stroke="#25292f" stroke-width="3"/>
+  <g fill="none" stroke="#ecebe5" stroke-linecap="round">
+    <path d="M256 320V704M768 320V768M512 320V544" stroke-width="30"/>
+    <path d="M512 192V320" stroke-width="60"/>
+    <path d="M256 320H768" stroke-width="80"/>
+    <circle cx="512" cy="640" r="96" stroke="#7f9cf5" stroke-width="50"/>
+  </g>
+  <g fill="#ecebe5"><circle cx="256" cy="704" r="32"/><circle cx="768" cy="768" r="32"/></g>
+</svg>
