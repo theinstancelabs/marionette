@@ -35,6 +35,8 @@ describe('pairing',()=>{
     const eager=await open(); eager.ws.send(JSON.stringify({ type:'ping', version:PROTOCOL_VERSION, id:1, sentAt:1 })); expect((await eager.closed).code).toBe(4401); expect(eager.messages).toEqual([]);
     const bare=await open(); hello(bare,{ role:'console' }); expect((await bare.closed).code).toBe(4401);
     const wrong=await open(); hello(wrong,{ role:'phone', deviceId:'a', token:'K7Q2-M9XA' }); expect(await wrong.closed).toEqual({ code:4401, reason:'Wrong pairing code' }); expect(wrong.messages).toEqual([]);
+    // A hello with the code but a robot id the gateway can't take is let in and told why, not refused as unpaired.
+    const misnamed=await open(); hello(misnamed,{ role:'robot', robotId:'Axol!', token:'K7Q2M9XD' }); await waitFor(()=>misnamed.statuses('hello').length===1); expect(misnamed.statuses('hello')[0].values.accepted).toBe(false); misnamed.ws.close();
     // The code in the hello, as typed, or in the address.
     const a=await open(); hello(a,{ role:'phone', deviceId:'a', token:' k7q2-m9xd ' }); await waitFor(()=>!!a.configOf('phone-1')); expect(a.messages[0].type).toBe('html_config');
     const viewer=await open({}, '?token=k7q2m9xd'); await waitFor(()=>viewer.messages.some(m=>m.type==='html_config')); hello(viewer,{ role:'console' }); await waitFor(()=>!!viewer.configOf()); expect(viewer.configOf().phones).toHaveLength(1);

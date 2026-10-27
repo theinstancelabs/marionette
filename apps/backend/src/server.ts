@@ -625,7 +625,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
     const type = message && typeof message === 'object' ? (message as { type?: unknown }).type : undefined;
     if (type === 'pose') { if (validatePose(message)) handlePose(socket, client, message, receivedAt); }
     else if (type === 'action') { if (validateAction(message)) handleAction(socket, client, message, receivedAt); }
-    else if (type === 'hello') { if (validateHello(message)) handleHello(socket, client, message); }
+    else if (type === 'hello') { if (validateHello(message)) handleHello(socket, client, message); else send(socket, status('hello ignored: role must be phone, console or robot; only a robot has a robotId, of lower-case letters, digits and dashes', undefined, 'hello', { accepted: false })); }
     else if (type === 'camera_frame') { if (validateCameraFrame(message)) handleCameraFrame(message); }
     else if (type === 'status') { if (validateStatus(message)) handleStatus(socket, client, message); }
     else if (type === 'ping') { if (validatePing(message)) send(socket, { type: 'pong', version: PROTOCOL_VERSION, id: message.id, sentAt: message.sentAt, at: stamp() }); }
@@ -689,8 +689,9 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
       const receivedAt = stamp(); if (refused) return;
       let message: unknown; try { message = JSON.parse(data.toString()); } catch { if (clients.has(socket)) send(socket, status('Malformed message ignored')); else unpaired('Pairing code required'); return; }
       if (!clients.has(socket)) {
-        const hello = message && typeof message === 'object' && (message as { type?: unknown }).type === 'hello' && validateHello(message) ? message : undefined;
-        const admitted = hello ? admit(address, hello.token) : false;
+        // The code decides; a hello that carries it but is otherwise malformed is let in and answered like any other.
+        const hello = message && typeof message === 'object' && (message as { type?: unknown }).type === 'hello' ? message as { token?: unknown } : undefined;
+        const admitted = typeof hello?.token === 'string' && hello.token.length <= 64 ? admit(address, hello.token) : false;
         if (admitted !== true) { unpaired(admitted || 'Pairing code required'); return; }
         clearTimeout(silence); welcome();
       }

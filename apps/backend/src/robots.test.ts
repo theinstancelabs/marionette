@@ -20,6 +20,7 @@ describe('robots',()=>{
     axol.ws.close(); await waitFor(()=>viewer.configOf().robots[0].connected===false); expect(viewer.configOf().robots[0].name).toBe('Axol');
     // Once it has gone, the next connection takes its place.
     const again=await robot('axol'); await waitFor(()=>viewer.configOf().robots[0].connected===true); expect(viewer.configOf().robots).toHaveLength(1); expect(viewer.configOf().robots[0].name).toBe('Axol');
+    const misnamed=await open(); hello(misnamed,{ role:'robot', robotId:'Axol!' }); await waitFor(()=>misnamed.statuses('hello').length===1); expect(misnamed.statuses('hello')[0].values.accepted).toBe(false); misnamed.ws.close();
     expect(log.list.filter(r=>r.kind==='robot').map(r=>r.msg)).toEqual(['Robot Axol (axol) joined','refused a second connection as robot axol (4409): it is already connected','Robot Axol (axol) disconnected','Robot Axol (axol) reconnected']);
     for (const c of [viewer,again]) c.ws.close(); });
   it('gives a robot what a console gets (camera frames only if it asks), and relays its structured status to the phones only', async()=>{ await start(); const a=await phone('a'); const axol=await robot('axol'); const watcher=await robot('cam-bot',{ cameras:true }); const viewer=await connect();
