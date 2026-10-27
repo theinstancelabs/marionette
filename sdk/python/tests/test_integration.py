@@ -12,9 +12,11 @@ import numpy as np
 import pytest
 import websockets.sync.client
 
+import marionette.client as client_module
 from helpers import yaw
 from marionette import GatewayClient, PhoneTracker, RobotLink
 from marionette.frames import apply_phone_frame
+from marionette.protocol import wall_ms
 from marionette.teleop import exp_rotation, quaternion_to_matrix
 from marionette.testing import Gateway, SimPhone, wait_until
 
@@ -159,6 +161,25 @@ def test_the_clock_offset_and_latency_stamps(gateway: Gateway) -> None:
             assert gateway.state()["phones"][0]["link"]["offsetKnown"] is True
     finally:
         link.stop()
+
+
+def test_a_clock_step_on_the_robot_never_leaves_a_stale_offset(gateway: Gateway, monkeypatch: pytest.MonkeyPatch) -> None:
+    shift = {"ms": 0.0}
+    monkeypatch.setattr(client_module, "wall_ms", lambda: wall_ms() + shift["ms"])
+    with GatewayClient(gateway.url, ping_every=0.2) as client:
+        wait_until(lambda: len(client._samples) >= 5, 5, "five pongs")
+        before = client.offset_ms
+        assert before is not None and abs(before) < 5
+        for step in (-2000.0, 3000.0):  # chrony steps the clock back, then someone sets it forward
+            shift["ms"] += step
+            seen: list[float | None] = []
+            started = time.monotonic()
+            while time.monotonic() - started < 1.0:
+                seen.append(client.offset_ms)
+                time.sleep(0.005)
+            # From the moment the clock moves the offset is unknown, until it is measured again (well within a second).
+            assert all(abs(offset - (before - shift["ms"])) < 5 for offset in seen if offset is not None), seen
+            assert seen[-1] is not None and 0 <= client.rtt_ms < 50  # type: ignore[operator]
 
 
 def test_simphone_poses_match_the_gateways_conversion_and_calibration(gateway: Gateway) -> None:

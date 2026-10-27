@@ -68,7 +68,9 @@ own computer no code is needed.
   replaces one still waiting. Camera frames wait until every small message has gone. While disconnected, sending
   returns False and drops the message.
 - **Clocks.** It pings the gateway every second. `offset_ms` is the gateway's clock minus this computer's (from the
-  fastest of the last 16 round trips) and `rtt_ms` the last round trip. It answers the gateway's pings too.
+  fastest of the last 16 round trips) and `rtt_ms` the last round trip, timed on the monotonic clock. When this
+  computer's clock is set (NTP stepping it, say), `offset_ms` is None from that moment until it is measured again,
+  which it is at once. It answers the gateway's pings too.
 - **asyncio.** `await client.run()` runs it inside your own loop (stop it with `await client.aclose()`), or
   `async with GatewayClient(…) as client:`.
 

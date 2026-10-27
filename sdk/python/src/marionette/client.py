@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
@@ -40,6 +41,14 @@ Event = Literal["message", "connect", "lost"]
 _MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 _MAX_UNKEYED = 2000
 _SAMPLES = 16
+# This computer's wall clock moving this much against its monotonic clock means it was set (NTP stepping it, say).
+# Slewing moves it well under a millisecond a second.
+_STEP_MS = 20.0
+
+
+def _clocks() -> tuple[float, float]:
+    """This computer's wall clock (as the protocol stamps it) and its monotonic clock, in ms."""
+    return wall_ms(), time.monotonic() * 1000.0
 
 
 def _connect_options() -> dict[str, Any]:
@@ -108,8 +117,7 @@ class GatewayClient:
         self.error: str | None = None
         """Why the last attempt failed, in words an operator can act on; None once connected."""
         self.close_code: int | None = None
-        self.offset_ms: float | None = None
-        """The gateway's clock minus this computer's, in ms (from the fastest of the last 16 pings); None until known."""
+        self._offset_ms: float | None = None
         self.rtt_ms: float | None = None
         """The last measured round trip to the gateway, in ms."""
         self.config: dict[str, Any] | None = None
@@ -126,7 +134,10 @@ class GatewayClient:
         self._bulk: dict[str, str] = {}
         self._keys = itertools.count()
         self._samples: deque[tuple[float, float]] = deque(maxlen=_SAMPLES)
-        self._in_flight: dict[int, float] = {}
+        self._in_flight: dict[int, tuple[float, float]] = {}
+        self._skew: float | None = None
+        """This computer's wall clock minus its monotonic clock (ms) at the last pong; a jump in it is a clock step."""
+        self._remeasure: asyncio.Event | None = None
         self._ping_ids = itertools.count(1)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: int | None = None
@@ -139,6 +150,16 @@ class GatewayClient:
         self._thread: threading.Thread | None = None
         self._ws: Any = None
         self._companions: list[Callable[[], Awaitable[Any]]] = []
+
+    @property
+    def offset_ms(self) -> float | None:
+        """The gateway's clock minus this computer's, in ms (from the fastest of the last 16 pings); None until known,
+        and from the moment this computer's clock is set until it is measured again (within a round trip)."""
+        offset, skew = self._offset_ms, self._skew
+        if offset is None or skew is None:
+            return None
+        wall, monotonic = _clocks()
+        return offset if abs(wall - monotonic - skew) <= _STEP_MS else None
 
     # -- listeners ---------------------------------------------------------------------------------------------------
 
@@ -275,6 +296,7 @@ class GatewayClient:
         self._loop = asyncio.get_running_loop()
         self._loop_thread = threading.get_ident()
         self._wake, self._stop, self._ready, self._finished = asyncio.Event(), asyncio.Event(), asyncio.Event(), asyncio.Event()
+        self._remeasure = asyncio.Event()
         if self._stopping:
             self._stop.set()
         delay, attempt = 0.5, 0
@@ -329,7 +351,7 @@ class GatewayClient:
             self._ws = ws
             self._samples.clear()
             self._in_flight.clear()
-            self.offset_ms = None
+            self._offset_ms = None
             try:
                 await ws.send(dumps(self._hello()))
             except ConnectionClosed:
@@ -438,24 +460,43 @@ class GatewayClient:
                 await ws.send(data)
 
     async def _ping_loop(self, ws: Any) -> None:
+        assert self._remeasure is not None
         while True:
             ping_id = next(self._ping_ids)
-            sent = wall_ms()
-            self._in_flight[ping_id] = sent
+            sent, monotonic = _clocks()
+            self._in_flight[ping_id] = (sent, monotonic)
             while len(self._in_flight) > _SAMPLES:
                 self._in_flight.pop(next(iter(self._in_flight)))
             await ws.send(dumps({"type": "ping", "version": PROTOCOL_VERSION, "id": ping_id, "sentAt": sent}))
-            await asyncio.sleep(self.ping_every)
+            # Every ping_every seconds, or at once when a clock step threw the samples away.
+            try:
+                await asyncio.wait_for(self._remeasure.wait(), self.ping_every)
+            except TimeoutError:
+                pass
+            self._remeasure.clear()
 
     def _pong(self, message: dict[str, Any]) -> None:
         sent = self._in_flight.pop(message.get("id"), None)  # type: ignore[arg-type]
         at = message.get("at")
-        if sent is None or not isinstance(at, (int, float)):
+        if sent is None or not isinstance(at, (int, float)) or isinstance(at, bool):
             return
-        rtt = wall_ms() - sent
+        (sent_wall, sent_monotonic), (wall, monotonic) = sent, _clocks()
+        # The round trip on the monotonic clock: setting the wall clock meanwhile doesn't stretch or shrink it.
+        rtt = monotonic - sent_monotonic
         self.rtt_ms = rtt
-        self._samples.append((rtt, at - (sent + rtt / 2)))
-        self.offset_ms = min(self._samples)[1]
+        skew = wall - monotonic
+        if self._skew is not None and abs(skew - self._skew) > _STEP_MS:
+            # This computer's clock was set since the last pong: every sample measured the old clock. Measure again.
+            self._samples.clear()
+            self._offset_ms = None
+        self._skew = skew
+        if abs(sent_wall - sent_monotonic - skew) > _STEP_MS:
+            # Set during this round trip: the ping's stamp is on the old clock.
+            if self._remeasure is not None:
+                self._remeasure.set()
+            return
+        self._samples.append((rtt, at - (sent_wall + rtt / 2)))
+        self._offset_ms = min(self._samples)[1]
 
     def _fail(self, message: str) -> None:
         if message != self.error:
