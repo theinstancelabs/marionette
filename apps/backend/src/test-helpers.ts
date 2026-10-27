@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION, matrixToQuaternion, type ActionMessage, type ControlV
 /** Real gateways on ephemeral ports, real sockets. Tests never touch the real `~/.marionette`. */
 export const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'marionette-home-'));
 process.env.MARIONETTE_HOME = testHome;
+process.once('exit', () => fs.rmSync(testHome, { recursive: true, force: true }));
 
 export let gateway: ReturnType<typeof createServer> | undefined; export let port: number;
 export async function stopGateway() { if (gateway) await gateway.close(); gateway = undefined; }
