@@ -319,7 +319,11 @@ export type HtmlBridgeAction = {
   type: 'action'; version: typeof HTML_BRIDGE_VERSION; controlId: string; action: string;
   value?: ControlValue; live?: true; sentAt: number;
 };
-/** A gateway reply. `phoneId` names the phone it concerns; phones only receive their own and gateway-wide ones. */
+/**
+ * A gateway reply, or feedback a console sends to the phone screens. `phoneId` names the phone it concerns;
+ * phones only receive their own and gateway-wide ones. The gateway relays a console's status to the phone it
+ * names and that phone's `/screen` mirrors, or to every phone and mirror without `phoneId`, never to consoles.
+ */
 export type StatusMessage = { type: 'status'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId?: string; message: string; values?: Record<string, string | number | boolean>; phoneId?: string };
 export type CameraFrameMessage = { type: 'camera_frame'; version: typeof PROTOCOL_VERSION; sessionId: string; cameraId: string; dataUrl: string; capturedAt: number };
 /**
