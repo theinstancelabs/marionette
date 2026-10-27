@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marionette-sdk"
+version = "0.1.0"
+description = "Parts for robots driven by Marionette: a gateway connection, phone tracking, teleop math, robot screens and state, WebRTC video, and test phones."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Instance Labs" }]
+dependencies = [
+    "websockets>=13",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# WebRTC video from the robot (VideoPublisher).
+video = ["aiortc>=1.14"]
+# Node for the bundled gateway, for robots without Node 20+ on PATH.
+gateway = ["nodejs-wheel-binaries>=22"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "aiortc>=1.14",
+]
+
+[project.scripts]
+marionette-gateway = "marionette.gateway:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marionette"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/marionette", "README.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:aioice.*", "ignore::DeprecationWarning:pyee.*"]

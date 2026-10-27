@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from marionette_ros2_bridge import gateway_url
+from marionette_ros2_bridge import gateway_targets, gateway_url, hello
 from marionette_topics import Topics, slug
 
 ROSTER = {"type": "config", "phones": [{"id": "phone-1", "name": "Phone 1", "color": "#c98200", "connected": True}, {"id": "phone-2", "name": "Phone 2", "color": "#b04fc4", "connected": False}]}
@@ -110,6 +110,19 @@ class TopicsTest(unittest.TestCase):
         self.assertEqual(gateway_url("[::1]"), "ws://[::1]:8787/ws")
         with self.assertRaises(ValueError):
             gateway_url("not an address")
+
+    def test_takes_a_pairing_code_or_the_gateways_pairing_link(self):
+        self.assertEqual(gateway_targets("10.0.0.5", "k7q2-m9xd"), (["ws://10.0.0.5:8787/ws"], "K7Q2M9XD"))
+        self.assertEqual(gateway_targets("localhost"), (["ws://localhost:8787/ws"], None))
+        link = "marionette://pair?v=1&host=192.168.1.20,100.64.0.5&port=9000&code=K7Q2M9XD&id=gw-ab12&name=Lab%20robot"
+        self.assertEqual(gateway_targets(link), (["ws://192.168.1.20:9000/ws", "ws://100.64.0.5:9000/ws"], "K7Q2M9XD"))
+        self.assertEqual(gateway_targets(link, "abcd-efgh")[1], "ABCDEFGH")
+        self.assertEqual(gateway_targets("marionette://pair?host=robot.local"), (["ws://robot.local:8787/ws"], None))
+        for bad in ("marionette://pair?host=;rm", "marionette://pair?host=a&port=0"):
+            with self.assertRaises(ValueError):
+                gateway_targets(bad)
+        self.assertEqual(hello("K7Q2M9XD"), {"type": "hello", "version": 1, "role": "console", "cameras": False, "token": "K7Q2M9XD"})
+        self.assertNotIn("token", hello())
 
 
 if __name__ == "__main__":
