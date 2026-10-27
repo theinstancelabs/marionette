@@ -103,4 +103,27 @@ describe('round 8 protocol additions', () => {
     M.rtc({ kind: 'answer', to: 'c4', peer: 'head-1', sdp: 'v=0', from: 'spoofed', extra: 1 });
     expect(posted).toEqual([{ type: 'rtc', version: HTML_BRIDGE_VERSION, kind: 'answer', to: 'c4', peer: 'head-1', sdp: 'v=0' }]);
   });
+
+  it('drops robot views that went stale: another phone, a restarted gateway, a robot no longer listed', () => {
+    const page: { Marionette?: { _receive(m: unknown): void; latest(type: string): unknown }; dispatchEvent(event: unknown): void } = { dispatchEvent() {} };
+    new Function('window', 'Event', htmlBridgeScript('function(){}', ['robot_state']))(page, class { constructor(public type: string) {} });
+    const M = page.Marionette!; const robots = () => M.latest('robots') as Record<string, RobotView>;
+    const config = (sessionId: string, phone: string | undefined, list: { id: string; name: string; connected: boolean }[]) => M._receive({ type: 'config', payload: { ...defaultConfig(), sessionId, ...(phone ? { phone: { id: phone, name: phone, color: '#c98200', connected: true } } : {}), robots: list } });
+    const state = (robotId: string, fields: { phoneId?: string; state: object }) => M._receive({ type: 'robot_state', payload: { type: 'robot_state', version: PROTOCOL_VERSION, robotId, ...fields } });
+    const axol = { id: 'axol', name: 'Axol', connected: true }, arm = { id: 'arm', name: 'Arm', connected: true };
+    config('g1', 'phone-1', [axol, arm]); state('axol', { state: { ready: true } }); state('axol', { phoneId: 'phone-1', state: { arm: 'left' } }); state('arm', { state: { homed: true } });
+    expect(robots().axol).toMatchObject({ state: { ready: true }, phoneState: { arm: 'left' } });
+    // A mirror that now follows phone 2: what the robots said to phone 1 is gone, what they said to every phone stays.
+    config('g1', 'phone-2', [axol, arm]);
+    expect(robots().axol.phoneState).toBeUndefined(); expect(robots().axol.state).toEqual({ ready: true });
+    state('axol', { phoneId: 'phone-1', state: { arm: 'left' } }); expect(robots().axol.phoneState).toBeUndefined();
+    state('axol', { phoneId: 'phone-2', state: { arm: 'right' } }); expect(robots().axol.phoneState).toEqual({ arm: 'right' });
+    // The same gateway, no longer listing a robot: it reads as not connected, its state kept.
+    config('g1', 'phone-2', [axol]); expect(robots().arm).toMatchObject({ connected: false, state: { homed: true } }); expect(robots().axol.connected).toBe(true);
+    // A restarted gateway: nothing from before lingers, connected or not.
+    config('g2', 'phone-2', []); expect(robots()).toEqual({});
+    config('g2', 'phone-2', [{ ...axol, connected: false }]); expect(robots()).toEqual({ axol: { id: 'axol', name: 'Axol', connected: false } });
+    // A config without a phone (a mirror whose phone left) clears the phone's view too.
+    state('axol', { phoneId: 'phone-2', state: { arm: 'right' } }); config('g2', undefined, [axol]); expect(robots().axol.phoneState).toBeUndefined();
+  });
 });

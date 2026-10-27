@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { CALIBRATION_STEPS, CHECK_MOVES, CHECK_MOVE_TEXT, CLOSE_CODES, STREAM_RENEW_MS, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, describeCheckResult, guidedCaptureError, isLiveControl, isStickInRange, normalizePairingCode, operatorPose, phoneColor, sameValue, sanitizePose, streamEndValue, validateAction, validateCameraFrame, validateHello, validatePing, validatePong, validatePose, validateRobotState, validateRtc, validateScreen, validateStatus, type ActionMessage, type CalibrationCheck, type CalibrationState, type CameraFrameMessage, type CameraStream, type CheckMove, type ConfigMessage, type ControlValue, type GuidedSamples, type GuidedStep, type HelloMessage, type HtmlConfigMessage, type InputMessage, type JsonValue, type LiveControl, type MarionetteMessage, type PhoneInfo, type PosePacket, type PoseReference, type RobotInfo, type RobotStateMessage, type RtcMessage, type ScreenMessage, type StatusMessage, type UiControl, PROTOCOL_VERSION } from '@marionette/protocol';
 import { deltaMm, frameSummary, mm, noDiagnostics, rawAxes, type DiagnosticsLog } from './diagnostics.js';
 import { describeLink, latency, newLink, ping, pong, stamp, type Link } from './clock.js';
-import { advertise, advertisedAddresses, authMode, createLimiter, isLoopback, loadIdentity, pairing, qrSvg, sameCode, type AuthMode } from './pairing.js';
+import { advertise, advertisedAddresses, authMode, createLimiter, isLoopback, isOwnHost, loadIdentity, pairing, qrSvg, sameCode, type AuthMode } from './pairing.js';
 import { buildScreen, defaultScreen, loadKit, type Layout, type Screen } from './screens.js';
 import { screenPreview } from './preview.js';
 import { createSignaling } from './rtc.js';
@@ -160,12 +160,28 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
   const limiter = createLimiter();
   /** The client's address, IPv4 without its IPv6 wrapping. */
   const addressOf = (req: http.IncomingMessage) => (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '');
+  const advertised = () => options.addresses ?? advertisedAddresses();
+  // Loopback clients that asked for another host, each logged once (up to 64), so a local client refused for it is explained.
+  const foreignHosts = new Set<string>();
+  /**
+   * A client on this computer, which `on` lets in without the code: it comes from loopback and asks for this computer
+   * by one of its names. A web page whose DNS was rebound to 127.0.0.1 comes from loopback too, but its Host (and
+   * Origin) is still the name the page was loaded from, so it needs the code like any remote client.
+   */
+  const onThisComputer = (req: http.IncomingMessage) => {
+    const address = addressOf(req); if (!isLoopback(address)) return false;
+    if (isOwnHost(req.headers.host, advertised())) return true;
+    const host = String(req.headers.host ?? '(none)').slice(0, 128);
+    if (!foreignHosts.has(host) && foreignHosts.size < 64) { foreignHosts.add(host); log({ kind: 'pairing', address, host, msg: `${address} asked for host ${host}, which is not this computer, so it needs the pairing code (connect to localhost or 127.0.0.1 to go without)` }); }
+    return false;
+  };
   /**
    * Whether a client may come in: `true`, `false` (it still may, with a hello carrying the code), or why not. A
    * wrong code counts against the address; five in a minute shut it out for a minute.
    */
-  const admit = (address: string, given: string | undefined): true | false | string => {
-    if (mode === 'off' || (mode === 'on' && isLoopback(address))) return true;
+  const admit = (req: http.IncomingMessage, given: string | undefined): true | false | string => {
+    if (mode === 'off' || (mode === 'on' && onThisComputer(req))) return true;
+    const address = addressOf(req);
     if (limiter.blocked(address)) { log({ kind: 'pairing', address, msg: `refused ${address}: shut out after too many wrong pairing codes` }); return 'Too many wrong pairing codes; try again in a minute'; }
     if (given === undefined) return false;
     if (sameCode(given, identity.token)) return true;
@@ -642,12 +658,12 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
   /** `/api/*` and `/screen` need the pairing code (`?token=` or `Authorization: Bearer`) unless pairing lets the client in without one. */
   const requireCode: express.RequestHandler = (req, res, next) => {
     const bearer = /^Bearer\s+(\S+)/i.exec(req.headers.authorization ?? '')?.[1];
-    const verdict = admit(addressOf(req), typeof req.query.token === 'string' ? req.query.token : bearer);
+    const verdict = admit(req, typeof req.query.token === 'string' ? req.query.token : bearer);
     if (verdict === true) { next(); return; }
     res.status(401).type('text').send(verdict || 'This gateway needs its pairing code: add ?token=CODE to the address, or send Authorization: Bearer CODE');
   };
   const listeningPort = () => { const address = server.address(); return address && typeof address === 'object' ? address.port : port; };
-  const currentPairing = () => pairing(identity, name, mode, options.addresses ?? advertisedAddresses(), listeningPort());
+  const currentPairing = () => pairing(identity, name, mode, advertised(), listeningPort());
   const linkOf = (socket?: WebSocket) => describeLink(socket ? clients.get(socket)?.link : undefined);
   app.get('/health', (_req,res)=>res.json({ ok:true, service:'marionette-gateway', sessionId, gatewayId: identity.id, name, clients: clients.size, phones: [...phones.values()].filter(phone => phone.info.connected).length, robots: [...robots.values()].filter(robot => robot.info.connected).length, poseCount: [...phones.values()].reduce((sum, phone) => sum + phone.poseCount, 0) }));
   app.get('/marionette-kit.js', (_req,res)=>res.type('application/javascript').set('Cache-Control', 'no-cache').send(kit.js));
@@ -681,7 +697,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
       grace = setTimeout(() => { if (client.role === 'console' && !client.hello) becomeConsole(socket, client); }, CONSOLE_GRACE_MS); grace.unref();
     };
     // The code may come in the address; without it, the only thing an unpaired socket may send is a hello carrying it.
-    const verdict = admit(address, new URL(req.url ?? '/', 'http://gateway').searchParams.get('token') ?? undefined);
+    const verdict = admit(req, new URL(req.url ?? '/', 'http://gateway').searchParams.get('token') ?? undefined);
     if (verdict === true) welcome();
     else if (verdict) { unpaired(verdict); return; }
     else { silence = setTimeout(() => unpaired('Pairing code required'), pairingTimeoutMs); silence.unref(); }
@@ -691,7 +707,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
       if (!clients.has(socket)) {
         // The code decides; a hello that carries it but is otherwise malformed is let in and answered like any other.
         const hello = message && typeof message === 'object' && (message as { type?: unknown }).type === 'hello' ? message as { token?: unknown } : undefined;
-        const admitted = typeof hello?.token === 'string' && hello.token.length <= 64 ? admit(address, hello.token) : false;
+        const admitted = typeof hello?.token === 'string' && hello.token.length <= 64 ? admit(req, hello.token) : false;
         if (admitted !== true) { unpaired(admitted || 'Pairing code required'); return; }
         clearTimeout(silence); welcome();
       }
