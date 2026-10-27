@@ -19,5 +19,13 @@ gateway.server.listen(port, () => {
   pairingBanner(info).then(text => console.log(text), error => console.warn(`No pairing QR code: ${(error as Error).message}`));
 });
 // Closing sends the Bonjour goodbye, so phones stop listing this gateway at once.
-const stop = () => { setTimeout(() => process.exit(0), 2000).unref(); gateway.close().finally(() => { diagnostics.close(); process.exit(0); }); };
+let stopping = false;
+const stop = () => { if (stopping) return; stopping = true; setTimeout(() => process.exit(0), 2000).unref(); gateway.close().finally(() => { diagnostics.close(); process.exit(0); }); };
 process.once('SIGINT', stop); process.once('SIGTERM', stop);
+// A program that runs the gateway as its child (the Python SDK does) sets MARIONETTE_EXIT_WITH_PARENT=1 and keeps a
+// pipe to its stdin open. However the parent ends, even killed outright, the pipe closes and the gateway stops with it.
+// The pipe alone doesn't keep the gateway running (one that couldn't listen still exits).
+if (process.env.MARIONETTE_EXIT_WITH_PARENT === '1') {
+  for (const event of ['end', 'close', 'error'] as const) process.stdin.once(event, stop);
+  process.stdin.resume(); (process.stdin as { unref?: () => void }).unref?.();
+}
