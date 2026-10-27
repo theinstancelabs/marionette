@@ -6,10 +6,8 @@
     "@marionette/arkit": "file:../../modules/arkit",
     "@marionette/protocol": "file:../../packages/protocol",
     "expo": "~58.0.19",
-    "expo-camera": "~16.0.18",
-    "expo-modules-core": "~2.2.3",
-    "expo-sensors": "~14.0.2",
-    "expo-status-bar": "~2.0.1",
+    "expo-file-system": "~58.0.11",
+    "expo-status-bar": "~58.0.4",
     "react": "19.3.0",
     "react-native": "0.88.0",
     "react-native-webview": "14.0.1"
@@ -22,9 +20,7 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },

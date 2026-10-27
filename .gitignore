@@ -7,3 +7,4 @@ apps/mobile/ios/build
 apps/mobile/.expo
 apps/mobile/.gradle
 coverage
+logs

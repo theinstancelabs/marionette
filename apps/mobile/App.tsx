@@ -1,40 +1,166 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCameraPermissions } from 'expo-camera';
-import { DeviceMotion } from 'expo-sensors';
-import { requireNativeModule, EventEmitter } from 'expo-modules-core';
+import { requireNativeModule } from 'expo';
+import { File, Paths } from 'expo-file-system';
 import WebView, { type WebViewMessageEvent } from 'react-native-webview';
 import React, { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { defaultConfig, metersToMillimeters, poseFromTransform, validateHtmlBridgeAction, validateHtmlConfig, HTML_BRIDGE_VERSION, type ConfigMessage, type HtmlConfigMessage, type MarionetteMessage, type PosePacket, type UiControl } from '@marionette/protocol';
+import { ActivityIndicator, AppState, KeyboardAvoidingView, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { gatewayLabel, gatewayUrl, htmlBridgeScript, isHtmlBridgeDisconnect, nominalCovariance, normalizeQuaternion, operatorPose, poseFromTransform, sanitizeConfig, selectedCameraView, validateCameraFrame, validateHtmlBridgeAction, validateHtmlConfig, validateStatus, PROTOCOL_VERSION, type ConfigMessage, type ConnectionEvent, type HtmlBridgeEvent, type HtmlConfigMessage, type MarionetteMessage, type PosePacket, type StatusMessage, type TrackingEvent, type TrackingState } from '@marionette/protocol';
 
-type ArkitBridge = { isSupported(): boolean; start(): Promise<void>; stop(): Promise<void> };
-type ArkitEventEmitter = { addListener(name: string, listener: (event: any) => void): { remove(): void } };
+type ArkitEvent = { generation?: number; transform?: number[]; trackingState?: string; state?: string; reason?: string; timestamp?: number; code?: string; message?: string };
+type ArkitBridge = { isSupported(): boolean; start(generation: number): Promise<void>; stop(): Promise<void>; addListener(name: 'onPose' | 'onTracking' | 'onError' | 'onWorldReset', listener: (event: ArkitEvent) => void): { remove(): void } };
 const arkit = (()=>{ try { return requireNativeModule<ArkitBridge>('MarionetteArKit'); } catch { return null; } })();
-const arkitEvents: ArkitEventEmitter | null = arkit ? (new EventEmitter(arkit as any) as any) : null;
-const SESSION_ID = `iphone-${Math.random().toString(36).slice(2, 8)}`;
-const bridgeBootstrap = `(function(){if(window.Marionette)return;const listeners={};const M={version:${HTML_BRIDGE_VERSION},sendAction:function(controlId,action,value){if(typeof controlId!=='string'||typeof action!=='string')return;const message={type:'action',version:${HTML_BRIDGE_VERSION},controlId:controlId,action:action,sentAt:Date.now()};if(value!==undefined&&(['string','number','boolean'].indexOf(typeof value)>=0))message.value=value;if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(message));},on:function(type,callback){if(['pose','status','config','camera_frame'].indexOf(type)<0||typeof callback!=='function')return function(){};(listeners[type]||(listeners[type]=[])).push(callback);return function(){listeners[type]=(listeners[type]||[]).filter(function(item){return item!==callback;});};},_receive:function(message){if(!message||!listeners[message.type])return;(listeners[message.type]||[]).slice().forEach(function(callback){try{callback(message.payload);}catch(e){}});}};window.Marionette=M;})();true;`;
+const newSessionId = () => `iphone-${Math.random().toString(36).slice(2, 10)}`;
+const monotonicSeconds = () => (typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() / 1000 : Date.now() / 1000);
+const TRACKING_STATES: TrackingState[] = ['initializing', 'normal', 'limited', 'relocalizing', 'unavailable'];
+const toTrackingState = (value: unknown): TrackingState => TRACKING_STATES.includes(value as TrackingState) ? value as TrackingState : 'unavailable';
+const CAMERA_DENIED = 'Camera access is off. Turn it on in Settings › Privacy & Security › Camera, then reconnect.';
+// Poses go to the gateway at the ARKit frame rate; the HTML screen only needs ~15 Hz.
+const UI_INTERVAL_MS = 66;
+// Held buttons are repeated so the gateway can drop a hold whose release was lost.
+const HOLD_RENEW_MS = 200;
+// iOS can take a long time to give up on an unreachable host; say so sooner.
+const CONNECT_TIMEOUT_MS = 8000;
+const MAX_RECENT = 5;
+const bridgeScript = htmlBridgeScript('function(m){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(m));}');
+
+// Recent gateway addresses (most recent first) and this phone's device id, kept in the app's documents folder.
+// The gateway uses the device id to give a reconnecting phone the same name and color.
+const settingsFile = new File(Paths.document, 'marionette.json');
+type Settings = { recent: string[]; deviceId: string };
+function loadSettings(): Settings {
+  let parsed: { recent?: unknown; deviceId?: unknown } = {};
+  try { if (settingsFile.exists) parsed = JSON.parse(settingsFile.textSync()) as typeof parsed; } catch { /* A damaged file only loses the list. */ }
+  const recent = Array.isArray(parsed.recent) ? parsed.recent.filter((item): item is string => typeof item === 'string').slice(0, MAX_RECENT) : [];
+  const deviceId = typeof parsed.deviceId === 'string' && /^[a-z0-9-]{8,64}$/.test(parsed.deviceId) ? parsed.deviceId : `iphone-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+  if (deviceId !== parsed.deviceId) saveSettings({ recent, deviceId });
+  return { recent, deviceId };
+}
+function saveSettings(settings: Settings) { settingsFile.write(JSON.stringify(settings)).catch(() => { /* Remembering addresses is a convenience; a failed write only loses the list. */ }); }
+const settings = loadSettings();
+
+type Screen = 'connect' | 'connecting' | 'live';
 
 export default function App() {
-  const [endpoint, setEndpoint] = useState('ws://YOUR-MAC-IP:8787/ws'); const [connected, setConnected] = useState(false); const [connecting, setConnecting] = useState(false); const [status, setStatus] = useState('Enter the gateway IP to begin');
-  const [config, setConfig] = useState<ConfigMessage>({...defaultConfig(),sessionId:'local'}); const [htmlConfig, setHtmlConfig] = useState<HtmlConfigMessage>(); const [cameraFrame, setCameraFrame] = useState<string>(); const [pose, setPose] = useState<PosePacket>(); const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const socket=useRef<WebSocket | undefined>(undefined); const seq=useRef(0); const session=useRef(SESSION_ID); const tracking=useRef<'initializing'|'normal'|'limited'|'relocalizing'|'unavailable'>('initializing');
-  const htmlRef = useRef<any>(null);
-  const send=(payload: MarionetteMessage)=>{ if(socket.current?.readyState===WebSocket.OPEN)socket.current.send(JSON.stringify(payload)); };
-  const emitPose=(p:PosePacket)=>{ setPose(p); send(p); };
-  const startArkit=async()=>{ if(!arkit){ setStatus('ARKit native module is not loaded; use an iOS development build'); return; } try { await arkit.start();setStatus('ARKit tracking active'); } catch {setStatus('ARKit unavailable on this device');} };
-  // The native event source is stable for the lifetime of the app.
+  const [recent, setRecent] = useState<string[]>(settings.recent); const [address, setAddress] = useState(() => recent[0] ?? '');
+  const [screen, setScreen] = useState<Screen>('connect'); const [error, setError] = useState<string>(); const [gateway, setGateway] = useState('');
+  const [htmlConfig, setHtmlConfig] = useState<HtmlConfigMessage>(); const [htmlKey, setHtmlKey] = useState(0); const [htmlLoaded, setHtmlLoaded] = useState(false);
+  const socket=useRef<WebSocket | undefined>(undefined); const seq=useRef(0); const session=useRef(newSessionId()); const syntheticTimer=useRef<ReturnType<typeof setInterval> | undefined>(undefined); const connectTimer=useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const configRef=useRef<ConfigMessage | undefined>(undefined); const lastUiAt=useRef(0); const gatewayRef=useRef('');
+  // The last value of every bridge event, so a freshly loaded document starts from the current state.
+  const latest=useRef(new Map<HtmlBridgeEvent, unknown>());
+  // ARKit events carry the generation passed to start(); anything else is a frame queued from an earlier run.
+  const generation=useRef(0); const arkitActive=useRef(false);
+  const held=useRef(new Map<string, string>());
+  const htmlRef = useRef<React.ComponentRef<typeof WebView>>(null);
+  const send=(payload: MarionetteMessage)=>{ if(socket.current?.readyState!==WebSocket.OPEN)return false; socket.current.send(JSON.stringify(payload)); return true; };
+  const sendAction=(controlId:string,actionName:string,value?:string|number|boolean,renew?:true)=>send({type:'action',version:PROTOCOL_VERSION,sessionId:session.current,controlId,action:actionName,value,renew,sentAt:Date.now()});
+  const inject=(type:HtmlBridgeEvent,payload:unknown)=>htmlRef.current?.injectJavaScript(`window.Marionette&&window.Marionette._receive(${JSON.stringify({type,payload})});true;`);
+  const toHtml=(type:HtmlBridgeEvent,payload:unknown)=>{ latest.current.set(type,payload); inject(type,payload); };
+  const localStatus=(message:string)=>toHtml('status',{type:'status',version:PROTOCOL_VERSION,sessionId:session.current,message} satisfies StatusMessage);
+  const setTracking=(tracking:TrackingEvent)=>{ const previous=latest.current.get('tracking') as TrackingEvent|undefined; if(previous&&previous.state===tracking.state&&previous.source===tracking.source&&previous.reason===tracking.reason&&previous.message===tracking.message)return; toHtml('tracking',tracking); };
+  const emitPose=(raw:PosePacket)=>{ send(raw); const now=Date.now(); if(now-lastUiAt.current<UI_INTERVAL_MS)return; lastUiAt.current=now; toHtml('pose',operatorPose(raw,configRef.current?.calibration.reference)); };
+  const pressHold=(controlId:string,actionName:string)=>{ held.current.set(controlId,actionName); if(!sendAction(controlId,actionName,true))localStatus('Not connected; the hold was not sent'); };
+  const releaseHold=(controlId:string)=>{ const actionName=held.current.get(controlId); if(actionName===undefined)return; held.current.delete(controlId); sendAction(controlId,actionName,false); };
+  const releaseAllHolds=()=>{ for(const controlId of [...held.current.keys()])releaseHold(controlId); };
+  // A new pose session tells the gateway the ARKit world changed, which clears calibration there.
+  const startPoseSession=()=>{ session.current=newSessionId(); seq.current=0; };
+  const stopSyntheticMotion=()=>{if(syntheticTimer.current)clearInterval(syntheticTimer.current);syntheticTimer.current=undefined;};
+  const startSyntheticMotion=()=>{ stopSyntheticMotion(); let t=0; syntheticTimer.current=setInterval(()=>{t+=0.05; emitPose({type:'pose',version:PROTOCOL_VERSION,sessionId:session.current,seq:seq.current++,monotonicTs:monotonicSeconds(),position:{x:Math.sin(t)*0.03,y:0,z:Math.cos(t)*0.03},rotation:normalizeQuaternion({x:0,y:Math.sin(t*0.7)*0.25,z:Math.sin(t*0.4)*0.12,w:0.96}),covariance:nominalCovariance('limited'),source:'synthetic',trackingState:'limited',calibrationVersion:'synthetic-v1',heartbeat:true});},50); setTracking({state:'limited',source:'synthetic',reason:'synthetic'}); };
+  const stopTracking=()=>{ generation.current++; arkitActive.current=false; stopSyntheticMotion(); if(arkit)arkit.stop().catch(()=>{}); };
+  const startTracking=async()=>{ stopTracking(); const run=generation.current;
+    // Only a missing native module or an unsupported device (the simulator) falls back to synthetic motion; a real ARKit failure is reported instead.
+    if(!arkit||!arkit.isSupported()){ startSyntheticMotion(); return; }
+    arkitActive.current=true; setTracking({state:'initializing',source:'arkit',reason:'initializing'});
+    try { await arkit.start(run); }
+    catch(failure){ if(generation.current!==run)return; arkitActive.current=false; const e=failure as {code?:string;message?:string}; setTracking({state:'unavailable',source:'arkit',message:e.code==='CameraDenied'?CAMERA_DENIED:`ARKit could not start: ${e.message??'unknown error'}`}); } };
+  // Native events and app state are subscribed once; every handler reads refs, so nothing goes stale.
+  useEffect(()=>{ if(!arkit)return; const current=(event:ArkitEvent)=>arkitActive.current&&event.generation===generation.current;
+    const subs=[
+      arkit.addListener('onPose',event=>{ if(!current(event)||!Array.isArray(event.transform))return; try { const p=poseFromTransform(event.transform,session.current,seq.current++,event.timestamp??monotonicSeconds(),toTrackingState(event.trackingState)); emitPose(p); } catch { /* A malformed transform is dropped; the gateway watchdog covers gaps. */ } }),
+      arkit.addListener('onTracking',event=>{ if(current(event))setTracking({state:toTrackingState(event.state),source:'arkit',reason:event.reason||undefined}); }),
+      arkit.addListener('onError',event=>{ if(!current(event))return; arkitActive.current=false; setTracking({state:'unavailable',source:'arkit',message:event.code==='CameraDenied'?CAMERA_DENIED:`ARKit stopped: ${event.message??'session failed'}`}); }),
+      arkit.addListener('onWorldReset',event=>{ if(!current(event))return; startPoseSession(); localStatus('Tracking restarted after an interruption; calibrate again'); }),
+    ];
+    return()=>{ subs.forEach(sub=>sub.remove()); stopTracking(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(()=>{ if(!arkitEvents)return; const sub=arkitEvents.addListener('onPose',(event:any)=>{ const p=poseFromTransform(event.transform,session.current,seq.current++,event.timestamp, event.trackingState||'normal'); tracking.current=p.trackingState;emitPose(p); }); const trackingSub=arkitEvents.addListener('onTracking',(event:any)=>{tracking.current=event.state;}); return()=>{sub.remove();trackingSub.remove();if (arkit) arkit.stop().catch(()=>{});};},[connected]);
-  // DeviceMotion is only the explicit limited fallback when the native bridge is absent.
+  },[]);
+  useEffect(()=>{ const renew=setInterval(()=>{ for(const [controlId,actionName] of held.current)sendAction(controlId,actionName,true,true); },HOLD_RENEW_MS); const appState=AppState.addEventListener('change',next=>{ if(next!=='active')releaseAllHolds(); }); return()=>{ clearInterval(renew); appState.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(()=>{ if(connected && !arkit){ const sub=DeviceMotion.addListener(data=>{ const r=data.rotation||{alpha:0,beta:0,gamma:0}; const p:PosePacket={type:'pose',version:1,sessionId:session.current,seq:seq.current++,monotonicTs:Date.now(),position:{x:0,y:0,z:0},rotation:{x:r.beta||0,y:r.gamma||0,z:r.alpha||0,w:1},covariance:[.25,.25,.25,.4,.4,.4],source:'arkit',trackingState:'limited',calibrationVersion:'sensor-fallback',heartbeat:true};emitPose(p);});DeviceMotion.setUpdateInterval(50);return()=>sub.remove();}},[connected]);
-  const sendToHtml=(type:string,payload:unknown)=>{ const encoded=JSON.stringify({type,payload}); htmlRef.current?.injectJavaScript(`window.Marionette&&window.Marionette._receive(${encoded});true;`); };
-  const connect=()=>{ if(socket.current)socket.current.close(); setConnecting(true); setStatus('Connecting to gateway…'); try{const ws=new WebSocket(endpoint.trim());socket.current=ws;ws.onopen=()=>{setConnected(true);setConnecting(false);setStatus('Connected — waiting for config');startArkit();};ws.onmessage=e=>{const m=JSON.parse(e.data) as MarionetteMessage;if(m.type==='config'){setConfig(m);setStatus(`Connected to ${m.serverName}`);sendToHtml('config',m)}if(m.type==='html_config'&&validateHtmlConfig(m)){setHtmlConfig(m);setStatus(m.title?`HTML controls: ${m.title}`:'HTML controls loaded')}if(m.type==='status'){setStatus(m.message);sendToHtml('status',m)}if(m.type==='pose'){setPose(m);sendToHtml('pose',m)}if(m.type==='camera_frame'){setCameraFrame(m.dataUrl);sendToHtml('camera_frame',m)}};ws.onclose=()=>{setConnected(false);setConnecting(false);setStatus('Disconnected');sendToHtml('status',{type:'status',message:'Disconnected'})};ws.onerror=()=>{setConnecting(false);setStatus('Could not reach that IP')};}catch{setConnecting(false);setStatus('Invalid gateway URL')}};
-  const onHtmlMessage=(event:WebViewMessageEvent)=>{ try { const message=JSON.parse(event.nativeEvent.data); if(!validateHtmlBridgeAction(message))return; send({type:'action',version:1,sessionId:config.sessionId,controlId:message.controlId,action:message.action,value:message.value,sentAt:message.sentAt}); } catch { /* Ignore messages outside the documented bridge. */ } };
-  const action=(control:UiControl,value?:string|number|boolean)=>{send({type:'action',version:1,sessionId:config.sessionId,controlId:control.id,action:control.action,value,sentAt:Date.now()});};
-  const ensureCamera=async()=>{if(!cameraPermission?.granted)await requestCameraPermission()}; const positionMm=pose?metersToMillimeters(pose.position):undefined;
-  return <SafeAreaView style={styles.safe}><StatusBar style="light"/><ScrollView contentContainerStyle={styles.content}><View style={styles.header}><View><Text style={styles.kicker}>MARIONETTE / IPHONE</Text><Text style={styles.title}>Motion link</Text><Text style={styles.subtitle}>ARKit pose transport for a configurable robot console.</Text></View><View style={[styles.connectionDot,{backgroundColor:connected?'#79e3bb':'#f2c47b'}]}/></View><View style={styles.card}><Text style={styles.label}>BACKEND ADDRESS</Text><View style={styles.endpointRow}><TextInput autoCapitalize="none" autoCorrect={false} value={endpoint} onChangeText={setEndpoint} placeholder="ws://computer-ip:8787/ws" placeholderTextColor="#63787e" style={styles.input}/><Pressable style={styles.connectButton} onPress={connect}><Text style={styles.connectText}>{connecting?'…':connected?'RECONNECT':'CONNECT'}</Text></Pressable></View><Text style={styles.status}>{status}</Text></View>{htmlConfig&&<View style={styles.htmlCard}><View style={styles.cardHeader}><View><Text style={styles.label}>REMOTE HTML CONFIG</Text><Text style={styles.sectionTitle}>{htmlConfig.title||'Developer controls'}</Text></View><Text style={styles.mono}>BRIDGE v{htmlConfig.bridgeVersion}</Text></View><WebView ref={htmlRef} originWhitelist={['*']} source={{html:htmlConfig.html,baseUrl:'about:blank'}} injectedJavaScriptBeforeContentLoaded={bridgeBootstrap} injectedJavaScript={bridgeBootstrap} onMessage={onHtmlMessage} onLoad={()=>{sendToHtml('config',config);if(pose)sendToHtml('pose',pose);}} javaScriptEnabled domStorageEnabled style={styles.htmlView} /></View>}<View style={styles.card}><View style={styles.cardHeader}><View><Text style={styles.label}>TRACKING</Text><Text style={styles.sectionTitle}>{pose?.trackingState?.toUpperCase()||'NOT STARTED'}</Text></View><Text style={styles.mono}>{pose?`SEQ ${pose.seq.toString().padStart(6,'0')}`:'ARKit / world frame'}</Text></View><View style={styles.poseGrid}><Metric label="X mm" value={positionMm?.x}/><Metric label="Y mm" value={positionMm?.y}/><Metric label="Z mm" value={positionMm?.z}/><Metric label="QUALITY" value={pose?pose.covariance[0]:'—'}/></View>{arkit&&<Text style={styles.hint}>Native ARKit bridge selected. Keep the phone visible to the tracking scene.</Text>}</View><View style={styles.card}><View style={styles.cardHeader}><View><Text style={styles.label}>REMOTE CONFIG</Text><Text style={styles.sectionTitle}>Native fallback controls</Text></View><Text style={styles.mono}>{config.controls.length} controls</Text></View>{config.controls.map(control=><Control key={control.id} control={control} onAction={action}/>)}</View><View style={styles.card}><View style={styles.cardHeader}><View><Text style={styles.label}>CAMERA</Text><Text style={styles.sectionTitle}>Return stream</Text></View><Text style={styles.mono}>{config.activeCameraId||'—'}</Text></View><Pressable style={styles.cameraPreview} onPress={ensureCamera}>{cameraFrame&&<Image source={{uri:cameraFrame}} style={styles.cameraImage}/>}<View style={styles.cameraBadge}><Text style={styles.cameraBadgeText}>{cameraFrame?'BACKEND STREAM':'LOCAL PREVIEW'}</Text></View><Text style={styles.cameraTitle}>{cameraFrame?'Virtual camera live':'Camera permission is opt-in'}</Text><Text style={styles.hint}>{cameraFrame?'This frame is supplied by the connected host.':'The backend can replace this surface with a configured stream without an app update.'}</Text></Pressable></View></ScrollView></SafeAreaView>;
+  },[]);
+  /** Leaves the gateway and returns to the connect page, with a reason unless the operator chose to leave. */
+  const disconnect=(reason?:string)=>{ clearTimeout(connectTimer.current); releaseAllHolds(); const previous=socket.current; socket.current=undefined; previous?.close(); stopTracking(); configRef.current=undefined; latest.current.clear(); setHtmlConfig(undefined); setHtmlLoaded(false); setError(reason); setScreen('connect'); };
+  const connect=(input=address)=>{ const url=gatewayUrl(input); if(!url){ setError('That doesn’t look like an address. Type the IP the gateway printed, like 192.168.1.20.'); return; }
+    disconnect(); const label=gatewayLabel(url); gatewayRef.current=label; setGateway(label); setAddress(label); setError(undefined); setScreen('connecting'); startPoseSession();
+    let ws:WebSocket; try { ws=new WebSocket(url); } catch { setScreen('connect'); setError('That address can’t be opened.'); return; }
+    socket.current=ws; let opened=false;
+    const unreachable=`Couldn’t reach ${label}. Check the gateway is running and this phone is on the same network, and allowed Local Network access in Settings.`;
+    connectTimer.current=setTimeout(()=>{ if(socket.current===ws&&!opened)disconnect(unreachable); },CONNECT_TIMEOUT_MS);
+    ws.onopen=()=>{ if(socket.current!==ws)return; opened=true; clearTimeout(connectTimer.current); send({type:'hello',version:PROTOCOL_VERSION,role:'phone',deviceId:settings.deviceId}); setScreen('live'); toHtml('connection',{state:'connected',gateway:label} satisfies ConnectionEvent);
+      setRecent(old=>{ const next=[label,...old.filter(item=>item!==label)].slice(0,MAX_RECENT); settings.recent=next; saveSettings(settings); return next; }); void startTracking(); };
+    ws.onmessage=e=>{ if(socket.current!==ws)return; let m:unknown; try{ m=JSON.parse(String(e.data)); }catch{ return; } const type=m&&typeof m==='object'?(m as {type?:unknown}).type:undefined;
+      // After the hello the gateway only sends this phone its own config. A hello slower than the gateway's 250 ms
+      // console grace first gets console traffic (the gateway view and other phones' configs), so the latest config
+      // that names a phone wins instead of the first, and a config without a phone never replaces one that has it.
+      if(type==='config'){ const next=sanitizeConfig(m); if(!next||(configRef.current?.phone&&!next.phone))return; configRef.current=next; toHtml('config',next); }
+      else if(type==='html_config'){ if(validateHtmlConfig(m)){ releaseAllHolds(); setHtmlConfig(m); setHtmlLoaded(false); setHtmlKey(key=>key+1); } }
+      else if(type==='status'){ if(validateStatus(m)&&(!m.phoneId||m.phoneId===configRef.current?.phone?.id))toHtml('status',m); }
+      else if(type==='camera_frame'){ const config=configRef.current; if(validateCameraFrame(m)&&config&&selectedCameraView(config)?.streams.includes(m.cameraId))toHtml('camera_frame',m); } };
+    ws.onclose=()=>{ if(socket.current!==ws)return; disconnect(opened?`Lost the connection to ${label}.`:unreachable); };
+    ws.onerror=()=>{ /* onclose follows with the reason. */ }; };
+  // Bridge messages only count from the document the gateway sent. The page cannot navigate away: top-frame
+  // http(s) links open in Safari and everything else is refused; frames inside the page may load.
+  const onHtmlMessage=(event:WebViewMessageEvent)=>{ const url=event.nativeEvent.url??''; if(url&&!url.startsWith('about:'))return; try { const message=JSON.parse(event.nativeEvent.data);
+    if(isHtmlBridgeDisconnect(message)){ disconnect(); return; }
+    if(!validateHtmlBridgeAction(message))return;
+    if(message.value===false&&held.current.has(message.controlId)){ releaseHold(message.controlId); return; }
+    const control=configRef.current?.controls.find(c=>c.id===message.controlId&&c.action===message.action);
+    if(control?.type==='button'&&control.hold&&typeof message.value==='boolean'){ if(message.value)pressHold(control.id,control.action); else releaseHold(control.id); return; }
+    if(!sendAction(message.controlId,message.action,message.value))localStatus('Not connected; action not sent'); } catch { /* Ignore messages outside the documented bridge. */ } };
+  const replayToHtml=()=>{ setHtmlLoaded(true); for(const [type,payload] of latest.current)inject(type,payload); };
+
+  if(screen==='live'&&htmlConfig)return <View style={styles.live}><StatusBar style="dark"/>
+    <WebView key={htmlKey} ref={htmlRef} originWhitelist={['*']} source={{html:htmlConfig.html,baseUrl:'about:blank'}} injectedJavaScriptBeforeContentLoaded={bridgeScript} injectedJavaScript={bridgeScript} onMessage={onHtmlMessage}
+      onShouldStartLoadWithRequest={request=>{ if(request.url.startsWith('about:')||!request.isTopFrame)return true; if(/^https?:/i.test(request.url))Linking.openURL(request.url).catch(()=>{}); return false; }}
+      onLoadStart={releaseAllHolds} onLoad={replayToHtml} onContentProcessDidTerminate={()=>{ releaseAllHolds(); setHtmlLoaded(false); setHtmlKey(key=>key+1); }}
+      javaScriptEnabled domStorageEnabled bounces={false} contentInsetAdjustmentBehavior="never" automaticallyAdjustContentInsets={false} dataDetectorTypes="none" allowsLinkPreview={false} style={styles.webview}/>
+    {!htmlLoaded&&<View style={styles.loading} pointerEvents="none"><ActivityIndicator color={INK2}/></View>}
+  </View>;
+  if(screen!=='connect')return <SafeAreaView style={styles.page}><StatusBar style="dark"/><Paper/><View style={styles.waiting}>
+    <ActivityIndicator color={BLUE}/><Text style={styles.waitingText}>{screen==='connecting'?`Connecting to ${gateway}…`:`Loading ${gateway}’s screen…`}</Text>
+    <Pressable style={styles.secondary} onPress={()=>disconnect()}><Text style={styles.secondaryText}>Cancel</Text></Pressable></View></SafeAreaView>;
+  return <SafeAreaView style={styles.page}><StatusBar style="dark"/><Paper/>
+    <KeyboardAvoidingView behavior="padding" style={styles.flex}><ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <View style={styles.markRow}><Mark/><Text style={styles.markText}>Marionette</Text></View>
+      <Text style={styles.title}>Connect to your robot’s gateway</Text>
+      <Text style={styles.body}>Use the address the gateway prints when it starts. Same Wi-Fi or Tailscale.</Text>
+      <TextInput value={address} onChangeText={text=>{ setAddress(text); setError(undefined); }} onSubmitEditing={event=>connect(event.nativeEvent.text)} placeholder="192.168.1.20" placeholderTextColor="#9aa1a6" autoCapitalize="none" autoCorrect={false} keyboardType="url" returnKeyType="go" textContentType="URL" style={styles.input} accessibilityLabel="Gateway address"/>
+      <Text style={styles.note}>port 8787 unless you type one</Text>
+      {error&&<Text style={styles.error} accessibilityRole="alert">{error}</Text>}
+      <Pressable style={({pressed})=>[styles.button,pressed&&styles.pressed]} onPress={()=>connect()} accessibilityRole="button"><Text style={styles.buttonText}>Connect</Text></Pressable>
+      {recent.length>0&&<View style={styles.recent}><Text style={styles.recentTitle}>Recent</Text>{recent.map(item=><Pressable key={item} style={({pressed})=>[styles.recentRow,pressed&&styles.pressed]} onPress={()=>connect(item)} accessibilityRole="button" accessibilityLabel={`Connect to ${item}`}><Text style={styles.recentText}>{item}</Text><Text style={styles.recentGo}>Connect</Text></Pressable>)}</View>}
+    </ScrollView></KeyboardAvoidingView></SafeAreaView>;
 }
-function Metric({label,value}:{label:string,value?:number|string}){return <View style={styles.metric}><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricValue}>{typeof value==='number'?value.toFixed(1):value||'—'}</Text></View>}
-function Control({control,onAction}:{control:UiControl,onAction:(c:UiControl,v?:string|number|boolean)=>void}){ const [value,setValue]=useState(control.type==='toggle'?control.value:control.type==='select'?control.value:control.type==='slider'?control.value:undefined); if(control.type==='button')return <Pressable style={[styles.control,control.tone==='danger'&&styles.danger]} onPress={()=>onAction(control)}><Text style={styles.controlLabel}>{control.label}</Text><Text style={styles.chevron}>›</Text></Pressable>; if(control.type==='toggle')return <View style={styles.control}><Text style={styles.controlLabel}>{control.label}</Text><Switch value={!!value} onValueChange={v=>{setValue(v);onAction(control,v)}} trackColor={{false:'#294047',true:'#397e6d'}} thumbColor={value?'#b8ffe0':'#a9b7b9'}/></View>; if(control.type==='select')return <View style={styles.control}><Text style={styles.controlLabel}>{control.label}</Text><View style={styles.selectOptions}>{control.options.map(o=><Pressable key={o.value} onPress={()=>{setValue(o.value);onAction(control,o.value)}} style={[styles.option, value===o.value&&styles.optionSelected]}><Text style={styles.optionText}>{o.label}</Text></Pressable>)}</View></View>; return <View style={styles.controlColumn}><View style={styles.control}><Text style={styles.controlLabel}>{control.label}</Text><Text style={styles.value}>{Number(value).toFixed(1)}{control.unit}</Text></View><View style={styles.sliderTrack}><View style={[styles.sliderFill,{width:`${((Number(value)-control.min)/(control.max-control.min))*100}%`}]} /><View style={styles.sliderDots}>{Array.from({length:8}).map((_,i)=><Pressable key={i} onPress={()=>{const v=control.min+(control.max-control.min)*i/7;setValue(v);onAction(control,v)}} style={styles.sliderDot}/>)}</View></View></View>}
-const styles=StyleSheet.create({safe:{flex:1,backgroundColor:'#071117'},content:{padding:22,paddingBottom:50,gap:14},header:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start',paddingTop:10,paddingBottom:8},kicker:{color:'#79e3bb',fontSize:10,fontWeight:'700',letterSpacing:2},title:{color:'#e6f3f0',fontSize:34,fontWeight:'800',marginTop:7},subtitle:{color:'#8ba1a8',fontSize:13,marginTop:4,maxWidth:310,lineHeight:19},connectionDot:{width:12,height:12,borderRadius:8,marginTop:7},card:{backgroundColor:'#0c1920',borderColor:'#20333b',borderWidth:1,borderRadius:12,padding:16},htmlCard:{backgroundColor:'#0c1920',borderColor:'#20333b',borderWidth:1,borderRadius:12,padding:16},htmlView:{height:560,borderRadius:8,backgroundColor:'#0b181e'},label:{color:'#79e3bb',fontSize:10,fontWeight:'700',letterSpacing:1.5},sectionTitle:{color:'#e6f3f0',fontSize:19,fontWeight:'700',marginTop:4},endpointRow:{flexDirection:'row',gap:8,marginTop:10},input:{flex:1,backgroundColor:'#09151b',borderColor:'#29434a',borderWidth:1,borderRadius:7,color:'#e6f3f0',paddingHorizontal:11,paddingVertical:10,fontSize:12},connectButton:{backgroundColor:'#79e3bb',borderRadius:7,paddingHorizontal:12,justifyContent:'center'},connectText:{color:'#07201b',fontWeight:'800',fontSize:11},status:{color:'#8ba1a8',fontSize:11,marginTop:9},cardHeader:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start',marginBottom:15},mono:{fontFamily:'Courier',color:'#8ba1a8',fontSize:10},poseGrid:{flexDirection:'row',borderColor:'#20333b',borderWidth:1,borderRadius:7,overflow:'hidden'},metric:{flex:1,padding:10,borderRightColor:'#20333b',borderRightWidth:1},metricLabel:{color:'#8ba1a8',fontFamily:'Courier',fontSize:10},metricValue:{color:'#e6f3f0',fontFamily:'Courier',fontSize:15,marginTop:6},hint:{color:'#71868b',fontSize:11,lineHeight:16,marginTop:11},control:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',minHeight:47,backgroundColor:'#10232a',borderColor:'#1e3941',borderWidth:1,borderRadius:7,paddingHorizontal:12,marginBottom:8},controlColumn:{marginBottom:8},controlLabel:{color:'#d5e7e3',fontSize:13,fontWeight:'600'},chevron:{color:'#79e3bb',fontSize:24,fontWeight:'300'},danger:{borderColor:'#593738'},selectOptions:{flexDirection:'row',gap:5},option:{borderColor:'#29434a',borderWidth:1,borderRadius:5,paddingHorizontal:8,paddingVertical:6},optionSelected:{backgroundColor:'#24604f',borderColor:'#79e3bb'},optionText:{color:'#c2d4d1',fontSize:10},value:{color:'#79e3bb',fontFamily:'Courier',fontSize:12},sliderTrack:{height:20,marginHorizontal:3,position:'relative'},sliderFill:{height:3,backgroundColor:'#79e3bb',position:'absolute',left:0,top:8},sliderDots:{position:'absolute',left:0,right:0,top:3,flexDirection:'row',justifyContent:'space-between'},sliderDot:{width:13,height:13,borderRadius:7,backgroundColor:'#a6e8cf',borderWidth:3,borderColor:'#14352f'},cameraPreview:{height:180,borderRadius:8,backgroundColor:'#102b34',alignItems:'center',justifyContent:'center',padding:20,overflow:'hidden',position:'relative'},cameraImage:{position:'absolute',inset:0,width:'100%',height:'100%',opacity:.45},cameraBadge:{borderColor:'#508277',borderWidth:1,borderRadius:30,paddingHorizontal:9,paddingVertical:5,marginBottom:12},cameraBadgeText:{color:'#9bd9c2',fontFamily:'Courier',fontSize:9},cameraTitle:{color:'#e6f3f0',fontWeight:'700',fontSize:16},});
+
+const PAPER='#fafaf6', GRID='#e6ebf2', INK='#2e3033', INK2='#6b6f73', RULE='#cfd3d6', BLUE='#2f53b5', RED='#cf3f35';
+/** The faint 24 pt graph-paper grid behind native pages, matching the gateway's screen. */
+function Paper(){ const {width,height}=useWindowDimensions(); return <View style={StyleSheet.absoluteFill} pointerEvents="none">{Array.from({length:Math.ceil(height/24)},(_,i)=><View key={`h${i}`} style={[styles.gridH,{top:i*24}]}/>)}{Array.from({length:Math.ceil(width/24)},(_,i)=><View key={`v${i}`} style={[styles.gridV,{left:i*24}]}/>)}</View>; }
+/** The Marionette mark: a control bar with three strings, the middle one holding a ring. */
+function Mark(){ return <View style={styles.mark}><View style={styles.markBar}/><View style={styles.markHandle}/><View style={[styles.markString,{left:4,height:9}]}/><View style={[styles.markString,{left:12,top:10,height:6}]}/><View style={[styles.markString,{left:20,height:11}]}/><View style={styles.markRing}/></View>; }
+
+const styles=StyleSheet.create({
+  flex:{flex:1}, live:{flex:1,backgroundColor:PAPER}, webview:{flex:1,backgroundColor:PAPER}, loading:{position:'absolute',top:0,left:0,right:0,bottom:0,alignItems:'center',justifyContent:'center',backgroundColor:PAPER},
+  page:{flex:1,backgroundColor:PAPER}, content:{paddingHorizontal:22,paddingBottom:40},
+  gridH:{position:'absolute',left:0,right:0,height:StyleSheet.hairlineWidth,backgroundColor:GRID}, gridV:{position:'absolute',top:0,bottom:0,width:StyleSheet.hairlineWidth,backgroundColor:GRID},
+  markRow:{flexDirection:'row',alignItems:'center',gap:10,marginTop:40}, markText:{color:INK,fontSize:18,fontWeight:'600'},
+  mark:{width:26,height:26}, markBar:{position:'absolute',left:3,right:3,top:5,height:2,borderRadius:1,backgroundColor:INK}, markHandle:{position:'absolute',left:12,top:1,width:2,height:5,borderRadius:1,backgroundColor:INK},
+  markString:{position:'absolute',top:7,width:0,borderLeftWidth:1.5,borderStyle:'dashed',borderColor:INK}, markRing:{position:'absolute',left:9.5,top:16,width:7,height:7,borderRadius:4,borderWidth:1.8,borderColor:INK},
+  title:{color:INK,fontSize:30,lineHeight:35,fontWeight:'600',letterSpacing:-0.3,marginTop:56,marginBottom:10,maxWidth:320},
+  body:{color:INK2,fontSize:16,lineHeight:23,marginBottom:28,maxWidth:300},
+  input:{backgroundColor:'#fff',borderColor:INK,borderWidth:1.5,borderRadius:12,paddingHorizontal:16,paddingVertical:15,fontFamily:'Menlo',fontSize:20,color:INK},
+  note:{fontFamily:'Noteworthy',color:BLUE,fontSize:17,marginTop:8,marginLeft:4,transform:[{rotate:'-1deg'}]},
+  error:{color:RED,fontSize:16,lineHeight:22,marginTop:14},
+  button:{height:56,borderRadius:12,backgroundColor:BLUE,alignItems:'center',justifyContent:'center',marginTop:22}, buttonText:{color:'#fff',fontSize:17,fontWeight:'600'}, pressed:{opacity:0.75},
+  recent:{marginTop:34}, recentTitle:{color:INK2,fontSize:14,marginBottom:4}, recentRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',minHeight:48,borderTopWidth:1,borderTopColor:RULE}, recentText:{fontFamily:'Menlo',fontSize:15,color:INK}, recentGo:{color:BLUE,fontSize:15},
+  waiting:{flex:1,alignItems:'center',justifyContent:'center',gap:16,paddingHorizontal:30}, waitingText:{color:INK,fontSize:17,textAlign:'center'},
+  secondary:{minHeight:44,paddingHorizontal:20,borderRadius:10,borderWidth:1.5,borderColor:INK,backgroundColor:'#fff',alignItems:'center',justifyContent:'center'}, secondaryText:{color:INK,fontSize:16,fontWeight:'500'},
+});
