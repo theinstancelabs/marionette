@@ -77,12 +77,14 @@ describe('the /screen mirror bridge',()=>{
     M.sendAction('drive','base.drive',{ x:0, y:0.2 },{ live:true }); M.sendAction('deadman','teleop.deadman',true); vi.advanceTimersByTime(250);
     expect(actions(second)[0]).toMatchObject({ controlId:'drive', value:{ x:0, y:0.2 }, live:true, sessionId:'g' }); expect(actions(second)[1]).toMatchObject({ controlId:'deadman', value:true });
     expect(new Set(actions(second).map(m=>m.controlId))).toEqual(new Set(['drive','deadman'])); expect(actions(second).filter(m=>m.renew).length).toBeGreaterThan(2); });
-  it('cuts a drag when the gateway moves the mirror to another phone', ()=>{ vi.useFakeTimers(); const { M } = mirrorPage('');
+  it('cuts a drag when the gateway moves the mirror to another phone, and names the phone each action was meant for', ()=>{ vi.useFakeTimers(); const { M } = mirrorPage('');
     const ws = FakeSocket.all[0]; connected(ws, 'phone-1');
     M.sendAction('drive','base.drive',{ x:0, y:0.5 },{ live:true }); M.sendAction('deadman','teleop.deadman',true); const before = actions(ws).length; expect(before).toBe(2);
+    expect(actions(ws).map(m=>m.phoneId)).toEqual(['phone-1','phone-1']);
     // Phone 1 left; the mirror now follows phone 2, with the finger still on the stick.
     ws.receive(phoneConfig('phone-2')); M.sendAction('drive','base.drive',{ x:0, y:0.6 },{ live:true }); vi.advanceTimersByTime(1000);
     expect(actions(ws)).toHaveLength(before);
     M.sendAction('drive','base.drive',{ x:0, y:0 }); expect(actions(ws)).toHaveLength(before);
-    M.sendAction('drive','base.drive',{ x:0.2, y:0 },{ live:true }); expect(actions(ws).at(-1)).toMatchObject({ controlId:'drive', value:{ x:0.2, y:0 }, live:true }); });
+    M.sendAction('drive','base.drive',{ x:0.2, y:0 },{ live:true }); expect(actions(ws).at(-1)).toMatchObject({ controlId:'drive', value:{ x:0.2, y:0 }, live:true, phoneId:'phone-2' });
+    vi.advanceTimersByTime(250); expect(actions(ws).filter(m=>m.renew).every(m=>m.phoneId==='phone-2')).toBe(true); expect(actions(ws).filter(m=>m.renew).length).toBeGreaterThan(0); });
 });

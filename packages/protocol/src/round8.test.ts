@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CLOSE_CODES, HTML_BRIDGE_VERSION, PROTOCOL_VERSION, buildQuickReference, formatPairingCode, operatorPose, rawPoseFor, htmlBridgeScript, isJsonValue, linkQuality, normalizePairingCode, pairingLink, parsePairingLink, sanitizeConfig, sanitizePose, defaultConfig,
-  staleAfterMs, validateHello, validateHtmlBridgeRtc, validateHtmlConfig, validatePing, validatePong, validatePose, validateRobotState, validateRtc, validateScreen, validateStatus, type RobotView } from './index';
+  staleAfterMs, validateAction, validateHello, validateHtmlBridgeRtc, validateHtmlConfig, validatePing, validatePong, validatePose, validateRobotState, validateRtc, validateScreen, validateStatus, type RobotView } from './index';
 
 const pose = { type: 'pose', version: 1, sessionId: 's', seq: 1, monotonicTs: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, covariance: [0, 0, 0, 0, 0, 0], source: 'arkit', trackingState: 'normal', calibrationVersion: 'v', heartbeat: true };
 
@@ -38,6 +38,16 @@ describe('round 8 protocol additions', () => {
     expect(validateRtc({ type: 'rtc', version: 1, kind: 'request', peer: 'bad peer' })).toBe(false);
     expect(validateHtmlBridgeRtc({ type: 'rtc', version: HTML_BRIDGE_VERSION, kind: 'answer', to: 'c1', peer: 'p', sdp: 'v=0' })).toBe(true);
     expect(validateHtmlBridgeRtc({ type: 'rtc', version: HTML_BRIDGE_VERSION, kind: 'answer', from: 'c1' })).toBe(false);
+  });
+
+  it('lets an action name the phone it was meant for, as a mirror does', () => {
+    const action = { type: 'action', version: PROTOCOL_VERSION, sessionId: 'g', controlId: 'drive', action: 'base.drive', value: { x: 0.8, y: 0 }, live: true, sentAt: 1 };
+    expect(validateAction(action)).toBe(true);
+    expect(validateAction({ ...action, phoneId: 'phone-2' })).toBe(true);
+    expect(validateAction({ ...action, phoneId: '' })).toBe(false);
+    expect(validateAction({ ...action, phoneId: 'p'.repeat(65) })).toBe(false);
+    expect(validateAction({ ...action, phoneId: 2 })).toBe(false);
+    expect(validateAction({ ...action, phoneId: null })).toBe(false);
   });
 
   it('keeps the phone send time on a sanitized pose and checks latency stamps', () => {

@@ -349,8 +349,13 @@ export type ConfigMessage = {
  *
  * `live` marks a sample of a value being dragged (a slider, a stick): more will follow.
  * Letting go sends the final value without `live`.
+ *
+ * `phoneId` is the phone the action was meant for. A desktop mirror (`/screen`) sets it,
+ * since the gateway can move a mirror to another phone while its actions are on the way:
+ * the gateway drops an action meant for a phone other than the one its sender acts as.
+ * Phones never need to send it.
  */
-export type ActionMessage = { type: 'action'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId: string; action: string; value?: ControlValue; renew?: true; live?: true; sentAt: number };
+export type ActionMessage = { type: 'action'; version: typeof PROTOCOL_VERSION; sessionId: string; controlId: string; action: string; value?: ControlValue; renew?: true; live?: true; phoneId?: string; sentAt: number };
 export type HtmlConfigMessage = {
   type: 'html_config'; version: typeof PROTOCOL_VERSION; sessionId: string;
   htmlVersion: typeof HTML_CONFIG_VERSION; bridgeVersion: typeof HTML_BRIDGE_VERSION;
@@ -633,6 +638,7 @@ export function validateAction(message: unknown): message is ActionMessage {
     && isBoundedString(action.sessionId, 128) && isBoundedString(action.controlId, 128)
     && isBoundedString(action.action, 256) && (action.value === undefined || isControlValue(action.value))
     && (action.renew === undefined || action.renew === true) && (action.live === undefined || action.live === true)
+    && (action.phoneId === undefined || isBoundedString(action.phoneId, 64))
     && typeof action.sentAt === 'number' && Number.isFinite(action.sentAt);
 }
 
