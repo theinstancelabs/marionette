@@ -18,7 +18,7 @@ npm run dev:backend       # listens on 0.0.0.0:8787
 npm run dev:viewer        # opens Vite on :5173
 ```
 
-Open the viewer, type `localhost` and press **Connect** (an address can be an IP, `host:port`, a full `ws://` URL or a pasted pairing link; the port defaults to 8787). This is the Marionette diagnostic loop; it does not connect to Axol. The iPhone should connect to the LAN or Tailscale address of the computer running `dev:backend`, while Axol's `10.1.10.220` remains unused by this diagnostic build. On start the gateway prints its pairing code, a pairing link and a QR code; phones need the code, clients on the same computer don't (see [Pairing](#pairing)). There is no TLS, so keep the gateway on the local network or a private tailnet. Browsers may connect (WebSocket) and read the REST API only from loopback pages or pages served from the gateway's own host name; add other viewer origins with `MARIONETTE_ALLOWED_ORIGINS=http://host:5173`.
+Open the viewer, type `localhost` and press **Connect** (an address can be an IP, `host:port`, a full `ws://` URL or a pasted pairing link; the port defaults to 8787). This is the Marionette diagnostic loop; it does not connect to Axol. The iPhone should connect to the LAN or Tailscale address of the computer running `dev:backend`, while Axol's `10.1.10.220` remains unused by this diagnostic build. On start the gateway prints its pairing code, a pairing link and a QR code; phones need the code, clients on the same computer that connect to `localhost` don't (see [Pairing](#pairing)). There is no TLS, so keep the gateway on the local network or a private tailnet. Browsers may connect (WebSocket) and read the REST API only from loopback pages or pages served from the gateway's own host name; add other viewer origins with `MARIONETTE_ALLOWED_ORIGINS=http://host:5173`.
 
 ## Build the iPhone app
 
@@ -155,7 +155,7 @@ The gateway pings every phone and robot once a second (`{"type":"ping","version"
 
 ### Pairing
 
-The gateway has a stable id and an 8-character pairing code (Crockford base32, shown as `K7Q2-M9XD`; case, dashes and spaces don't matter, and O, I and L read as 0, 1 and 1), kept in `~/.marionette/gateway.json`. Pairing is on by default: phones and every other client off the gateway's computer need the code, clients on the same computer (loopback) don't. On start the gateway prints the code, a pairing link and a QR code of the link:
+The gateway has a stable id and an 8-character pairing code (Crockford base32, shown as `K7Q2-M9XD`; case, dashes and spaces don't matter, and O, I and L read as 0, 1 and 1), kept in `~/.marionette/gateway.json`. Pairing is on by default: phones and every other client off the gateway's computer need the code. A client on the same computer goes without it when it connects over loopback and asks for this computer by one of its names (its `Host` header): `localhost`, a loopback address, the computer's host name or `.local` name, one of its addresses, or, from a container on it, `host.docker.internal`, `gateway.docker.internal`, `host.orb.internal` or `host.containers.internal` (Docker Desktop and OrbStack hand a container's connections over from 127.0.0.1; `.internal` names can't be registered in public DNS). Anything else from loopback needs the code like a remote client, since a web page whose DNS was rebound to 127.0.0.1 still asks for the name it was loaded from; the gateway logs each such host once. On start the gateway prints the code, a pairing link and a QR code of the link:
 
 ```
 marionette://pair?v=1&host=192.168.1.20,100.64.0.5&port=8787&code=K7Q2M9XD&id=gw-4k9q2m7xd1&name=lab-mac
@@ -167,7 +167,7 @@ A WebSocket client gives the code in the address (`ws://host:8787/ws?token=K7Q2M
 
 | Variable | Default | |
 |---|---|---|
-| `MARIONETTE_AUTH` | `on` | `on`: everyone but this computer needs the code. `strict`: everyone does (use it behind a reverse proxy on the same computer, which makes every client look local). `off`: nobody does. |
+| `MARIONETTE_AUTH` | `on` | `on`: everyone needs the code but clients on this computer that ask for it by name (above). `strict`: everyone does (use it behind a reverse proxy on the same computer, which makes every client look local). `off`: nobody does. |
 | `MARIONETTE_TOKEN` | the saved code | Fixes the code (4 to 64 characters). |
 | `MARIONETTE_NAME` | the host name | The name in the link, in Bonjour and in `config.serverName`. |
 | `MARIONETTE_HOME` | `~/.marionette` | Where `gateway.json` is kept. |

@@ -173,14 +173,15 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
   const foreignHosts = new Set<string>();
   /**
    * A client on this computer, which `on` lets in without the code: it comes from loopback and asks for this computer
-   * by one of its names. A web page whose DNS was rebound to 127.0.0.1 comes from loopback too, but its Host (and
-   * Origin) is still the name the page was loaded from, so it needs the code like any remote client.
+   * by one of its names, a container on it included (`host.docker.internal` and the like, see `isOwnHost`). A web page
+   * whose DNS was rebound to 127.0.0.1 comes from loopback too, but its Host (and Origin) is still the name the page was
+   * loaded from, so it needs the code like any remote client.
    */
   const onThisComputer = (req: http.IncomingMessage) => {
     const address = addressOf(req); if (!isLoopback(address)) return false;
     if (isOwnHost(req.headers.host, advertised())) return true;
     const host = String(req.headers.host ?? '(none)').slice(0, 128);
-    if (!foreignHosts.has(host) && foreignHosts.size < 64) { foreignHosts.add(host); log({ kind: 'pairing', address, host, msg: `${address} asked for host ${host}, which is not this computer, so it needs the pairing code (connect to localhost or 127.0.0.1 to go without)` }); }
+    if (!foreignHosts.has(host) && foreignHosts.size < 64) { foreignHosts.add(host); log({ kind: 'pairing', address, host, msg: `${address} asked for host ${host}, which is not a name of this computer: connect to localhost or 127.0.0.1, or pass the pairing code` }); }
     return false;
   };
   /**
