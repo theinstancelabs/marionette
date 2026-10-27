@@ -3,39 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import WebSocket from 'ws';
 import { createServer } from './server.js';
-import { PROTOCOL_VERSION, defaultConfig, matrixToQuaternion, nominalCovariance, type ActionMessage, type ControlValue, type PosePacket, type Vector3 } from '@marionette/protocol';
+import { PROTOCOL_VERSION, defaultConfig, nominalCovariance, type PosePacket, type Vector3 } from '@marionette/protocol';
+import { FLAT, act, connect, drag, held, live, mirrorOf, open, phone, phoneState, port, pose, sendPose, sleep, start, stopGateway, value, waitFor, type Client } from './test-helpers.js';
 
-let gateway: ReturnType<typeof createServer> | undefined; let port: number;
-afterEach(async()=>{ if(gateway) await gateway.close(); gateway=undefined; });
-async function waitFor(predicate: () => boolean, timeoutMs = 1000) { const started = Date.now(); while (!predicate()) { if (Date.now() - started >= timeoutMs) throw new Error('Timed out waiting for gateway messages'); await new Promise(resolve => setTimeout(resolve, 10)); } }
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function start(options: Parameters<typeof createServer>[1] = {}) { const created=createServer(0, options); gateway=created; await new Promise<void>(r=>created.server.listen(0,r)); port=(created.server.address() as any).port; }
-type Client = { ws: WebSocket; messages: any[]; id?: string; session: string; statuses: (controlId?: string) => any[]; of: (type: string, phoneId?: string) => any[]; configOf: (phoneId?: string) => any };
-async function open(headers: Record<string, string> = {}): Promise<Client> {
-  const ws=new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers }); const messages:any[]=[]; ws.on('message',d=>messages.push(JSON.parse(d.toString())));
-  await new Promise((resolve, reject)=>{ ws.once('open',resolve); ws.once('error',reject); }); ws.on('error',()=>{ /* a terminated socket may report ECONNRESET before close */ });
-  const of = (type: string, phoneId?: string) => messages.filter(m=>m.type===type&&(phoneId===undefined||m.phoneId===phoneId));
-  return { ws, messages, session: '', of, statuses: controlId => of('status').filter(m=>!controlId||m.controlId===controlId), configOf: phoneId => messages.filter(m=>m.type==='config'&&(phoneId ? m.phone?.id===phoneId : !m.phone)).at(-1) };
-}
-/** A console (viewer or consumer): says hello and gets the gateway view plus every phone's. */
-async function connect(headers: Record<string, string> = {}) { const client=await open(headers); client.ws.send(JSON.stringify({ type:'hello', version:PROTOCOL_VERSION, role:'console' })); await waitFor(()=>!!client.configOf()); return client; }
-/** A phone: says hello with its device id, learns its phone id, and streams one pose. */
-async function phone(deviceId = 'a', session = `iphone-${deviceId}`) { const client=await open(); client.session=session; client.ws.send(JSON.stringify({ type:'hello', version:PROTOCOL_VERSION, role:'phone', deviceId })); await waitFor(()=>client.messages.some(m=>m.type==='config'&&m.phone)); client.id=client.messages.find(m=>m.type==='config'&&m.phone).phone.id; sendPose(client,pose(session,0)); await sleep(15); return client; }
-const getState = async () => await fetch(`http://127.0.0.1:${port}/api/state`).then(r=>r.json()) as any;
-const phoneState = async (id: string) => (await getState()).phones.find((p: any)=>p.id===id);
-const value = (config: any, id: string) => config?.controls.find((c: any)=>c.id===id)?.value;
-const held = (config: any, id: string) => config?.controls.find((c: any)=>c.id===id)?.held;
-// A flat phone, screen up, top edge toward ARKit -Z (camera +X = bottom edge, +Y = right edge, +Z = screen).
-const FLAT = matrixToQuaternion([0,0,1,0, 1,0,0,0, 0,1,0,0, 0,0,0,1]);
-const NOMINAL = [.0025,.0025,.0025,.01,.01,.01];
-const pose = (sessionId: string, seq: number, overrides: Partial<PosePacket> = {}): PosePacket => ({ type:'pose', version:1, sessionId, seq, monotonicTs:seq+1, position:{x:0,y:0,z:0}, rotation:FLAT, covariance:NOMINAL, source:'arkit', trackingState:'normal', calibrationVersion:'arkit-v1', heartbeat:true, ...overrides });
-const sendPose = (client: Client, p: PosePacket) => client.ws.send(JSON.stringify(p));
-const act = (client: Client, controlId: string, action: string, value?: string | number | boolean, renew?: true) => client.ws.send(JSON.stringify({type:'action',version:PROTOCOL_VERSION,sessionId:client.session||'console',controlId,action,value,renew,sentAt:Date.now()} satisfies ActionMessage));
-/** One sample of a value being dragged; `final` is the value when the operator lets go. */
-const drag = (client: Client, controlId: string, action: string, value: ControlValue, how: { renew?: true; final?: true } = {}) => client.ws.send(JSON.stringify({type:'action',version:PROTOCOL_VERSION,sessionId:client.session||'console',controlId,action,value,renew:how.renew,live:how.final?undefined:true,sentAt:Date.now()} satisfies ActionMessage));
-const live = (config: any, id: string) => config?.controls.find((c: any)=>c.id===id)?.live;
+afterEach(stopGateway);
 
 describe('gateway handshake and layout',()=>{
   it('tells a console the layout and roster, sends the screen, and streams every camera', async()=>{ await start(); const viewer=await connect();
@@ -90,9 +62,16 @@ describe('several phones',()=>{
     // A second connection from the same phone takes over; the old one is closed.
     const closed=new Promise<number>(resolve=>b.ws.once('close',code=>resolve(code))); const b2=await phone('b','iphone-b2'); expect(b2.id).toBe('phone-2'); expect(await closed).toBe(4001);
     expect(viewer.configOf().phones.map((p: any)=>[p.id,p.connected])).toEqual([['phone-1',true],['phone-2',true]]); for (const c of [viewer,again,b2]) c.ws.close(); });
-  it('tells consoles each phone\'s config when it leaves or is replaced, and a replaced phone starts uncalibrated', async()=>{ await start(); const viewer=await connect(); const a=await phone('a'); const b=await phone('b');
+  it('tells consoles each phone\'s config when it leaves or is replaced; back in the same session it keeps its calibration, in a new one it starts uncalibrated', async()=>{ await start(); const viewer=await connect(); const a=await phone('a'); const b=await phone('b');
     act(a,'capture-origin','calibration.captureOrigin'); act(b,'capture-origin','calibration.captureOrigin'); await waitFor(()=>viewer.configOf('phone-1')?.calibration.status==='captured'&&viewer.configOf('phone-2')?.calibration.status==='captured');
-    a.ws.close(); await waitFor(()=>viewer.configOf('phone-1').phone.connected===false); expect(viewer.configOf('phone-1').calibration).toMatchObject({ status:'uncalibrated', epoch:2 });
+    // Leaving keeps the calibration, in case the phone comes back inside the same ARKit session.
+    a.ws.close(); await waitFor(()=>viewer.configOf('phone-1').phone.connected===false); expect(viewer.configOf('phone-1').calibration).toMatchObject({ status:'captured', epoch:1 });
+    const back=await phone('a','iphone-a',{ sessionId:'iphone-a' }); await waitFor(()=>viewer.configOf('phone-1').phone.connected===true); expect(viewer.configOf('phone-1').calibration).toMatchObject({ status:'captured', epoch:1 });
+    sendPose(back,pose('iphone-a',1,{position:{x:0,y:0,z:-0.1}})); await waitFor(()=>viewer.of('pose','phone-1').at(-1)?.position.x>0.09); expect(viewer.of('pose','phone-1').at(-1).calibrationVersion).toBe('quick-v2:1');
+    // Back in another session is another world: uncalibrated, and the frame's epoch moves on.
+    back.ws.close(); await waitFor(()=>viewer.configOf('phone-1').phone.connected===false); const again=await phone('a','iphone-a2',{ sessionId:'iphone-a2' });
+    await waitFor(()=>viewer.configOf('phone-1').calibration.status==='uncalibrated'); expect(viewer.configOf('phone-1').calibration.epoch).toBe(2); again.ws.close();
+    // A takeover from a hello without the session (an older app) starts uncalibrated as well.
     const b2=await phone('b','iphone-b2'); await waitFor(()=>viewer.configOf('phone-2').calibration.status==='uncalibrated');
     expect(viewer.of('pose','phone-2').some(m=>m.heartbeat===false&&m.trackingState==='unavailable')).toBe(true); expect(b2.configOf('phone-2').calibration.status).toBe('uncalibrated');
     for (const c of [viewer,b2]) c.ws.close(); });
@@ -197,8 +176,6 @@ describe('cameras',()=>{
 describe('feedback to phones',()=>{
   const feedback=(phoneId?: string, values: Record<string, unknown> = { state:'engaged', engaged:true, lift:0.42 }, extra: object = {})=>JSON.stringify({ type:'status', version:PROTOCOL_VERSION, sessionId:'axol', controlId:'axol.feedback', message:'', values, ...(phoneId ? { phoneId } : {}), ...extra });
   const relayed=(client: Client)=>client.statuses('axol.feedback');
-  /** A desktop /screen mirror following one phone ('' for the first connected one). */
-  async function mirrorOf(follow: string) { const mirror=await open(); mirror.ws.send(JSON.stringify({ type:'hello', version:PROTOCOL_VERSION, role:'console', follow })); await waitFor(()=>mirror.messages.some(m=>m.type==='config')); return mirror; }
   it('relays a console status to the phone it names and that phone\'s mirrors, and to nobody else', async()=>{ await start(); const viewer=await connect(); const consumer=await connect(); const a=await phone('a'); const b=await phone('b'); const mirrorA=await mirrorOf('phone-1'); const mirrorB=await mirrorOf('phone-2');
     consumer.ws.send(feedback('phone-1', { state:'blocked', reason:'Calibrate this phone first', engaged:false, lift:0.42 }, { extra:'not passed on' }));
     await waitFor(()=>relayed(a).length===1&&relayed(mirrorA).length===1);
