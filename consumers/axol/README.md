@@ -33,7 +33,7 @@ Everything is on one screen, with no modes. On a 390 × 844 iPhone nothing needs
   - The drive stick. It goes where you touch it and returns to the middle when you let go.
   - **Turn left** and **Turn right**, then **Raise lift** and **Lower lift**.
   - The **Speed limit** slider.
-- **More** opens a sheet with **Calibration**, the gateway address and **Disconnect**.
+- **More** opens a sheet with **Calibration**, **Reset left arm** and **Reset right arm**, the gateway address and **Disconnect**. A reset closes the sheet, and the headline says **Returning the left arm to rest** until the arm gets there.
 
 Hold the pad with your left thumb and drive with your right at the same time. A second finger that touches the pad and lifts off releases **Hold to move**.
 
@@ -55,6 +55,7 @@ All controls are declared, so the gateway keeps each phone's values and tracks h
 | `turn-left`, `turn-right` | hold buttons | `base.turnLeft`, `base.turnRight` | like the deadman |
 | `lift-up`, `lift-down` | hold buttons | `lift.up`, `lift.down` | like the deadman |
 | `speed-limit` | slider, live | `base.speedLimit` | 0 to 100 %, step 1, default 50 |
+| `reset-left`, `reset-right` | buttons | `arm.resetLeft`, `arm.resetRight` | A press, no value: send that arm back to its rest pose |
 | `calibration-start`, `calibration`, `capture-origin`, `calibration-cancel`, `reset-origin`, `calibration-check` | buttons | `calibration.*` | Marionette's own calibration |
 
 How the live controls stream (see "Live values" in the main README):
@@ -76,7 +77,7 @@ The consumer sends `status` messages to a phone through the gateway (see "Feedba
 - `controlId: "axol.feedback"`, with `message: ""`, the flat `values` below and a `sessionId` that names the Axol session (`axol-…`).
   - Axol sends it 5 times a second and at once on a change. If none arrives for 1.5 s, the headline says **No answer from Axol**.
   - If feedback from two different sessions arrives within 2 s, the headline says **Two Axol sessions** with the note "Two Axol sessions are using this gateway. Stop one of them." This happens when a simulated session and the robot use one gateway.
-- `controlId: "axol.notice"`, a one-off `message` shown as a toast.
+- `controlId: "axol.notice"`, a one-off `message` shown as a toast, such as why a reset was refused.
 
 Feedback never shows as a toast. Other statuses, such as the gateway's calibration replies, work as on the default screen.
 
@@ -94,6 +95,7 @@ Feedback never shows as a toast. Other statuses, such as the gateway's calibrati
 | `hasBase`, `baseMoving`, `baseFault` | boolean | The base tag, and "Base fault" in the headline. Without a base, the stick and turning are off. |
 | `driving`, `driver` | boolean, string | A "Desktop driving" tag when someone else drives, and "Desktop is driving" in the headline while you drive too |
 | `stopBy` | string | "Stopped by Phone 2" |
+| `resetting` | `"left"`, `"right"` or `""` | "Returning the left arm to rest" while that arm moves back to rest |
 | `streams` | string, like `"head,left,right"` | A pane for a stream Axol doesn't have says so |
 
 Until the first feedback arrives, the lift and drive controls all show, and the grip starts from this phone's last value.

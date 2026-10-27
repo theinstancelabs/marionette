@@ -27,6 +27,8 @@
     { "id": "lift-up", "type": "button", "label": "Raise lift", "action": "lift.up", "hold": true },
     { "id": "lift-down", "type": "button", "label": "Lower lift", "action": "lift.down", "hold": true },
     { "id": "speed-limit", "type": "slider", "label": "Speed limit", "action": "base.speedLimit", "value": 50, "min": 0, "max": 100, "step": 1, "unit": "%" },
+    { "id": "reset-left", "type": "button", "label": "Reset left arm", "action": "arm.resetLeft" },
+    { "id": "reset-right", "type": "button", "label": "Reset right arm", "action": "arm.resetRight" },
     { "id": "calibration-start", "type": "button", "label": "Start calibration", "action": "calibration.start", "tone": "accent" },
     { "id": "calibration", "type": "button", "label": "Capture calibration step", "action": "calibration.capture", "tone": "accent" },
     { "id": "capture-origin", "type": "button", "label": "Set origin here", "action": "calibration.captureOrigin", "tone": "accent" },
@@ -127,7 +129,7 @@ button.tag{cursor:pointer}
 .views{margin-top:6px}
 .views button{min-height:36px;height:36px;padding:0 3px;font-size:12px;line-height:1.1}
 
-/* Rows in the More sheet: calibration, any other controls, and the gateway */
+/* Rows in the More sheet: calibration, the arm resets, any other controls, and the gateway */
 .rows{margin-top:6px}
 .row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:8px 0;border-bottom:1px solid var(--rule)}
 .row.stack{display:block}
@@ -148,6 +150,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
 .row-btn.held{background:var(--ink);color:var(--paper)}
 .row-btn.dropped{border-color:var(--red);color:var(--red)}
 .row-btn.wide{width:100%}
+.row-note{margin:6px 0 0;font-size:14px;color:var(--ink2)}
 .row-btn small{font-weight:400;color:var(--ink2)}
 .mono{font-family:var(--mono);font-size:15px}
 
@@ -292,7 +295,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
       <b>Stop is on</b>
       <button type="button" id="estop-reset">Reset Stop</button>
     </div>
-    <button type="button" class="chip more" id="more" aria-label="More: calibration and the gateway">More</button>
+    <button type="button" class="chip more" id="more" aria-label="More: calibration, arm resets and the gateway">More</button>
   </header>
   <section class="pad-x">
     <h1 class="state" id="state">Connecting…</h1>
@@ -331,6 +334,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     drive: 'base.drive', turnLeft: 'base.turnLeft', turnRight: 'base.turnRight', liftUp: 'lift.up', liftDown: 'lift.down', speedLimit: 'base.speedLimit',
     start: 'calibration.start', capture: 'calibration.capture', cancel: 'calibration.cancel',
     check: 'calibration.check', origin: 'calibration.captureOrigin', clear: 'calibration.reset',
+    resetLeft: 'arm.resetLeft', resetRight: 'arm.resetRight',
   };
   const DRIVE_HOLDS = [ACTION.turnLeft, ACTION.turnRight, ACTION.liftUp, ACTION.liftDown];
   // Status messages the consumer on Axol sends this phone: robot state at 5 Hz, and one-off notices. Each Axol
@@ -566,6 +570,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     else if (!f) say('No answer from Axol', 'Start Marionette in the Axol control panel.', true);
     else if (pad === 'dropped') say('Hold dropped', 'Let go of the pad and press again.', true);
     else if (stickState === 'dropped' || holds.includes('dropped')) say('Drive dropped', 'The gateway stopped hearing it. Let go, then touch it again.', true);
+    else if (f.resetting === 'left' || f.resetting === 'right') say('Returning the ' + f.resetting + ' arm to rest', 'Press Stop to halt it.', false, 'moving');
     // Driving with the arm at rest: the base's state. Otherwise the arm's, in the same order as before.
     else if ((turning || lifting) && pad === 'idle' && !f.engaged) {
       const confirmed = stickState === 'live' || holds.includes('held');
@@ -648,7 +653,7 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
     for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.value === c.value));
   }
 
-  /* ---------- The More sheet: calibration, any other controls, the gateway ---------- */
+  /* ---------- The More sheet: calibration, the arm resets, any other controls, the gateway ---------- */
   const PLACED = new Set(Object.values(ACTION));
   function rowFor(c, group = rowHolds) {
     if (c.type === 'toggle') {
@@ -693,10 +698,19 @@ select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);bor
   }
   const listedControls = () => (s.config ? s.config.controls.filter(x => !PLACED.has(x.action)) : []);
   const hasCalibration = () => !!control(ACTION.start) || !!control(ACTION.origin);
-  const moreKey = () => JSON.stringify([listedControls().map(x => [x.id, x.type, x.label, x.options, x.min, x.max, x.step]), hasCalibration()]);
+  const resetControls = () => [ACTION.resetLeft, ACTION.resetRight].map(control).filter(c => c && c.type === 'button');
+  const moreKey = () => JSON.stringify([listedControls().map(x => [x.id, x.type, x.label, x.options, x.min, x.max, x.step]), hasCalibration(), resetControls().map(c => [c.id, c.label])]);
+  // A reset moves an arm on its own, so the sheet closes to show the headline (and Stop) while it runs.
+  function resetRow() {
+    const list = resetControls(); if (!list.length) return null;
+    return h('div', { class: 'row stack' },
+      h('div', { class: 'pair' }, list.map(c => h('button', { type: 'button', class: 'row-btn', 'data-id': c.id, onclick: () => { send(c); closeSheet(); } }, c.label))),
+      h('p', { class: 'row-note' }, 'Moves the arm back to its rest pose.'));
+  }
   function more() {
     const rows = h('div', { class: 'rows', id: 'rows' });
     if (hasCalibration()) rows.append(h('button', { type: 'button', class: 'row link', id: 'calibration-row', onclick: () => openSheet('intro') }, h('span', {}, 'Calibration'), h('span', { class: 'val', id: 'calibration-val' })));
+    const resets = resetRow(); if (resets) rows.append(resets);
     for (const x of listedControls()) rows.append(rowFor(x));
     rows.append(h('div', { class: 'row' }, h('span', { class: 'mono', id: 'gateway-row' }), h('button', { type: 'button', class: 'row-btn', onclick: () => window.Marionette.disconnect() }, 'Disconnect')));
     return [top('Close', 'More', '', closeSheet), h('div', { class: 'sheet-body' }, rows)];

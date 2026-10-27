@@ -230,8 +230,10 @@ describe('the Axol screen',()=>{
     try { await start(); const viewer=await connect(); const config=viewer.configOf(); const byId=(id: string)=>config.controls.find((c: any)=>c.id===id);
       expect(config.controls.map((c: any)=>[c.id,c.type,c.action])).toEqual([['deadman','button','teleop.deadman'],['estop','toggle','safety.estop'],['arm','select','arm.select'],['cameras','select','camera.view'],
         ['scale','slider','teleop.translationScale'],['grip','slider','gripper.set'],['drive','joystick','base.drive'],['turn-left','button','base.turnLeft'],['turn-right','button','base.turnRight'],['lift-up','button','lift.up'],['lift-down','button','lift.down'],['speed-limit','slider','base.speedLimit'],
+        ['reset-left','button','arm.resetLeft'],['reset-right','button','arm.resetRight'],
         ...defaultConfig().controls.filter(c=>c.action.startsWith('calibration.')).map(c=>[c.id,c.type,c.action])]);
       for (const id of ['deadman','turn-left','turn-right','lift-up','lift-down']) expect(byId(id).hold).toBe(true);
+      expect([byId('reset-left'),byId('reset-right')].map((c: any)=>[c.label,c.hold])).toEqual([['Reset left arm',undefined],['Reset right arm',undefined]]);
       expect([byId('lift-up').label,byId('lift-down').label]).toEqual(['Raise lift','Lower lift']); expect(byId('estop').value).toBe(false);
       expect(byId('arm')).toMatchObject({ value:'left', options:[{ value:'left' },{ value:'right' }] });
       expect(byId('cameras').value).toBe('head'); expect(byId('cameras').options.map((o: any)=>[o.value,o.label])).toEqual([['head','Head'],['wrists','Both wrists'],['left','Left wrist'],['right','Right wrist'],['all','All three']]);
