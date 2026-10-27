@@ -77,8 +77,11 @@ export async function pairingBanner(info: Pairing): Promise<string> {
   return `${how}\nPairing link: ${info.url}\n${await QRCode.toString(info.url, { type: 'terminal', small: true })}`;
 }
 
-/** Advertises `_marionette._tcp` over Bonjour so the app can list the gateway under Nearby. Returns the stop function. */
-export function advertise(info: { name: string; port: number; gatewayId: string; auth: boolean }, warn: (message: string) => void): () => void {
+/**
+ * Advertises `_marionette._tcp` over Bonjour so the app can list the gateway under Nearby. Returns the stop function,
+ * which resolves once the goodbye is sent (so phones drop the entry at once) or after a second.
+ */
+export function advertise(info: { name: string; port: number; gatewayId: string; auth: boolean }, warn: (message: string) => void): () => Promise<void> {
   try {
     const bonjour = new Bonjour(undefined, (error: Error) => warn(`Bonjour: ${error.message}`));
     const name = info.name.slice(0, 63);
@@ -86,6 +89,6 @@ export function advertise(info: { name: string; port: number; gatewayId: string;
     const host = `${os.hostname().split('.')[0] || 'marionette'}.local`;
     const service = bonjour.publish({ name, type: 'marionette', protocol: 'tcp', port: info.port, host, txt: { id: info.gatewayId, name, v: '1', auth: info.auth ? '1' : '0' } });
     service.on('error', (error: Error) => warn(`Bonjour: ${error.message}`));
-    return () => bonjour.unpublishAll(() => bonjour.destroy());
-  } catch (error) { warn(`Bonjour advertisement failed: ${(error as Error).message}`); return () => {}; }
+    return () => new Promise<void>(resolve => { const timer = setTimeout(resolve, 1000); bonjour.unpublishAll(() => { clearTimeout(timer); bonjour.destroy(); resolve(); }); });
+  } catch (error) { warn(`Bonjour advertisement failed: ${(error as Error).message}`); return async () => {}; }
 }

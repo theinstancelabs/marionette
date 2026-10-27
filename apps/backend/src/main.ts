@@ -18,5 +18,6 @@ gateway.server.listen(port, () => {
   console.log(`Marionette gateway "${info.name}" listening on http://0.0.0.0:${info.port}\nPhone screen preview: http://localhost:${info.port}/screen (add ?phone=phone-2 to mirror a particular phone)${file ? `\nScreen: live from ${file}` : ''}\nDiagnostics log: ${diagnostics.file ?? 'off'}`);
   pairingBanner(info).then(text => console.log(text), error => console.warn(`No pairing QR code: ${(error as Error).message}`));
 });
-const stop = () => { setTimeout(() => process.exit(0), 1000).unref(); gateway.close().finally(() => { diagnostics.close(); process.exit(0); }); };
+// Closing sends the Bonjour goodbye, so phones stop listing this gateway at once.
+const stop = () => { setTimeout(() => process.exit(0), 2000).unref(); gateway.close().finally(() => { diagnostics.close(); process.exit(0); }); };
 process.once('SIGINT', stop); process.once('SIGTERM', stop);

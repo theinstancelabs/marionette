@@ -733,11 +733,11 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: G
     }
   }, Math.max(20, Math.min(100, Math.floor(Math.min(watchdogMs, holdTimeoutMs, streamTimeoutMs) / 3)))); watchdogTimer.unref();
   // Advertised on the local network (Bonjour) once listening, so the app can list it under Nearby.
-  let stopAdvertising = () => {};
+  let stopAdvertising = async () => {};
   server.on('listening', () => { if (mdns) stopAdvertising = advertise({ name, port: listeningPort(), gatewayId: identity.id, auth: mode !== 'off' }, warn); });
   return { app, server, wss, state, pairing: currentPairing, close: () => {
-    stopAdvertising(); if (watchedHtml) fs.unwatchFile(watchedHtml, reloadHtml); for (const file of kitFiles.files) fs.unwatchFile(file, reloadKit);
+    const advertised = stopAdvertising(); if (watchedHtml) fs.unwatchFile(watchedHtml, reloadHtml); for (const file of kitFiles.files) fs.unwatchFile(file, reloadKit);
     for (const timer of [cameraTimer, heartbeatTimer, pingTimer, watchdogTimer]) clearInterval(timer);
     for (const socket of wss.clients) socket.terminate(); server.closeAllConnections?.();
-    return new Promise<void>(resolve => server.close(() => resolve())); } };
+    return Promise.all([advertised, new Promise<void>(resolve => server.close(() => resolve()))]).then(() => {}); } };
 }
