@@ -5,7 +5,7 @@ import { deflateSync } from 'node:zlib';
 import express from 'express';
 import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
-import { CALIBRATION_STEPS, CHECK_MOVES, CHECK_MOVE_TEXT, STREAM_RENEW_MS, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, describeCheckResult, guidedCaptureError, htmlBridgeScript, isLiveControl, isStickInRange, operatorPose, phoneColor, sameValue, sanitizeConfig, sanitizePose, streamEndValue, validateAction, validateCameraFrame, validateHello, validateHtmlConfig, validatePose, type ActionMessage, type CalibrationCheck, type CalibrationState, type CameraFrameMessage, type CameraStream, type CheckMove, type ConfigMessage, type ControlValue, type GuidedSamples, type GuidedStep, type HelloMessage, type HtmlConfigMessage, type InputMessage, type LiveControl, type MarionetteMessage, type PhoneInfo, type PosePacket, type PoseReference, type StatusMessage, type UiControl, PROTOCOL_VERSION, HTML_BRIDGE_VERSION, HTML_CONFIG_VERSION } from '@marionette/protocol';
+import { CALIBRATION_STEPS, CHECK_MOVES, CHECK_MOVE_TEXT, STREAM_RENEW_MS, buildGuidedReference, buildQuickReference, checkCalibrationMove, defaultConfig, describeCheckResult, guidedCaptureError, htmlBridgeScript, isLiveControl, isStickInRange, operatorPose, phoneColor, sameValue, sanitizeConfig, sanitizePose, streamEndValue, validateAction, validateCameraFrame, validateHello, validateHtmlConfig, validatePose, validateStatus, type ActionMessage, type CalibrationCheck, type CalibrationState, type CameraFrameMessage, type CameraStream, type CheckMove, type ConfigMessage, type ControlValue, type GuidedSamples, type GuidedStep, type HelloMessage, type HtmlConfigMessage, type InputMessage, type LiveControl, type MarionetteMessage, type PhoneInfo, type PosePacket, type PoseReference, type StatusMessage, type UiControl, PROTOCOL_VERSION, HTML_BRIDGE_VERSION, HTML_CONFIG_VERSION } from '@marionette/protocol';
 import { createDiagnosticsLog, deltaMm, frameSummary, mm, noDiagnostics, rawAxes, type DiagnosticsLog } from './diagnostics.js';
 
 /**
@@ -479,6 +479,20 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
     return !!phone && (client.role === 'mirror' || socket === phone.socket) && cameraStreamsFor(phone).includes(cameraId);
   };
   const routeFrame = (frame: CameraFrameMessage) => deliver(frame, (client, socket) => wants(client, socket, frame.cameraId), true);
+  /**
+   * Feedback from a consumer to the phone screens (robot state, a notice). It goes to the phone it names and
+   * any mirror of that phone, or to every phone and mirror without `phoneId`; never to other consoles. The
+   * gateway only routes it: what it says is between the consumer and the screen. Phones and mirrors only listen.
+   */
+  const handleStatus = (socket: WebSocket, client: Client, message: StatusMessage) => {
+    if (client.role !== 'console') return;
+    becomeConsole(socket, client);
+    const phone = message.phoneId ? phones.get(message.phoneId) : undefined; if (message.phoneId && !phone) return;
+    // Rebuilt from its known fields, like poses and frames, so nothing else a console adds is passed on.
+    const relayed: StatusMessage = { type: 'status', version: PROTOCOL_VERSION, sessionId: typeof message.sessionId === 'string' && message.sessionId ? message.sessionId.slice(0, 128) : sessionId, message: message.message,
+      ...(message.controlId !== undefined ? { controlId: message.controlId } : {}), ...(message.values ? { values: { ...message.values } } : {}), ...(phone ? { phoneId: phone.info.id } : {}) };
+    deliver(relayed, (other, otherSocket) => phone ? otherSocket === phone.socket || (other.role === 'mirror' && other.phoneId === phone.info.id) : other.role === 'phone' || other.role === 'mirror');
+  };
   // Any client can produce frames for a declared stream (a camera process on the robot, say).
   const handleCameraFrame = (frame: CameraFrameMessage) => { if (state.layout.cameraStreams.some(stream => stream.id === frame.cameraId)) routeFrame({ type: 'camera_frame', version: PROTOCOL_VERSION, sessionId: frame.sessionId, cameraId: frame.cameraId, dataUrl: frame.dataUrl, capturedAt: frame.capturedAt }); };
 
@@ -507,6 +521,7 @@ export function createServer(port = Number(process.env.PORT) || 8787, options: {
         else if (type === 'action') { if (validateAction(message)) handleAction(socket, client, message); }
         else if (type === 'hello') { if (validateHello(message)) handleHello(socket, client, message); }
         else if (type === 'camera_frame') { if (validateCameraFrame(message)) handleCameraFrame(message); }
+        else if (type === 'status') { if (validateStatus(message)) handleStatus(socket, client, message); }
         else send(socket, status('Malformed message ignored'));
       } catch (error) { console.error('Marionette message handler failed', error); send(socket, status('Message ignored after a gateway error')); } });
     socket.on('close', () => {

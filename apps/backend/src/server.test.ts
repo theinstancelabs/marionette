@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { createServer } from './server.js';
@@ -191,6 +192,57 @@ describe('cameras',()=>{
     const frame=(cameraId: string)=>({ type:'camera_frame', version:PROTOCOL_VERSION, sessionId:'robot', cameraId, dataUrl:'data:image/jpeg;base64,AAAA', capturedAt:Date.now() });
     producer.ws.send(JSON.stringify(frame('arm-left'))); producer.ws.send(JSON.stringify(frame('wrist-9'))); await waitFor(()=>a.of('camera_frame').some(m=>m.sessionId==='robot')&&viewer.of('camera_frame').some(m=>m.sessionId==='robot'));
     await sleep(20); expect(viewer.of('camera_frame').some(m=>m.cameraId==='wrist-9')).toBe(false); for (const c of [viewer,a,producer]) c.ws.close(); });
+});
+
+describe('feedback to phones',()=>{
+  const feedback=(phoneId?: string, values: Record<string, unknown> = { state:'engaged', engaged:true, lift:0.42 }, extra: object = {})=>JSON.stringify({ type:'status', version:PROTOCOL_VERSION, sessionId:'axol', controlId:'axol.feedback', message:'', values, ...(phoneId ? { phoneId } : {}), ...extra });
+  const relayed=(client: Client)=>client.statuses('axol.feedback');
+  /** A desktop /screen mirror following one phone ('' for the first connected one). */
+  async function mirrorOf(follow: string) { const mirror=await open(); mirror.ws.send(JSON.stringify({ type:'hello', version:PROTOCOL_VERSION, role:'console', follow })); await waitFor(()=>mirror.messages.some(m=>m.type==='config')); return mirror; }
+  it('relays a console status to the phone it names and that phone\'s mirrors, and to nobody else', async()=>{ await start(); const viewer=await connect(); const consumer=await connect(); const a=await phone('a'); const b=await phone('b'); const mirrorA=await mirrorOf('phone-1'); const mirrorB=await mirrorOf('phone-2');
+    consumer.ws.send(feedback('phone-1', { state:'blocked', reason:'Calibrate this phone first', engaged:false, lift:0.42 }, { extra:'not passed on' }));
+    await waitFor(()=>relayed(a).length===1&&relayed(mirrorA).length===1);
+    expect(relayed(a)[0]).toEqual({ type:'status', version:1, sessionId:'axol', controlId:'axol.feedback', message:'', values:{ state:'blocked', reason:'Calibrate this phone first', engaged:false, lift:0.42 }, phoneId:'phone-1' });
+    expect(relayed(mirrorA)[0]).toEqual(relayed(a)[0]);
+    await sleep(30); for (const other of [b,mirrorB,viewer,consumer]) expect(relayed(other)).toEqual([]);
+    for (const c of [viewer,consumer,a,b,mirrorA,mirrorB]) c.ws.close(); });
+  it('sends a status without phoneId to every phone and every mirror, and still not to consoles', async()=>{ await start(); const viewer=await connect(); const consumer=await connect(); const a=await phone('a'); const b=await phone('b'); const mirror=await mirrorOf(''); const early=await mirrorOf('phone-3');
+    consumer.ws.send(JSON.stringify({ type:'status', version:PROTOCOL_VERSION, sessionId:'axol', controlId:'axol.notice', message:'Lift at its top' }));
+    await waitFor(()=>[a,b,mirror,early].every(c=>c.statuses('axol.notice').length===1));
+    expect(a.statuses('axol.notice')[0]).toEqual({ type:'status', version:1, sessionId:'axol', controlId:'axol.notice', message:'Lift at its top' });
+    await sleep(30); expect(viewer.statuses('axol.notice')).toEqual([]); expect(consumer.statuses('axol.notice')).toEqual([]);
+    for (const c of [viewer,consumer,a,b,mirror,early]) c.ws.close(); });
+  it('ignores statuses from phones and mirrors, malformed ones, and ones naming an unknown phone', async()=>{ await start(); const viewer=await connect(); const consumer=await connect(); const a=await phone('a'); const b=await phone('b'); const mirror=await mirrorOf('phone-1');
+    a.ws.send(feedback('phone-2')); a.ws.send(feedback()); mirror.ws.send(feedback('phone-2')); mirror.ws.send(feedback());
+    for (const bad of [{ values:{ nested:{ x:1 } } }, { values:{ empty:null } }, { values:'engaged' }, { version:2 }, { message:undefined }, { message:3 }, { controlId:'' }, { phoneId:'x'.repeat(65) }]) consumer.ws.send(feedback('phone-1', undefined, bad));
+    consumer.ws.send(feedback('phone-9'));
+    // One good status last: a socket's messages are handled in order, so once it arrives the others have had their chance.
+    consumer.ws.send(feedback('phone-1', { state:'idle' })); await waitFor(()=>relayed(a).length>=1); await sleep(30);
+    expect(relayed(a).map(m=>m.values)).toEqual([{ state:'idle' }]); expect(relayed(mirror).map(m=>m.values)).toEqual([{ state:'idle' }]);
+    for (const other of [b,viewer,consumer]) expect(relayed(other)).toEqual([]);
+    for (const c of [viewer,consumer,a,b,mirror]) c.ws.close(); });
+  it('makes a client whose first message is a status a console straight away', async()=>{ await start(); const a=await phone('a'); const quiet=await open();
+    quiet.ws.send(feedback('phone-1')); await waitFor(()=>!!quiet.configOf('phone-1'), 150); await waitFor(()=>relayed(a).length===1); quiet.ws.close(); a.ws.close(); });
+});
+
+describe('the Axol screen',()=>{
+  it('declares the controls, streams and views of the Axol contract', async()=>{ process.env.MARIONETTE_HTML_FILE=fileURLToPath(new URL('../../../consumers/axol/axol.html', import.meta.url));
+    try { await start(); const viewer=await connect(); const config=viewer.configOf(); const byId=(id: string)=>config.controls.find((c: any)=>c.id===id);
+      expect(config.controls.map((c: any)=>[c.id,c.type,c.action])).toEqual([['deadman','button','teleop.deadman'],['estop','toggle','safety.estop'],['arm','select','arm.select'],['cameras','select','camera.view'],['scale','slider','teleop.translationScale'],['drive-speed','slider','base.speed'],
+        ...defaultConfig().controls.filter(c=>c.action.startsWith('calibration.')).map(c=>[c.id,c.type,c.action])]);
+      expect(byId('deadman').hold).toBe(true); expect(byId('estop').value).toBe(false);
+      expect(byId('arm')).toMatchObject({ value:'left', options:[{ value:'left' },{ value:'right' }] });
+      expect(byId('cameras').value).toBe('head'); expect(byId('cameras').options.map((o: any)=>[o.value,o.label])).toEqual([['head','Head'],['wrists','Both wrists'],['left','Left wrist'],['right','Right wrist'],['all','All three']]);
+      expect(byId('scale')).toMatchObject({ value:1, min:0.25, max:3, step:0.05 }); expect(byId('drive-speed')).toMatchObject({ value:0.5, min:0.1, max:1, step:0.05 });
+      expect(config.cameraStreams).toEqual([{ id:'head', label:'Head', url:'axol://head', status:'live' },{ id:'left', label:'Left wrist', url:'axol://left', status:'live' },{ id:'right', label:'Right wrist', url:'axol://right', status:'live' }]);
+      expect(config.cameraViews.map((v: any)=>[v.id,v.label,v.streams])).toEqual([['head','Head',['head']],['wrists','Both wrists',['left','right']],['left','Left wrist',['left']],['right','Right wrist',['right']],['all','All three',['head','left','right']]]);
+      // The streams come from Axol, so the gateway draws none of its own; a phone gets only the streams in its view.
+      const a=await phone('a'); const producer=await connect(); act(a,'cameras','camera.view','wrists'); await waitFor(()=>value(a.configOf('phone-1'),'cameras')==='wrists');
+      for (const cameraId of ['head','left','right']) producer.ws.send(JSON.stringify({ type:'camera_frame', version:PROTOCOL_VERSION, sessionId:'axol', cameraId, dataUrl:'data:image/jpeg;base64,AAAA', capturedAt:Date.now() }));
+      await waitFor(()=>viewer.of('camera_frame').length===3); await sleep(300);
+      expect(viewer.of('camera_frame').every(m=>m.sessionId==='axol')).toBe(true); expect(a.of('camera_frame').map(m=>m.cameraId).sort()).toEqual(['left','right']);
+      for (const c of [viewer,a,producer]) c.ws.close(); }
+    finally { delete process.env.MARIONETTE_HTML_FILE; } });
 });
 
 describe('calibration, per phone',()=>{

@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Axol</title>
+<!--
+  The Axol phone screen. The gateway sends this document to the Marionette app, which shows
+  it full screen and provides window.Marionette; the gateway also serves it at /screen for a
+  desktop browser. The block below declares the controls and cameras; the consumer on Axol
+  reads them and the undeclared gripper.set and base.command actions, and sends robot state
+  back as status messages (see consumers/axol/README.md). Built on Marionette's default screen.
+-->
+<script type="application/json" id="marionette-config">
+{
+  "controls": [
+    { "id": "deadman", "type": "button", "label": "Hold to move", "action": "teleop.deadman", "tone": "accent", "hold": true },
+    { "id": "estop", "type": "toggle", "label": "Stop", "action": "safety.estop", "value": false },
+    { "id": "arm", "type": "select", "label": "Arm", "action": "arm.select", "value": "left", "options": [{ "label": "Left arm", "value": "left" }, { "label": "Right arm", "value": "right" }] },
+    { "id": "cameras", "type": "select", "label": "Cameras", "action": "camera.view", "value": "head", "options": [{ "label": "Head", "value": "head" }, { "label": "Both wrists", "value": "wrists" }, { "label": "Left wrist", "value": "left" }, { "label": "Right wrist", "value": "right" }, { "label": "All three", "value": "all" }] },
+    { "id": "scale", "type": "slider", "label": "Motion scale", "action": "teleop.translationScale", "value": 1, "min": 0.25, "max": 3, "step": 0.05, "unit": "×" },
+    { "id": "drive-speed", "type": "slider", "label": "Drive speed", "action": "base.speed", "value": 0.5, "min": 0.1, "max": 1, "step": 0.05 },
+    { "id": "calibration-start", "type": "button", "label": "Start calibration", "action": "calibration.start", "tone": "accent" },
+    { "id": "calibration", "type": "button", "label": "Capture calibration step", "action": "calibration.capture", "tone": "accent" },
+    { "id": "capture-origin", "type": "button", "label": "Set origin here", "action": "calibration.captureOrigin", "tone": "accent" },
+    { "id": "calibration-cancel", "type": "button", "label": "Cancel calibration", "action": "calibration.cancel" },
+    { "id": "reset-origin", "type": "button", "label": "Reset calibration", "action": "calibration.reset" },
+    { "id": "calibration-check", "type": "button", "label": "Validate calibration", "action": "calibration.check" }
+  ],
+  "cameraStreams": [
+    { "id": "head", "label": "Head", "url": "axol://head", "status": "live" },
+    { "id": "left", "label": "Left wrist", "url": "axol://left", "status": "live" },
+    { "id": "right", "label": "Right wrist", "url": "axol://right", "status": "live" }
+  ],
+  "cameraViews": [
+    { "id": "head", "label": "Head", "streams": ["head"] },
+    { "id": "wrists", "label": "Both wrists", "streams": ["left", "right"] },
+    { "id": "left", "label": "Left wrist", "streams": ["left"] },
+    { "id": "right", "label": "Right wrist", "streams": ["right"] },
+    { "id": "all", "label": "All three", "streams": ["head", "left", "right"] }
+  ]
+}
+</script>
+<style>
+:root{
+  --paper:#fafaf6;--paper2:#f2f3ee;--grid:#e6ebf2;--ink:#2e3033;--ink2:#6b6f73;--rule:#cfd3d6;
+  --blue:#2f53b5;--blue-wash:#e9eef9;--red:#cf3f35;--green:#3f7d4e;--hi:#f6e36b;
+  --sans:"IBM Plex Sans",-apple-system,system-ui,sans-serif;
+  --hand:"Kalam","Noteworthy","Bradley Hand","Segoe Print",cursive;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --top:env(safe-area-inset-top,0px);--bottom:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{background:var(--paper)}
+body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.4 var(--sans);font-variant-numeric:tabular-nums;
+  background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;touch-action:manipulation}
+button:disabled{cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+[hidden]{display:none!important}
+.app{min-height:100vh;display:flex;flex-direction:column;padding-top:var(--top)}
+
+/* Status strip */
+.strip{display:flex;align-items:center;gap:8px;min-height:74px;padding:0 96px 0 16px}
+.chip{display:inline-flex;align-items:center;gap:7px;height:32px;min-width:0;flex:0 1 auto;padding:0 12px;border-radius:16px;background:#fff;border:1px solid var(--rule);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--ink2)}
+.dot.good{background:var(--green)}.dot.warn{background:#c8a43a}.dot.bad{background:var(--red)}
+/* Which phone this is, in the color the viewer draws it in. */
+.chip.me{font-weight:600;flex:0 0 auto}.chip.me .dot{width:11px;height:11px}.chip.me.off{color:var(--ink2);font-weight:400}
+.rule{position:fixed;z-index:22;top:0;left:0;right:0;height:4px;pointer-events:none}
+.stop{position:fixed;z-index:20;top:calc(var(--top) + 5px);right:16px;width:64px;height:64px;border-radius:50%;background:var(--red);color:#fff;font-weight:600;font-size:16px;box-shadow:0 0 0 3px var(--paper),0 0 0 5px var(--red);touch-action:none}
+.stop:active{transform:scale(.96)}
+/* On: pressed in and darker, so it reads as latched on this phone even without the banner. */
+.stop[aria-pressed=true]{background:#a3271f;box-shadow:0 0 0 3px var(--paper),0 0 0 5px #a3271f,inset 0 3px 8px rgba(0,0,0,.35)}
+.banner{margin:10px 16px 0;padding:6px 6px 6px 14px;border:2px solid var(--red);border-radius:12px;background:#fff;display:flex;align-items:center;gap:12px}
+.banner b{color:var(--red);font-weight:600}
+.banner button{margin-left:auto;flex:none;height:44px;padding:0 14px;border-radius:8px;border:1.5px solid var(--red);color:var(--red);font-weight:600}
+
+/* Mode and arm: two segmented controls under the strip, clear of the floating Stop. */
+.toprow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:10px;padding:0 16px}
+.seg{display:flex;border:1.5px solid var(--ink);border-radius:10px;overflow:hidden;background:#fff}
+.seg button{flex:1;min-width:0;min-height:44px;padding:0 8px;font-size:15px;border-left:1px solid var(--ink)}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+.seg button:disabled{color:var(--ink2)}
+.modes button{font-weight:600}
+
+/* Headline and robot state */
+.pad-x{padding:0 16px}
+.state{font-size:28px;line-height:1.15;font-weight:600;letter-spacing:-.015em;margin:12px 0 0}
+.state.moving{color:var(--blue)}.state.stopped{color:var(--red)}
+.note{font-family:var(--hand);color:var(--blue);font-size:17px;line-height:1.3;margin:3px 0 0 2px;min-height:22px}
+.note.bad{color:var(--red)}
+.robot{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;min-height:26px}
+.tag{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:13px;border:1px solid var(--rule);background:#fff;font-size:13px;white-space:nowrap}
+.tag.sim{background:var(--hi);border-color:#d8c64e;font-weight:600}
+.tag.moving{border-color:var(--blue);color:var(--blue)}
+.tag.bad{border-color:var(--red);color:var(--red);font-weight:600}
+
+/* Camera */
+/* One pane per stream in the view this phone picked, side by side and never cropped. With
+   several streams, a tap stacks them full width. */
+.cam{position:relative;display:grid;grid-template-columns:repeat(var(--panes,1),minmax(0,1fr));gap:1.5px;margin:10px 0 0;border-radius:12px;border:1.5px solid var(--ink);background:var(--ink);overflow:hidden}
+.cam[role=button]{cursor:zoom-in}
+.cam.big{grid-template-columns:minmax(0,1fr);cursor:zoom-out}
+.pane{position:relative;min-width:0;aspect-ratio:16/9;background:var(--paper2)}
+.pane img{display:block;width:100%;height:100%;object-fit:contain;background:var(--ink)}
+.pane figcaption{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:7px}
+.cam[role=button]:not(.big) .pane figcaption{left:5px;bottom:5px;font-size:11px;padding:2px 6px}
+.pane .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:0 10px;color:var(--ink2);font-size:14px;line-height:1.25}
+.cam[role=button]:not(.big) .pane .empty{font-size:12px}
+/* The camera view picker sits right under the panes. Labels may wrap to two lines. */
+.views{margin-top:6px}
+.views button{min-height:42px;padding:3px 4px;font-size:13px;line-height:1.15}
+
+/* Rows: settings for the current mode, calibration and the gateway */
+.rows{margin-top:6px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:8px 0;border-bottom:1px solid var(--rule)}
+.row.stack{display:block}
+.row.stack .row-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.row .val{color:var(--ink2)}
+.row.link{width:100%;text-align:left}
+.row.link .val::after{content:" ›";color:var(--ink2)}
+.ok{color:var(--green)!important}.bad{color:var(--red)!important}
+.switch{position:relative;flex:none;width:52px;height:32px;border-radius:16px;background:var(--rule);transition:background .15s}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+.switch[aria-checked=true]{background:var(--blue)}
+.switch[aria-checked=true]::after{transform:translateX(20px)}
+input[type=range]{width:100%;height:36px;margin:0;accent-color:var(--blue)}
+select{width:100%;min-height:44px;font:inherit;border:1.5px solid var(--ink);border-radius:10px;background:#fff;padding:0 10px;color:var(--ink)}
+.row-btn{min-height:44px;padding:0 14px;border-radius:10px;border:1.5px solid var(--ink);background:#fff;font-weight:500}
+.row-btn.danger{border-color:var(--red);color:var(--red)}
+.row-btn.pending{background:var(--paper2)}
+.row-btn.held{background:var(--ink);color:var(--paper)}
+.row-btn.dropped{border-color:var(--red);color:var(--red)}
+.row-btn.wide{width:100%}
+.row-btn small{font-weight:400;color:var(--ink2)}
+.mono{font-family:var(--mono);font-size:15px}
+
+/* Dock: the thumb's controls, kept at the bottom of the screen */
+.spacer{flex:1;min-height:16px}
+/* A solid tray with a hairline edge, so rows that scroll under it are cut cleanly. */
+.dock{position:sticky;bottom:0;display:grid;gap:8px;margin-top:6px;padding:10px 16px calc(10px + var(--bottom));background:var(--paper);box-shadow:0 -1px 0 var(--rule)}
+.dock>div{display:grid;gap:8px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.key{height:48px;border-radius:14px;border:1.5px solid var(--ink);background:#fff;font-weight:500;font-size:16px;display:flex;align-items:center;justify-content:center;gap:8px}
+.key b{font-weight:400;font-size:15px}
+.key:active:not(:disabled){background:var(--paper2)}
+.key:disabled{border-color:var(--rule);color:var(--ink2);background:var(--paper2)}
+.key.on{background:var(--ink);color:var(--paper)}
+/* Each mode's main setting, one line at the top of its dock. */
+.setting{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;height:40px;font-size:15px}
+.setting span{color:var(--ink2)}
+.setting output{min-width:3.4em;text-align:right;font-weight:500}
+
+/* The hold-to-move pad, with the grip gauge on its right: a vertical slide while held moves the grip. */
+.pad{display:flex;align-items:stretch;height:140px;border-radius:22px;border:2.5px solid var(--blue);background:#fff;color:var(--blue);touch-action:none;padding:0;text-align:center;overflow:hidden}
+.pad-text{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:0 10px;font-weight:600;font-size:21px;line-height:1.2}
+.pad-text small{font-weight:400;font-size:14px;color:var(--ink2)}
+.pad.pending{background:var(--blue-wash)}
+.pad.held{background:var(--blue);color:#fff}
+.pad.held .pad-text small,.pad.held .gauge small{color:#dfe6f7}
+.pad.dropped{border-color:var(--red);color:var(--red);background:#fff}
+.gauge{flex:none;width:70px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0 8px;border-left:1.5px solid var(--blue-wash)}
+.pad.held .gauge{border-left-color:rgba(255,255,255,.3)}
+.gauge small{font-size:12px;font-weight:400;color:var(--ink2);line-height:1}
+.gauge b{font-size:15px;font-weight:600;line-height:1}
+.gauge-bar{position:relative;flex:1;width:16px;border-radius:8px;background:var(--paper2);border:1px solid var(--rule);overflow:hidden}
+.gauge-bar i{position:absolute;left:0;right:0;top:0;height:0;background:var(--blue)}
+.pad.held .gauge-bar{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.45)}
+.pad.held .gauge-bar i{background:#fff}
+.gauge.off{opacity:.45}
+
+/* Drive: turn buttons either side of the drive pad, lift buttons above them. */
+.drive-row{display:grid;grid-template-columns:74px minmax(0,1fr) 74px;gap:8px;height:152px}
+.turn{height:100%;border-radius:18px;border:1.5px solid var(--ink);background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:15px;font-weight:500;line-height:1.2;touch-action:none}
+.turn b{font-size:28px;font-weight:400;line-height:1}
+.turn span{max-width:54px}
+.turn.on{background:var(--ink);color:var(--paper)}
+.turn:disabled{border-color:var(--rule);color:var(--ink2);background:var(--paper2)}
+.lift-btn{touch-action:none}
+.stick{position:relative;border-radius:22px;border:2.5px solid var(--blue);background:#fff;touch-action:none;overflow:hidden;cursor:grab}
+.stick.active{background:var(--blue-wash)}
+.stick .ring{position:absolute;left:50%;top:50%;height:60%;aspect-ratio:1;transform:translate(-50%,-50%);border-radius:50%;border:1.5px dashed var(--rule)}
+.stick .cross{position:absolute;left:50%;top:50%;width:60%;height:60%;transform:translate(-50%,-50%);background:linear-gradient(var(--rule),var(--rule)) center/1px 100% no-repeat,linear-gradient(var(--rule),var(--rule)) center/100% 1px no-repeat;opacity:.7}
+.stick .knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 4px #fff,0 2px 6px rgba(0,0,0,.25)}
+.stick .lab{position:absolute;font-size:12px;color:var(--ink2);line-height:1}
+.stick .lab.f{top:6px;left:0;right:0;text-align:center}.stick .lab.b{bottom:6px;left:0;right:0;text-align:center}
+.stick .lab.l{left:7px;top:50%;transform:translateY(-50%)}.stick .lab.r{right:7px;top:50%;transform:translateY(-50%)}
+.stick.off{border-color:var(--rule);background:var(--paper2);cursor:default}
+.stick.off .knob,.stick.off .ring,.stick.off .cross,.stick.off .lab{display:none}
+.stick .off-note{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font-size:15px;color:var(--ink2)}
+
+/* Toast */
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(240px + var(--bottom));max-width:min(92vw,400px);padding:10px 14px;border-radius:10px;background:var(--ink);color:var(--paper);font-size:15px;line-height:1.35;z-index:5}
+
+/* Full-screen sheets: calibration and validation */
+.sheet{position:fixed;top:0;bottom:0;left:50%;width:min(100%,430px);transform:translateX(-50%);z-index:10;display:flex;flex-direction:column;padding-top:var(--top);
+  background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px;animation:rise .22s ease-out}
+@keyframes rise{from{transform:translate(-50%,24px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+.sheet-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;min-height:74px;padding:0 96px 0 18px}
+.sheet-top b{font-weight:600;text-align:center}
+.sheet-top b small{display:block;font-weight:400;font-size:14px;color:var(--ink2)}
+.sheet-top .left{justify-self:start;color:var(--blue);min-height:44px}
+.track{display:flex;gap:6px;padding:10px 20px 0}
+.track span{flex:1;font-size:14px;color:var(--ink2);padding-top:9px;border-top:3px solid var(--rule)}
+.track .done{border-color:var(--ink);color:var(--ink)}
+.track .fail{border-color:var(--red);color:var(--red)}
+.track .pass{border-color:var(--green);color:var(--green)}
+.track .cur{border-color:var(--blue);color:var(--ink);font-weight:600}
+.track .cur em{font-style:normal;background:linear-gradient(transparent 55%,var(--hi) 55%)}
+.ill{display:block;width:100%;max-width:340px;height:auto;margin:6px auto 0}
+.ill .line{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.ill text{font-family:var(--hand);font-size:17px}
+.sheet-body{padding:0 22px;flex:1;overflow-y:auto}
+.title{font-size:31px;line-height:1.15;font-weight:600;letter-spacing:-.015em;margin:2px 0 8px}
+.body{font-size:17px;line-height:1.45;color:var(--ink2);margin:0;max-width:32ch}
+.meter{margin-top:20px}
+.meter-top{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;color:var(--ink2)}
+.meter-top b{font-size:28px;color:var(--ink);font-weight:500}
+.meter-bar{height:10px;border-radius:5px;background:var(--paper2);border:1px solid var(--rule);margin-top:8px;position:relative;overflow:hidden}
+.meter-bar i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--blue)}
+.meter-bar s{position:absolute;top:-2px;bottom:-2px;border-left:2px dashed var(--ink2)}
+.meter.ready .meter-bar i{background:var(--green)}
+.axes{margin-top:16px;display:grid;gap:10px}
+.axis{display:grid;grid-template-columns:96px 1fr 64px;align-items:center;gap:10px;font-size:15px;color:var(--ink2)}
+.axis b{font-weight:500;color:var(--ink);text-align:right}
+.bar{display:block;height:4px;border-radius:2px;background:var(--rule);position:relative}
+.bar i{position:absolute;top:0;bottom:0;border-radius:2px;left:50%;width:0}
+.axis .bar{margin:0;height:8px;border-radius:4px}
+.axis.lead{color:var(--ink)}
+.axis.lead span{background:linear-gradient(transparent 55%,var(--hi) 55%)}
+.reply{margin:16px 0 0;font-size:16px;line-height:1.4;color:var(--ink2)}
+.reply.bad{color:var(--red)}
+.results{list-style:none;margin:16px 0 0;padding:0}
+.results li{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule);font-size:16px}
+.sheet-foot{padding:12px 20px calc(16px + var(--bottom));display:grid;gap:10px}
+.cta{height:60px;border-radius:14px;background:var(--blue);color:#fff;font-weight:600;font-size:18px}
+.cta:disabled{background:var(--rule);color:var(--ink2)}
+.cta.quiet{background:#fff;color:var(--ink);border:1.5px solid var(--ink)}
+.links{display:flex;justify-content:center;gap:24px;padding:4px 0 2px}
+.links button{color:var(--blue);font-size:16px;min-height:40px}
+.links button.danger{color:var(--red)}
+.frame-status{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:12px 0;border-top:1.5px solid var(--ink);border-bottom:1px solid var(--rule);margin-top:14px;font-size:16px}
+.frame-status span{color:var(--ink2)}
+
+/* Desktop preview: show a phone-width column */
+@media (min-width:600px){
+  html{background:#e9ebe6}
+  .app{max-width:430px;margin:0 auto;box-shadow:0 0 0 1px var(--rule)}
+  .stop{right:calc(50% - 215px + 16px)}
+  body{background-color:#e9ebe6}
+  .app{background-color:var(--paper);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px}
+}
+@media (prefers-reduced-motion:reduce){.sheet{animation:none}.switch,.switch::after{transition:none}}
+</style>
+</head>
+<body>
+<div class="rule" id="me-rule" hidden></div>
+<div class="app" id="app">
+  <header class="strip">
+    <span class="chip me" id="me-chip"><i class="dot" id="me-dot"></i><span id="me">Connecting…</span></span>
+    <span class="chip" id="tracking-chip"><i class="dot" id="tracking-dot"></i><span id="tracking">Starting tracking</span></span>
+  </header>
+  <div class="toprow">
+    <div class="seg modes" id="modes" role="group" aria-label="Mode">
+      <button type="button" data-mode="arm" aria-pressed="true">Arm</button>
+      <button type="button" data-mode="drive" aria-pressed="false">Drive</button>
+    </div>
+    <div class="seg" id="arms" role="group" aria-label="Arm"></div>
+  </div>
+  <div class="banner" id="estop-banner" role="alert" hidden>
+    <b>Stop is on</b>
+    <button type="button" id="estop-reset">Reset Stop</button>
+  </div>
+  <section class="pad-x">
+    <h1 class="state" id="state">Connecting…</h1>
+    <p class="note" id="state-note"></p>
+    <div class="robot" id="robot"></div>
+    <figure class="cam" id="cam" hidden></figure>
+    <div class="seg views" id="views" role="group" aria-label="Cameras" hidden></div>
+    <div class="rows" id="rows"></div>
+  </section>
+  <div class="spacer"></div>
+  <footer class="dock" id="dock">
+    <div id="arm-dock">
+      <div class="setting" id="arm-setting" hidden></div>
+      <div class="pair">
+        <button type="button" class="key" id="grip-open">Open gripper</button>
+        <button type="button" class="key" id="grip-close">Close gripper</button>
+      </div>
+    </div>
+    <div id="drive-dock" hidden>
+      <div class="setting" id="drive-setting" hidden></div>
+      <div class="pair" id="lift-row">
+        <button type="button" class="key lift-btn" data-kind="lift" data-dir="1"><b aria-hidden="true">▲</b>Raise lift</button>
+        <button type="button" class="key lift-btn" data-kind="lift" data-dir="-1"><b aria-hidden="true">▼</b>Lower lift</button>
+      </div>
+      <div class="drive-row" id="drive-row">
+        <button type="button" class="turn" data-kind="turn" data-dir="1"><b aria-hidden="true">↺</b><span>Turn left</span></button>
+        <div class="stick" id="stick" role="application" aria-label="Drive pad. Drag from the middle to drive.">
+          <i class="cross"></i><i class="ring"></i>
+          <span class="lab f">Forward</span><span class="lab b">Back</span><span class="lab l">Left</span><span class="lab r">Right</span>
+          <i class="knob" id="knob"></i>
+          <span class="off-note" id="stick-off" hidden>No Jelly base</span>
+        </div>
+        <button type="button" class="turn" data-kind="turn" data-dir="-1"><b aria-hidden="true">↻</b><span>Turn right</span></button>
+      </div>
+    </div>
+  </footer>
+</div>
+<section class="sheet" id="sheet" hidden aria-modal="true" role="dialog"></section>
+<!-- Stop sits above the page and every sheet, so it is always one tap away. -->
+<button class="stop" id="stop" type="button" aria-label="Stop" hidden>Stop</button>
+<div class="toast" id="toast" role="status" hidden></div>
+<script>
+(() => {
+  const ACTION = {
+    deadman: 'teleop.deadman', estop: 'safety.estop', arm: 'arm.select', view: 'camera.view', scale: 'teleop.translationScale', speed: 'base.speed',
+    start: 'calibration.start', capture: 'calibration.capture', cancel: 'calibration.cancel',
+    check: 'calibration.check', origin: 'calibration.captureOrigin', clear: 'calibration.reset',
+  };
+  // Undeclared actions: the gateway relays them to the consumer as input and keeps no value for them.
+  // grip: 0 is open, 1 is closed. drive: "vx,vy,wz,lift" before the speed scale, which the consumer applies.
+  const GRIP = { id: 'grip', action: 'gripper.set' }, DRIVE = { id: 'drive', action: 'base.command' };
+  // Status messages the consumer on Axol sends this phone: robot state at 5 Hz, and one-off notices.
+  const FEEDBACK = 'axol.feedback', NOTICE = 'axol.notice', FEEDBACK_STALE_MS = 1500;
+  // Grip: at most 20 Hz; a 200 px slide is the full range; a few pixels of thumb wobble move nothing.
+  // After this phone sends a grip, feedback that predates it is not adopted for a moment.
+  const GRIP_EVERY_MS = 50, GRIP_FULL_PX = 200, GRIP_SLOP_PX = 6, GRIP_SETTLE_MS = 250;
+  // Drive: the command is the base's heartbeat while anything is pressed; the middle 8% of the pad is still.
+  const DRIVE_EVERY_MS = 100, DRIVE_DEAD = 0.08;
+  const STEPS = ['flat', 'forward', 'right', 'up'];
+  const MOVES = ['forward', 'right', 'up'];
+  // FLAT_DEG matches the gateway's FLAT_TOLERANCE_DEGREES.
+  const MIN_MM = 30, TARGET_MM = 100, FLAT_DEG = 30;
+  // Like the gateway: calibration is a rough axis alignment, so limited tracking is fine.
+  const canCalibrate = (tracking, source) => source !== 'synthetic' && (tracking === 'normal' || tracking === 'limited');
+  const STEP_COPY = {
+    flat: { title: 'Hold it flat', body: 'Hold the phone in your hand, roughly flat, screen up, top edge pointing the way Axol faces.', cta: 'Capture flat' },
+    forward: { title: 'Move it forward', body: 'Keep it roughly flat and move it straight ahead, about a hand’s length.', cta: 'Capture forward' },
+    right: { title: 'Back, then move right', body: 'Return to the flat spot, then move straight to your right.', cta: 'Capture right' },
+    up: { title: 'Back, then lift it', body: 'Return to the flat spot, then lift it straight up.', cta: 'Capture up' },
+  };
+  const MOVE_COPY = {
+    forward: { title: 'Move it forward', body: 'Bring it back to the flat spot, then move it straight ahead about 10 cm.' },
+    right: { title: 'Move it right', body: 'Back at the flat spot, move it straight to your right about 10 cm.' },
+    up: { title: 'Lift it up', body: 'Back at the flat spot, lift it straight up about 10 cm.' },
+  };
+  // Operator frame (ROS REP-103): +X forward, +Y left, +Z up. Validation expects these signs.
+  const EXPECTED = { forward: ['x', 1], right: ['y', -1], up: ['z', 1] };
+  const AXIS_WORDS = { '+X': 'forward', '-X': 'back', '+Y': 'left', '-Y': 'right', '+Z': 'up', '-Z': 'down' };
+  const TRACKING_WORDS = { normal: 'Tracking good', limited: 'Tracking limited', initializing: 'Starting tracking', relocalizing: 'Finding its place', unavailable: 'No tracking' };
+  const REASON_NOTES = { excessiveMotion: 'Move a little slower.', insufficientFeatures: 'Point the camera at something with texture.', interrupted: 'Tracking was interrupted.', relocalizing: 'Hold still for a moment.', initializing: 'Move the phone gently to start.', synthetic: 'Simulated motion, not a real pose.' };
+
+  const $ = id => document.getElementById(id);
+  const h = (tag, props = {}, ...children) => { const node = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (v === undefined || v === false) continue; if (k === 'class') node.className = v; else if (k.startsWith('on')) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v === true ? '' : v); } for (const child of children.flat()) if (child != null && child !== false) node.append(child); return node; };
+  const setText = (node, text) => { if (node && node.textContent !== text) node.textContent = text; };
+  const mm = v => Math.round(v * 1000);
+  const signed = n => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const cap = word => word ? word[0].toUpperCase() + word.slice(1) : '';
+  const rotate = (q, v) => { const { x, y, z, w } = q; const ix = w * v.x + y * v.z - z * v.y, iy = w * v.y + z * v.x - x * v.z, iz = w * v.z + x * v.y - y * v.x, iw = -x * v.x - y * v.y - z * v.z; return { x: ix * w + iw * -x + iy * -z - iz * -y, y: iy * w + iw * -y + iz * -x - ix * -z, z: iz * w + iw * -z + ix * -y - iy * -x }; };
+  const conjugate = q => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
+  // Where the screen faces, in operator axes (Z is up). A calibrated pose's rotation is measured from the
+  // calibration's flat capture, so put that capture's own orientation back before comparing with gravity.
+  function screenDirection(p) {
+    const ref = calibration().reference; let v = { x: 0, y: 0, z: 1 };
+    if (ref && p.calibrationVersion === ref.mode + '-v2:' + ref.epoch) v = rotate(conjugate(ref.frame), rotate(ref.rotation, v));
+    return rotate(p.rotation, v);
+  }
+  const dominant = v => { const [axis, value] = [['X', v.x], ['Y', v.y], ['Z', v.z]].reduce((a, b) => Math.abs(b[1]) > Math.abs(a[1]) ? b : a); return (value < 0 ? '-' : '+') + axis; };
+
+  let storedMode; try { storedMode = window.localStorage.getItem('axol-mode'); } catch (x) { /* no storage in this web view */ }
+  const s = { config: undefined, pose: undefined, tracking: undefined, connection: undefined, sheet: undefined, reply: undefined, forwardAt: undefined, padHeld: false, rowsKey: '', mode: storedMode === 'drive' ? 'drive' : 'arm', feedback: undefined, fresh: false };
+  const control = action => s.config && s.config.controls.find(c => c.action === action);
+  const byId = id => s.config && s.config.controls.find(c => c.id === id);
+  const send = (c, value) => { if (c) window.Marionette.sendAction(c.id, c.action, value); };
+  const calibration = () => (s.config ? s.config.calibration : { status: 'uncalibrated' });
+  // Streams of undeclared actions only go out while connected, so a dropped gateway never piles up "not sent" notes.
+  const live = () => !!s.config && !!s.connection && s.connection.state === 'connected';
+
+  // Hold-to-act: true on press, false on release. The app repeats the press while it is held and the gateway drops a hold whose renewals stop.
+  // The release goes to the control that was pressed, even if the config changed in between, and
+  // `dispose` releases before the button is removed so a rebuilt dock can never leave a hold behind.
+  // Hold buttons pressed on this screen: control id → whether the gateway has reported the hold during this press.
+  const pressed = new Map();
+  // idle; pending (pressed, not yet reported by the gateway); held; or dropped (the gateway let go, e.g. its repeats stopped
+  // arriving, while it is still pressed here; a repeat never restarts a hold, so the operator has to press again).
+  // Without a gateway connection nothing is held, whatever the last config said.
+  const holdState = c => !c || !pressed.has(c.id) ? 'idle' : s.connection && s.connection.state === 'disconnected' ? 'dropped' : c.held ? 'held' : pressed.get(c.id) ? 'dropped' : 'pending';
+  /** Returns a function that releases the hold, for a mode switch. */
+  function holdable(node, getControl, onChange, group) {
+    let held;
+    const press = e => { e.preventDefault(); if (held) return; const c = getControl(); if (!c) return; held = c; pressed.set(c.id, false); try { node.setPointerCapture(e.pointerId); } catch (x) { /* capture is a nicety; the press still counts */ } send(c, true); renderHolds(); if (onChange) onChange(true); };
+    const release = () => { if (!held) return; const c = held; held = undefined; pressed.delete(c.id); send(c, false); renderHolds(); if (onChange) onChange(false); };
+    const onHidden = () => { if (document.hidden) release(); };
+    node.addEventListener('pointerdown', press);
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, release);
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', onHidden);
+    node.addEventListener('contextmenu', e => e.preventDefault());
+    group.push(() => { release(); window.removeEventListener('blur', release); document.removeEventListener('visibilitychange', onHidden); });
+    return release;
+  }
+  const disposeAll = group => { while (group.length) group.pop()(); };
+  const rowHolds = [], dockHolds = [];
+
+  /* ---------- Robot feedback ---------- */
+  // The latest axol.feedback values while they are fresh; the consumer sends them at 5 Hz.
+  const feedback = () => s.feedback && Date.now() - s.feedback.at < FEEDBACK_STALE_MS ? s.feedback.values : undefined;
+  const myName = () => (s.config && s.config.phone ? s.config.phone.name : '');
+  // Another phone has this phone's arm: the consumer ignores this phone's grip, so the grip controls are off.
+  const otherOwner = () => { const f = feedback(); return f && typeof f.owner === 'string' && f.owner && f.owner !== myName() ? f.owner : ''; };
+  function armSide() { const f = feedback(); if (f && (f.arm === 'left' || f.arm === 'right')) return f.arm; const c = control(ACTION.arm); return c && c.type === 'select' ? c.value : ''; }
+  const armText = () => (armSide() ? armSide() + ' arm' : 'arm');
+  function onFeedback(values) {
+    s.feedback = { values, at: Date.now() };
+    adoptGrip(values.grip);
+    renderRobot(); renderHeadline(); renderDriveDock(); renderGripControls(); renderCamera();
+  }
+  // Feedback that stops arriving turns into "No answer from Axol" without waiting for another message.
+  setInterval(() => { const fresh = !!feedback(); if (fresh === s.fresh) return; s.fresh = fresh; renderRobot(); renderHeadline(); renderGripControls(); }, 250);
+  function renderRobot() {
+    const f = feedback() || {}; const box = $('robot');
+    const tags = [];
+    if (f.mode === 'sim') tags.push(['Sim', 'sim']);
+    if (f.hasLift === true) tags.push([typeof f.lift === 'number' && f.lift >= 0 ? 'Lift ' + Math.round(clamp(f.lift, 0, 1) * 100) + '%' + (f.liftMoving ? ', moving' : '') : 'Lift height unknown', f.liftMoving ? 'moving' : '']);
+    if (f.hasBase === true) tags.push(f.baseFault ? ['Base fault', 'bad'] : f.baseMoving ? ['Base moving', 'moving'] : ['Base still', '']);
+    const key = JSON.stringify(tags); if (box.dataset.key === key) return; box.dataset.key = key;
+    box.replaceChildren(...tags.map(([text, tone]) => h('span', { class: 'tag ' + tone }, text)));
+  }
+
+  /* ---------- Status strip, Stop, headline ---------- */
+  // Stop is this phone's own signal: a toggle the consumer reads. Marionette itself stops nothing.
+  const stopOn = () => { const c = control(ACTION.estop); return !!c && c.value === true; };
+  function renderStrip() {
+    const conn = s.connection, t = s.tracking, me = s.config && s.config.phone; const connected = !!conn && conn.state === 'connected';
+    // A desktop mirror can follow a phone that is not connected; say so beside its name.
+    setText($('me'), me ? me.name + (me.connected === false ? ' · offline' : '') : connected ? conn.gateway : 'Connecting…');
+    $('me-chip').className = 'chip me' + (connected && (!me || me.connected !== false) ? '' : ' off');
+    $('me-dot').className = 'dot' + (me ? '' : connected ? ' good' : ' bad'); $('me-dot').style.background = me ? me.color : '';
+    const rule = $('me-rule'); rule.hidden = !me; rule.style.background = me ? me.color : '';
+    const offline = !!me && me.connected === false; const state = offline ? 'unavailable' : t ? t.state : 'initializing';
+    setText($('tracking'), offline ? 'No pose' : t && t.source === 'synthetic' ? 'Simulated motion' : TRACKING_WORDS[state] || state);
+    $('tracking-dot').className = 'dot ' + (state === 'normal' && (!t || t.source !== 'synthetic') ? 'good' : state === 'unavailable' ? 'bad' : 'warn');
+    $('stop').hidden = !control(ACTION.estop);
+    const latched = stopOn();
+    $('estop-banner').hidden = !latched;
+    $('stop').setAttribute('aria-pressed', String(latched));
+  }
+  // Most urgent first: no gateway, a Stop, no answer from Axol, then what the current mode is doing.
+  function renderHeadline() {
+    const c = s.config, t = s.tracking, conn = s.connection, f = feedback(), me = myName(); const pad = holdState(control(ACTION.deadman));
+    let title = 'Connecting…', tone = '', note = '', bad = false;
+    const say = (nextTitle, nextNote, problem, nextTone) => { title = nextTitle; note = nextNote || ''; bad = !!problem; tone = nextTone || ''; };
+    if (conn && conn.state === 'disconnected') say('Gateway lost', cap(conn.reason) || 'Reconnect to keep going.', true);
+    else if (!c) say('Connecting…');
+    else if (c.phone && c.phone.connected === false) say(c.phone.name + ' is offline', 'Showing its last state until it reconnects.', true);
+    else if (stopOn()) say('Stopped', 'Reset Stop when it’s safe. Axol holds still until every Stop is off.', true, 'stopped');
+    else if (f && (f.stopBy || f.state === 'stopped')) say(f.stopBy && f.stopBy !== me ? 'Stopped by ' + f.stopBy : 'Stopped', 'Axol holds still until every Stop is off.', true, 'stopped');
+    else if (!f) say('No answer from Axol', 'Start Marionette in the Axol control panel.', true);
+    else if (s.mode === 'drive') {
+      if (f.baseFault) say('Base fault', 'Check Jelly, then try again.', true);
+      else if (f.hasBase === false && f.hasLift === false) say('No base or lift', 'This Axol has no Jelly base or lift.');
+      else if (f.driving && f.driver && f.driver !== me) say(f.driver + ' is driving', 'Axol follows whoever pressed last.');
+      else if (drivePressed()) say('Driving', 'Let go to stop.', false, 'moving');
+      else if (f.hasBase === false) say('Lift ready', 'Hold Raise lift or Lower lift.');
+      else say('Ready to drive', 'Drag the pad to drive.');
+    } else {
+      const rough = t && t.state !== 'normal' ? (REASON_NOTES[t.reason] || REASON_NOTES[t.state] || 'The pose may be rough until tracking recovers.') : '';
+      if (t && (t.message || t.state === 'unavailable')) say('No tracking', t.message || 'Hold the phone up so the camera sees the room.', true);
+      else if (pad === 'dropped') say('Hold dropped', 'Let go of the pad and press again.', true);
+      else if (otherOwner()) say(otherOwner() + ' has the ' + armText(), 'Choose the other arm, or ask ' + otherOwner() + ' to switch.', true);
+      else if (f.state === 'blocked') say('Can’t move the ' + armText(), f.reason, true);
+      else if (f.engaged && f.limited) say('At reach limit', 'Bring the phone back a little.', true, 'moving');
+      else if (f.engaged) say('Moving the ' + armText(), rough || 'Let go of the pad to stop.', !!rough, 'moving');
+      else if (pad !== 'idle') say('Holding…', 'Waiting for Axol.');
+      else if (f.ready === false) say('Axol is starting', 'Wait a few seconds.');
+      else if (c.calibration.status === 'capturing') say('Calibrating', 'Finish or cancel calibration first.');
+      else if (rough) say(t.state === 'initializing' ? 'Starting up' : TRACKING_WORDS[t.state] || 'Tracking ' + t.state, rough);
+      else say(cap(armText()) + ' ready', 'Hold the pad to move it.');
+    }
+    setText($('state'), title); $('state').className = 'state ' + tone;
+    setText($('state-note'), note); $('state-note').className = 'note' + (bad ? ' bad' : '');
+  }
+  const stop = $('stop');
+  // A toggle Stop turns on; a plain Stop button (on a custom layout) just sends a press.
+  const pressStop = () => { const c = control(ACTION.estop); if (!c) return; if (c.type !== 'toggle') send(c); else if (c.value !== true) send(c, true); };
+  stop.addEventListener('pointerdown', e => { e.preventDefault(); pressStop(); });
+  stop.addEventListener('click', e => { if (e.detail === 0) pressStop(); });
+  $('estop-reset').addEventListener('click', () => send(control(ACTION.estop), false));
+
+  /* ---------- Mode: Arm or Drive, this screen's own choice ---------- */
+  function setMode(mode) {
+    if (mode === s.mode) return;
+    // Nothing pressed in one mode carries over into the other.
+    padRelease(); endSlide(); releaseDrive();
+    s.mode = mode; try { window.localStorage.setItem('axol-mode', mode); } catch (x) { /* no storage in this web view */ }
+    renderMode();
+  }
+  for (const b of $('modes').children) b.addEventListener('click', () => setMode(b.dataset.mode));
+  function renderMode() {
+    for (const b of $('modes').children) b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode));
+    $('arm-dock').hidden = s.mode !== 'arm'; $('drive-dock').hidden = s.mode !== 'drive';
+    renderRows(); renderHeadline(); renderDriveDock();
+  }
+  // The arm select lives beside the mode switch so it is always in view.
+  let armsKey = '';
+  function renderArms() {
+    const c = control(ACTION.arm); const box = $('arms'); box.hidden = !c || c.type !== 'select'; if (box.hidden) return;
+    const key = JSON.stringify(c.options);
+    if (key !== armsKey) { armsKey = key; box.replaceChildren(...c.options.map(o => h('button', { type: 'button', 'data-value': o.value, onclick: () => send(control(ACTION.arm), o.value) }, o.label))); }
+    for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.value === c.value));
+  }
+
+  /* ---------- Camera ---------- */
+  // The camera view this phone picked with the camera.view control.
+  function cameraView() {
+    const c = s.config; if (!c) return undefined;
+    const pick = c.controls.find(x => x.action === ACTION.view); const views = c.cameraViews || [];
+    return views.find(v => pick && v.id === pick.value) || views[0];
+  }
+  const frameAt = {}; let camKey = '';
+  function renderCamera() {
+    const c = s.config; const view = cameraView(); const cam = $('cam');
+    cam.hidden = !view; if (!view) return;
+    const key = view.id + ':' + view.streams.join(',');
+    if (key !== camKey) {
+      camKey = key; cam.style.setProperty('--panes', view.streams.length);
+      // Several streams side by side are small; a tap (or Enter) stacks them full width.
+      const many = view.streams.length > 1; if (!many) cam.classList.remove('big');
+      for (const [name, value] of [['role', 'button'], ['tabindex', '0'], ['aria-label', 'Cameras, tap to show them larger or smaller']]) { if (many) cam.setAttribute(name, value); else cam.removeAttribute(name); }
+      if (many) cam.setAttribute('aria-expanded', String(cam.classList.contains('big'))); else cam.removeAttribute('aria-expanded');
+      cam.replaceChildren(...view.streams.map(id => { const stream = c.cameraStreams.find(x => x.id === id); const label = stream ? stream.label : id;
+        return h('div', { class: 'pane', 'data-stream': id, 'data-label': label }, h('img', { alt: label + ' camera', hidden: true }), h('div', { class: 'empty' }), h('figcaption', { hidden: true }, label)); }));
+    }
+    // Axol lists the cameras it has; a stream it doesn't have says so instead of waiting forever.
+    const f = feedback(); const have = f && typeof f.streams === 'string' ? f.streams.split(',') : undefined;
+    // A pane rebuilt for a view switched back to has no picture yet, even if its stream was live a moment ago.
+    for (const pane of cam.children) {
+      const img = pane.querySelector('img'); const live = !!img.getAttribute('src') && Date.now() - (frameAt[pane.dataset.stream] || 0) < 2000;
+      img.hidden = !live; pane.querySelector('.empty').hidden = live; pane.querySelector('figcaption').hidden = !live;
+      const label = pane.dataset.label.toLowerCase(); setText(pane.querySelector('.empty'), have && have.indexOf(pane.dataset.stream) < 0 ? 'No ' + label + ' camera' : 'Waiting for the ' + label + ' camera');
+    }
+  }
+  const toggleCameras = () => { const cam = $('cam'); if (cam.getAttribute('role') !== 'button') return; cam.setAttribute('aria-expanded', String(cam.classList.toggle('big'))); };
+  $('cam').addEventListener('click', toggleCameras);
+  $('cam').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCameras(); } });
+  setInterval(renderCamera, 1000);
+  // The view picker under the panes: every view one tap away.
+  let viewsKey = '';
+  function renderViews() {
+    const c = control(ACTION.view); const box = $('views'); box.hidden = !c || c.type !== 'select'; if (box.hidden) return;
+    const key = JSON.stringify(c.options);
+    if (key !== viewsKey) { viewsKey = key; box.replaceChildren(...c.options.map(o => h('button', { type: 'button', 'data-value': o.value, onclick: () => send(control(ACTION.view), o.value) }, o.label))); }
+    for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.value === c.value));
+  }
+
+  /* ---------- Rows: any other controls, calibration, the gateway ---------- */
+  const PLACED = new Set(Object.values(ACTION));
+  function rowFor(c) {
+    if (c.type === 'toggle') {
+      const sw = h('button', { class: 'switch', role: 'switch', type: 'button', 'aria-checked': String(c.value), 'aria-label': c.label, 'data-id': c.id, onclick: () => send(c, sw.getAttribute('aria-checked') !== 'true') });
+      return h('div', { class: 'row' }, h('span', {}, c.label), sw);
+    }
+    if (c.type === 'select') {
+      const field = c.options.length <= 3
+        ? h('div', { class: 'seg', role: 'group', 'aria-label': c.label, 'data-id': c.id }, c.options.map(o => h('button', { type: 'button', 'data-value': o.value, 'aria-pressed': String(o.value === c.value), onclick: () => send(c, o.value) }, o.label)))
+        : h('select', { 'data-id': c.id, 'aria-label': c.label, onchange: e => send(c, e.target.value) }, c.options.map(o => h('option', { value: o.value }, o.label)));
+      if (field.tagName === 'SELECT') field.value = c.value;
+      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label)), field);
+    }
+    if (c.type === 'slider') {
+      const out = h('span', { class: 'val', 'data-out': c.id }, format(c, c.value));
+      const range = h('input', { type: 'range', min: c.min, max: c.max, step: c.step, value: c.value, 'data-id': c.id, 'aria-label': c.label, oninput: e => setText(out, format(c, Number(e.target.value))), onchange: e => send(c, Number(e.target.value)) });
+      return h('div', { class: 'row stack' }, h('div', { class: 'row-head' }, h('span', {}, c.label), out), range);
+    }
+    const btn = h('button', { type: 'button', class: 'row-btn wide' + (c.tone === 'danger' ? ' danger' : ''), 'data-hold': c.hold ? c.id : undefined }, c.label, c.hold ? h('small', {}, ' (hold)') : null);
+    if (c.hold) holdable(btn, () => byId(c.id), null, rowHolds); else btn.addEventListener('click', () => send(c));
+    return h('div', { class: 'row' }, btn);
+  }
+  // Drive speed reads as a share of Axol's top speed.
+  function format(c, value) { if (c.action === ACTION.speed) return Math.round(Number(value) * 100) + '%'; const digits = String(c.step).includes('.') ? String(c.step).split('.')[1].length : 0; return Number(value).toFixed(digits) + (c.unit || ''); }
+  function calibrationSummary() {
+    const cal = calibration(); const check = cal.check;
+    if (cal.status === 'capturing') return ['Calibrating', ''];
+    if (cal.status !== 'captured') return ['Not calibrated', ''];
+    const kind = cal.reference && cal.reference.mode === 'quick' ? 'Quick origin' : 'Guided';
+    if (check && check.step) return [kind + ', validating', ''];
+    if (check && check.passed === true) return [kind + ', validated ✓', 'ok'];
+    if (check && check.passed === false) return [kind + ', validation failed', 'bad'];
+    return [kind, ''];
+  }
+  function renderRows() {
+    const c = s.config; if (!c) return;
+    const listed = c.controls.filter(x => !PLACED.has(x.action));
+    const hasCalibration = !!control(ACTION.start) || !!control(ACTION.origin);
+    const key = JSON.stringify([listed.map(x => [x.id, x.type, x.label, x.options, x.min, x.max, x.step]), hasCalibration]);
+    const rows = $('rows');
+    if (key !== s.rowsKey) {
+      s.rowsKey = key; disposeAll(rowHolds); rows.replaceChildren();
+      for (const x of listed) rows.append(rowFor(x));
+      if (hasCalibration) rows.append(h('button', { type: 'button', class: 'row link', id: 'calibration-row', onclick: () => openSheet() }, h('span', {}, 'Calibration'), h('span', { class: 'val', id: 'calibration-val' })));
+      rows.append(h('div', { class: 'row' }, h('span', { class: 'mono', id: 'gateway-row' }), h('button', { type: 'button', class: 'row-btn', onclick: () => window.Marionette.disconnect() }, 'Disconnect')));
+    }
+    // Values change with every config; update them in place so a drag in progress is not reset.
+    for (const x of listed) {
+      const node = rows.querySelector('[data-id="' + CSS.escape(x.id) + '"]'); if (!node) continue;
+      if (x.type === 'toggle') node.setAttribute('aria-checked', String(x.value));
+      if (x.type === 'select') { if (node.tagName === 'SELECT') { if (document.activeElement !== node) node.value = x.value; } else for (const b of node.children) b.setAttribute('aria-pressed', String(b.dataset.value === x.value)); }
+      if (x.type === 'slider' && document.activeElement !== node) { node.value = x.value; setText(rows.querySelector('[data-out="' + CSS.escape(x.id) + '"]'), format(x, x.value)); }
+    }
+    const [summary, tone] = calibrationSummary(); const val = $('calibration-val');
+    if (val) { setText(val, summary); val.className = 'val ' + tone; }
+    setText($('gateway-row'), s.connection ? s.connection.gateway : '');
+  }
+
+  // Each mode's main setting sits in its dock, in reach of the thumb: motion scale for the arm, speed for the base.
+  function renderSettings() {
+    for (const [boxId, action] of [['arm-setting', ACTION.scale], ['drive-setting', ACTION.speed]]) {
+      const c = control(action); const box = $(boxId); box.hidden = !c || c.type !== 'slider'; if (box.hidden) continue;
+      const key = JSON.stringify([c.id, c.label, c.min, c.max, c.step, c.unit]);
+      if (box.dataset.key !== key) {
+        box.dataset.key = key; const out = h('output', {});
+        box.replaceChildren(h('span', {}, c.label), h('input', { type: 'range', min: c.min, max: c.max, step: c.step, 'aria-label': c.label, oninput: e => setText(out, format(c, Number(e.target.value))), onchange: e => send(control(action), Number(e.target.value)) }), out);
+      }
+      // Updated in place, and not while a drag is in progress.
+      const range = box.querySelector('input'); if (document.activeElement === range) continue;
+      range.value = c.value; setText(box.querySelector('output'), format(c, c.value));
+    }
+  }
+
+  /* ---------- Arm dock: the hold-to-move pad and the grip ---------- */
+  // The grip this phone commands, 0 open to 1 closed. It follows the robot's commanded grip from
+  // feedback except during a slide, so a slide, a reload or a newly owned arm always starts from
+  // where the gripper is and never jumps it.
+  const grip = { value: 0, sent: undefined, sentAt: 0, timer: 0 };
+  let slide; // { id, y, from, live } while a thumb is down on the pad
+  function setGrip(value) {
+    if (otherOwner()) return;
+    const v = Math.round(clamp(value, 0, 1) * 100) / 100;
+    if (v !== grip.value) { grip.value = v; renderGrip(); }
+    flushGrip();
+  }
+  // At most every 50 ms and only on change; the last value of a slide always goes out.
+  function flushGrip() {
+    clearTimeout(grip.timer); grip.timer = 0;
+    if (grip.value === grip.sent || !live()) return;
+    const wait = grip.sentAt + GRIP_EVERY_MS - Date.now();
+    if (wait > 0) { grip.timer = setTimeout(flushGrip, wait); return; }
+    grip.sent = grip.value; grip.sentAt = Date.now(); window.Marionette.sendAction(GRIP.id, GRIP.action, grip.value);
+  }
+  function adoptGrip(value) {
+    if (typeof value !== 'number' || !(value >= 0 && value <= 1)) return;
+    // Not while the thumb is sliding, nor while this phone's own last grip may not have reached Axol yet.
+    if ((slide && slide.live) || grip.timer || Date.now() - grip.sentAt < GRIP_SETTLE_MS) return;
+    const v = Math.round(value * 100) / 100; grip.sent = v;
+    if (v !== grip.value) { grip.value = v; renderGrip(); }
+  }
+  const endSlide = () => { slide = undefined; };
+  function slidable(pad) {
+    pad.addEventListener('pointerdown', e => { if (!slide) slide = { id: e.pointerId, y: e.clientY, from: grip.value, live: false }; });
+    pad.addEventListener('pointermove', e => {
+      if (!slide || e.pointerId !== slide.id || otherOwner()) return;
+      // A few pixels of wobble while the thumb rests on the pad move nothing. Past that the grip follows
+      // the slide from where it was when the slide began: down closes, up opens.
+      if (!slide.live) { if (Math.abs(e.clientY - slide.y) < GRIP_SLOP_PX) return; slide.live = true; slide.y = e.clientY; slide.from = grip.value; }
+      setGrip(slide.from + (e.clientY - slide.y) / GRIP_FULL_PX);
+    });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) pad.addEventListener(name, e => { if (slide && e.pointerId === slide.id) endSlide(); });
+  }
+  function renderGrip() {
+    const v = grip.value; const fill = $('gauge-fill'); if (fill) fill.style.height = Math.round(v * 100) + '%';
+    setText($('grip-val'), Math.round(v * 100) + '%');
+  }
+  function renderGripControls() {
+    const off = !!otherOwner();
+    $('grip-open').disabled = off; $('grip-close').disabled = off;
+    const gauge = $('gauge'); if (gauge) gauge.classList.toggle('off', off);
+  }
+  $('grip-open').addEventListener('click', () => setGrip(0));
+  $('grip-close').addEventListener('click', () => setGrip(1));
+  let dockKey = '', padRelease = () => {};
+  function renderDock() {
+    const c = s.config; if (!c) return;
+    const deadman = control(ACTION.deadman); const key = deadman ? deadman.id : '';
+    if (key !== dockKey) {
+      dockKey = key; disposeAll(dockHolds); padRelease = () => {}; endSlide(); const old = $('pad'); if (old) old.remove();
+      if (deadman) {
+        const pad = h('button', { type: 'button', class: 'pad', id: 'pad', 'data-hold': deadman.id, 'aria-label': deadman.label + '. Slide down to close the gripper, up to open it.' },
+          h('span', { class: 'pad-text' }, h('span', { id: 'pad-label' }), h('small', { id: 'pad-sub' })),
+          h('span', { class: 'gauge', id: 'gauge', 'aria-hidden': 'true' }, h('small', {}, 'Open'), h('span', { class: 'gauge-bar' }, h('i', { id: 'gauge-fill' })), h('small', {}, 'Closed'), h('b', { id: 'grip-val' })));
+        padRelease = holdable(pad, () => control(ACTION.deadman), on => { s.padHeld = on; if (!on) endSlide(); renderHeadline(); if (!on) renderSheet(); }, dockHolds);
+        slidable(pad);
+        $('arm-dock').append(pad);
+      }
+    }
+    renderHolds(); renderGrip(); renderGripControls();
+  }
+  // Every hold button shows what the gateway knows: filled once it reports the hold, red if it let go while still pressed here.
+  const PAD_TEXT = { pending: ['Holding…', 'Waiting for the gateway'], held: ['Holding', 'Slide down to close, up to open'], dropped: ['Hold dropped', 'Let go and press again'] };
+  function renderHolds() {
+    if (!s.config) return;
+    for (const node of document.querySelectorAll('[data-hold]')) {
+      const state = holdState(byId(node.dataset.hold));
+      for (const name of ['pending', 'held', 'dropped']) node.classList.toggle(name, state === name);
+      node.setAttribute('aria-pressed', String(state !== 'idle'));
+    }
+    const deadman = control(ACTION.deadman); if (!$('pad') || !deadman) return;
+    const [label, sub] = PAD_TEXT[holdState(deadman)] || [deadman.label, 'Slide while holding to grip'];
+    setText($('pad-label'), label); setText($('pad-sub'), sub);
+  }
+
+  /* ---------- Drive dock: the drive pad, turn and lift ---------- */
+  // Pressed turn and lift buttons ('turn1' is left, 'lift-1' is down), and the drive pad's drag.
+  const drive = { keys: new Set(), stick: undefined, timer: 0, resets: [] };
+  const drivePressed = () => !!drive.stick || drive.keys.size > 0;
+  const two = n => (Math.round(n * 100) / 100 || 0).toFixed(2);
+  function driveCommand() {
+    const has = key => (drive.keys.has(key) ? 1 : 0); const st = drive.stick || { vx: 0, vy: 0 };
+    return [st.vx, st.vy, has('turn1') - has('turn-1')].map(two).join(',') + ',' + (has('lift1') - has('lift-1'));
+  }
+  function sendDrive(zero) { if (live()) window.Marionette.sendAction(DRIVE.id, DRIVE.action, zero === true ? '0,0,0,0' : driveCommand()); }
+  // While anything is pressed the command goes out every 100 ms, so Axol stops if the stream does; one zero follows the last release.
+  function driveChanged() {
+    if (drivePressed() && !drive.timer) { sendDrive(); drive.timer = setInterval(sendDrive, DRIVE_EVERY_MS); }
+    else if (!drivePressed() && drive.timer) { clearInterval(drive.timer); drive.timer = 0; sendDrive(true); }
+    renderDrive(); renderHeadline();
+  }
+  function releaseDrive() { if (!drivePressed()) return; drive.keys.clear(); drive.stick = undefined; for (const reset of drive.resets) reset(); driveChanged(); }
+  function driveKey(node) {
+    const key = node.dataset.kind + node.dataset.dir; let pointer;
+    node.addEventListener('pointerdown', e => { e.preventDefault(); if (pointer !== undefined || node.disabled) return; pointer = e.pointerId; try { node.setPointerCapture(pointer); } catch (x) { /* the press still counts */ } drive.keys.add(key); driveChanged(); });
+    const up = e => { if (e.pointerId !== pointer) return; pointer = undefined; drive.keys.delete(key); driveChanged(); };
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(name, up);
+    node.addEventListener('contextmenu', e => e.preventDefault());
+    drive.resets.push(() => { pointer = undefined; });
+  }
+  document.querySelectorAll('#drive-dock [data-kind]').forEach(driveKey);
+  const stick = $('stick');
+  // The drag is measured from where the thumb lands, so touching the pad never moves Axol.
+  // Screen up is forward (+vx) and screen left is left (+vy); full speed 30% of the pad's height from the start.
+  stick.addEventListener('pointerdown', e => { e.preventDefault(); if (drive.stick || stick.classList.contains('off')) return; try { stick.setPointerCapture(e.pointerId); } catch (x) { /* the press still counts */ } drive.stick = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, dy: 0, vx: 0, vy: 0 }; driveChanged(); });
+  stick.addEventListener('pointermove', e => {
+    const st = drive.stick; if (!st || e.pointerId !== st.id) return;
+    const reach = Math.min(stick.clientWidth, stick.clientHeight) * 0.3; let dx = e.clientX - st.x, dy = e.clientY - st.y; const length = Math.hypot(dx, dy);
+    if (length > reach) { dx *= reach / length; dy *= reach / length; }
+    const mag = Math.min(length / reach, 1); const out = mag < DRIVE_DEAD ? 0 : (mag - DRIVE_DEAD) / (1 - DRIVE_DEAD);
+    st.dx = dx; st.dy = dy; st.vx = mag ? -dy / reach * out / mag : 0; st.vy = mag ? -dx / reach * out / mag : 0;
+    renderDrive();
+  });
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) stick.addEventListener(name, e => { if (drive.stick && e.pointerId === drive.stick.id) { drive.stick = undefined; driveChanged(); } });
+  stick.addEventListener('contextmenu', e => e.preventDefault());
+  drive.resets.push(() => { drive.stick = undefined; });
+  window.addEventListener('blur', releaseDrive);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseDrive(); padRelease(); } });
+  function renderDrive() {
+    const st = drive.stick; $('knob').style.transform = st ? 'translate(' + st.dx.toFixed(1) + 'px,' + st.dy.toFixed(1) + 'px)' : '';
+    stick.classList.toggle('active', !!st);
+    for (const node of document.querySelectorAll('#drive-dock [data-kind]')) node.classList.toggle('on', drive.keys.has(node.dataset.kind + node.dataset.dir));
+  }
+  // What Axol has: no Jelly base means no drive pad or turning, no lift means no lift buttons. Until Axol says, everything shows.
+  function renderDriveDock() {
+    const f = s.feedback && s.feedback.values; const noBase = !!f && f.hasBase === false, noLift = !!f && f.hasLift === false;
+    $('lift-row').hidden = noLift; $('drive-row').hidden = noBase && noLift;
+    stick.classList.toggle('off', noBase); $('stick-off').hidden = !noBase;
+    for (const node of document.querySelectorAll('#drive-row .turn')) node.disabled = noBase;
+  }
+
+  /* ---------- Toasts for replies and notices that have no other home ---------- */
+  let toastTimer;
+  function toast(text) {
+    const node = $('toast'); setText(node, text);
+    // Above the dock, wherever it is.
+    node.style.bottom = Math.max(24, window.innerHeight - $('dock').getBoundingClientRect().top + 12) + 'px';
+    node.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { node.hidden = true; }, 2600);
+  }
+
+  /* ---------- Calibration and validation sheet ---------- */
+  // A drawn table seen from the operator's side: f is forward (into the page), r is right, u is up; 1 unit ≈ 1.4 mm.
+  const P = (f, r, u) => [160 + r + 0.55 * f, 160 - 0.42 * f - u];
+  const pt = (f, r, u) => P(f, r, u).map(n => n.toFixed(1)).join(' ');
+  const poly = corners => 'M' + corners.map(c => pt(...c)).join(' L') + ' Z';
+  const phoneShape = (f, r, u) => poly([[f + 40, r - 20, u], [f + 40, r + 20, u], [f - 40, r + 20, u], [f - 40, r - 20, u]]);
+  const screenShape = (f, r, u) => poly([[f + 31, r - 15, u], [f + 31, r + 15, u], [f - 33, r + 15, u], [f - 33, r - 15, u]]);
+  // A short speaker slot marks the top edge, the one that should point forward.
+  const slotShape = (f, r, u) => 'M' + pt(f + 36, r - 6, u) + ' L' + pt(f + 36, r + 6, u);
+  function arrow(from, to, color, label, labelAt) {
+    const [x1, y1] = P(...from), [x2, y2] = P(...to); const a = Math.atan2(y2 - y1, x2 - x1); const head = 10;
+    const wing = d => [x2 - head * Math.cos(a + d), y2 - head * Math.sin(a + d)].map(n => n.toFixed(1)).join(' ');
+    const [lx, ly] = labelAt ? P(...labelAt) : [x2 + 6, y2 - 4];
+    return `<path class="line" stroke="${color}" stroke-width="2.4" d="M${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)} M${wing(0.45)} L${x2.toFixed(1)} ${y2.toFixed(1)} L${wing(-0.45)}"/>` + (label ? `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="${color}">${label}</text>` : '');
+  }
+  const TARGET = { forward: [70, 0, 0], right: [0, 70, 0], up: [0, 0, 70] };
+  function scene(kind) {
+    const table = `<path class="line" stroke="#9aa1a6" stroke-width="1.4" d="${poly([[-70, -110, 0], [-70, 110, 0], [115, 110, 0], [115, -110, 0]])}"/>`;
+    let marks = '';
+    if (kind === 'flat') marks = arrow([40, 0, 0], [100, 0, 0], 'var(--red)', 'forward', [104, -6, 0]) + arrow([0, -20, 0], [0, -84, 0], 'var(--green)', 'left', [0, -124, 6]) + arrow([0, 0, 0], [0, 0, 84], 'var(--blue)', 'up', [0, 8, 86]);
+    else {
+      const target = TARGET[kind];
+      marks = `<path class="line" stroke="#6b6f73" stroke-width="1.4" stroke-dasharray="4 5" d="${phoneShape(...target)}"/>`;
+      if (kind === 'up') marks = `<path class="line" stroke="#cfd3d6" stroke-width="1.2" stroke-dasharray="2 4" d="${phoneShape(0, 0, 0)}"/>` + marks;
+      marks += arrow([0, 0, 0], kind === 'up' ? [0, 0, 56] : kind === 'right' ? [0, 52, 0] : [52, 0, 0], 'var(--blue)', kind, kind === 'up' ? [0, -54, 60] : kind === 'right' ? [-14, 76, 0] : [60, 26, 0]);
+    }
+    const note = kind === 'flat' ? 'top edge points forward, screen up' : '';
+    return `<svg class="ill" viewBox="0 0 340 230" role="img" aria-label="${kind}">
+      <defs><filter id="pencil"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="1" seed="3"/><feDisplacementMap in="SourceGraphic" scale="1.6"/></filter></defs>
+      <g filter="url(#pencil)">${table}</g>
+      <g id="live-phone"><path class="line" id="live-body" stroke="#2e3033" stroke-width="2" fill="#fff" d="${phoneShape(0, 0, 0)}"/><path id="live-screen" fill="#e9edf2" d="${screenShape(0, 0, 0)}"/><path class="line" id="live-slot" stroke="#2e3033" stroke-width="2" d="${slotShape(0, 0, 0)}"/></g>
+      <g filter="url(#pencil)">${marks}</g>
+      ${note ? `<text x="20" y="220" fill="#6b6f73" style="font-size:15px">${note}</text>` : ''}
+    </svg>`;
+  }
+  function placePhone(f, r, u) { const body = $('live-body'); if (!body) return; body.setAttribute('d', phoneShape(f, r, u)); $('live-screen').setAttribute('d', screenShape(f, r, u)); $('live-slot').setAttribute('d', slotShape(f, r, u)); }
+
+  function sheetMode() {
+    const cal = calibration();
+    if (cal.status === 'capturing') return 'capture';
+    if (cal.check && cal.check.step) return 'validate';
+    return s.sheet;
+  }
+  function openSheet(mode = 'intro') { s.sheet = mode; s.reply = undefined; renderSheet(true); }
+  function closeSheet() { s.sheet = undefined; s.reply = undefined; renderSheet(true); }
+  let sheetKey = '';
+  function renderSheet(force) {
+    const mode = sheetMode(); const sheet = $('sheet'); const cal = calibration();
+    // The gateway drives capture and validation, so a run started from the desktop opens the sheet here too.
+    if ((mode === 'capture' || mode === 'validate') && s.sheet !== mode) {
+      // A run started elsewhere waits until the operator lets go of the pad before covering the screen.
+      if (s.padHeld && !s.sheet) { $('sheet').hidden = true; return; }
+      s.sheet = mode;
+    }
+    $('app').inert = !!mode;
+    if (!mode) { sheet.hidden = true; sheet.replaceChildren(); sheetKey = ''; return; }
+    // The sheet covers the drive controls, so nothing stays pressed underneath it.
+    releaseDrive();
+    sheet.hidden = false;
+    const key = JSON.stringify([mode, cal.status, cal.step, cal.check, cal.reference && cal.reference.epoch, s.reply, control(ACTION.check) && 1, control(ACTION.origin) && 1, control(ACTION.clear) && 1]);
+    if (!force && key === sheetKey) { renderSheetLive(); return; }
+    sheetKey = key;
+    sheet.replaceChildren(...{ intro, capture, captured, validate, validated }[mode]());
+    renderSheetLive();
+  }
+  // The right side of the bar is left clear for the floating Stop button.
+  const top = (left, title, count, onLeft) => h('div', { class: 'sheet-top' }, h('button', { type: 'button', class: 'left', onclick: onLeft }, left), h('b', {}, title, count ? h('small', {}, count) : null), h('span'));
+  const svg = markup => { const box = h('div'); box.innerHTML = markup; return box.firstElementChild; };
+  const reply = () => s.reply ? h('p', { class: 'reply' + (s.reply.bad ? ' bad' : ''), role: 'status' }, s.reply.text) : null;
+
+  function intro() {
+    const cal = calibration(); const [summary, tone] = calibrationSummary();
+    const calibrated = cal.status === 'captured';
+    return [
+      top('Close', 'Calibration', '', closeSheet),
+      svg(scene('flat')),
+      h('div', { class: 'sheet-body' },
+        h('h2', { class: 'title' }, calibrated ? 'Calibrated' : 'Set which way is forward'),
+        h('p', { class: 'body' }, 'Stand behind Axol, facing the way it faces. Then make four short moves with the phone: flat, forward, right and up. It takes about a minute.'),
+        h('div', { class: 'frame-status' }, h('span', {}, 'Now using'), h('b', { class: tone }, summary === 'Not calibrated' ? 'The phone’s start position' : summary)),
+        reply()),
+      h('div', { class: 'sheet-foot' },
+        control(ACTION.start) && h('button', { type: 'button', class: 'cta', onclick: () => { s.reply = undefined; send(control(ACTION.start)); } }, calibrated ? 'Calibrate again' : 'Start calibration'),
+        calibrated && control(ACTION.check) && h('button', { type: 'button', class: 'cta quiet', onclick: () => { s.reply = undefined; send(control(ACTION.check)); } }, 'Validate calibration'),
+        h('div', { class: 'links' },
+          control(ACTION.origin) && h('button', { type: 'button', onclick: () => send(control(ACTION.origin)) }, 'Set origin here'),
+          calibrated && control(ACTION.clear) && h('button', { type: 'button', class: 'danger', onclick: () => send(control(ACTION.clear)) }, 'Reset calibration'))),
+    ];
+  }
+  function stepTrack(list, current, done) { return h('div', { class: 'track' }, list.map(name => { const state = done(name); return h('span', { class: name === current ? 'cur' : state || '' }, name === current ? h('em', {}, cap(name)) : cap(name) + (state === 'pass' ? ' ✓' : state === 'fail' ? ' ✗' : '')); })); }
+  function capture() {
+    const cal = calibration(); const step = cal.step || 'flat'; const index = STEPS.indexOf(step);
+    const copy = STEP_COPY[step];
+    return [
+      top('Cancel', 'Calibrate', (index + 1) + ' of 4', () => { send(control(ACTION.cancel)); closeSheet(); }),
+      stepTrack(STEPS, step, name => STEPS.indexOf(name) < index ? 'done' : ''),
+      svg(scene(step)),
+      h('div', { class: 'sheet-body' },
+        h('h2', { class: 'title' }, copy.title), h('p', { class: 'body' }, copy.body),
+        h('div', { class: 'meter', id: 'meter' }, h('div', { class: 'meter-top' }, h('span', { id: 'meter-label' }), h('span', {}, h('b', { id: 'meter-value' }), h('span', { id: 'meter-unit' }))), h('div', { class: 'meter-bar' }, h('i', { id: 'meter-fill' }), h('s', { id: 'meter-tick' })), h('p', { class: 'note', id: 'meter-note' })),
+        reply()),
+      h('div', { class: 'sheet-foot' }, h('button', { type: 'button', class: 'cta', id: 'cta', onclick: () => send(control(ACTION.capture), step) }, copy.cta)),
+    ];
+  }
+  function captured() {
+    return [
+      top('Close', 'Calibrate', '', closeSheet),
+      svg(scene('flat')),
+      h('div', { class: 'sheet-body' }, h('h2', { class: 'title' }, 'Calibrated'), h('p', { class: 'body' }, 'Forward, left and up now follow how you held the phone.'), reply()),
+      h('div', { class: 'sheet-foot' },
+        h('button', { type: 'button', class: 'cta', onclick: closeSheet }, 'Done'),
+        control(ACTION.check) && h('button', { type: 'button', class: 'cta quiet', onclick: () => { s.reply = undefined; send(control(ACTION.check)); } }, 'Validate calibration')),
+    ];
+  }
+  const resultState = move => { const r = (calibration().check || { results: [] }).results.find(x => x.move === move); return r ? (r.passed ? 'pass' : 'fail') : ''; };
+  function validate() {
+    const check = calibration().check; const move = check.step; const index = MOVES.indexOf(move);
+    return [
+      top('Cancel', 'Validate', (index + 1) + ' of 3', () => { send(control(ACTION.check), 'cancel'); closeSheet(); }),
+      stepTrack(MOVES, move, resultState),
+      svg(scene(move)),
+      h('div', { class: 'sheet-body' },
+        h('h2', { class: 'title' }, MOVE_COPY[move].title), h('p', { class: 'body' }, MOVE_COPY[move].body),
+        h('div', { class: 'axes', id: 'axes' }, [['x', 'forward', 'var(--red)'], ['y', 'left', 'var(--green)'], ['z', 'up', 'var(--blue)']].map(([axis, word, color]) =>
+          h('div', { class: 'axis', id: 'axis-' + axis }, h('span', {}, word), h('span', { class: 'bar' }, h('i', { id: 'axis-bar-' + axis, style: 'background:' + color })), h('b', { id: 'axis-val-' + axis })))),
+        h('p', { class: 'note', id: 'axes-note' }),
+        reply()),
+      h('div', { class: 'sheet-foot' }, h('button', { type: 'button', class: 'cta', id: 'cta', onclick: () => send(control(ACTION.check), move) }, 'Check ' + move)),
+    ];
+  }
+  function validated() {
+    const check = calibration().check || { results: [] }; const passed = check.passed;
+    const failed = check.results.filter(r => !r.passed);
+    return [
+      top('Close', 'Validate', '', closeSheet),
+      stepTrack(MOVES, undefined, resultState),
+      h('div', { class: 'sheet-body' },
+        h('h2', { class: 'title' + (passed ? ' ok' : ' bad') }, passed ? 'Validated ✓' : 'That didn’t line up'),
+        h('p', { class: 'body' }, passed ? 'Forward, right and up each moved along the axis they should.' : failed.map(r => cap(r.move) + ' went ' + AXIS_WORDS[r.dominant] + '.').join(' ') + ' Calibrate again and keep each move straight.'),
+        h('ul', { class: 'results' }, check.results.map(r => { const d = r.displacement; const along = Math.round(Math.hypot(d.x, d.y, d.z) * 1000); return h('li', {}, h('span', {}, cap(r.move)), h('span', { class: r.passed ? 'ok' : 'bad' }, AXIS_WORDS[r.dominant] + ' (' + r.dominant.replace('-', '−') + '), ' + along + ' mm ' + (r.passed ? '✓' : '✗'))); }))),
+      h('div', { class: 'sheet-foot' },
+        h('button', { type: 'button', class: 'cta', onclick: passed ? closeSheet : () => { s.reply = undefined; send(control(ACTION.start)); } }, passed ? 'Done' : 'Calibrate again'),
+        !passed && h('button', { type: 'button', class: 'cta quiet', onclick: closeSheet }, 'Not now')),
+    ];
+  }
+
+  // Live parts of the sheet, updated with every pose.
+  function renderSheetLive() {
+    const mode = sheetMode(); const p = s.pose; const cal = calibration();
+    const tracking = s.tracking ? s.tracking.state : (p ? p.trackingState : 'initializing');
+    const usable = canCalibrate(tracking, s.tracking ? s.tracking.source : p && p.source);
+    const cta = $('cta');
+    if (cta) cta.disabled = !usable;
+    if (mode === 'capture' && p) {
+      const step = cal.step || 'flat'; const a = cal.anchor; const v = p.position;
+      let label = 'Moved', value = 0, unit = ' mm of ' + TARGET_MM, ready = false, note = '', progress = 0;
+      if (step === 'flat') {
+        const screen = screenDirection(p); const tilt = Math.round(Math.acos(clamp(screen.z, -1, 1)) * 180 / Math.PI);
+        label = 'Tilt'; value = tilt; unit = '°'; ready = tilt <= FLAT_DEG; progress = 1 - clamp(tilt / 90, 0, 1);
+        note = ready ? 'Flat enough. Capture when ready.' : 'Hold it flatter, screen up.';
+        placePhone(0, 0, 0);
+      } else if (a) {
+        const d = { x: v.x - a.x, y: v.y - a.y, z: v.z - a.z };
+        if (step === 'up') { value = mm(d.z); placePhone(0, 0, clamp(value * 0.7, 0, 110)); }
+        else if (step === 'right' && s.forwardAt) {
+          // Right is measured across the forward direction just captured, so leftover forward travel does not count.
+          const f = { x: s.forwardAt.x - a.x, y: s.forwardAt.y - a.y }; const len = Math.hypot(f.x, f.y) || 1; const fx = f.x / len, fy = f.y / len;
+          value = mm(d.x * fy - d.y * fx); const along = mm(d.x * fx + d.y * fy);
+          if (Math.abs(along) > 40) note = 'Go back to the flat spot first.';
+          placePhone(clamp(along * 0.7, -60, 110), clamp(value * 0.7, -90, 110), 0);
+        } else { value = mm(Math.hypot(d.x, d.y)); placePhone(step === 'forward' ? clamp(value * 0.7, 0, 110) : 0, step === 'right' ? clamp(value * 0.7, 0, 110) : 0, 0); }
+        ready = value >= MIN_MM; progress = clamp(value / TARGET_MM, 0, 1);
+        if (!note) note = ready ? 'That’s enough. Capture when steady.' : MIN_MM + ' mm is enough to capture.';
+      }
+      if (!usable) note = 'Waiting for tracking.';
+      // A blind camera barely registers the move, so say why the meter is stuck.
+      else if (tracking === 'limited' && step !== 'flat' && !ready) note = 'Tracking is limited. Hold the phone up so the camera sees the room.';
+      setText($('meter-label'), label); setText($('meter-value'), String(value)); setText($('meter-unit'), unit);
+      $('meter-fill').style.width = (progress * 100).toFixed(1) + '%';
+      const tick = $('meter-tick'); tick.hidden = step === 'flat'; tick.style.left = (MIN_MM / TARGET_MM * 100) + '%';
+      $('meter').className = 'meter' + (ready ? ' ready' : ''); setText($('meter-note'), note);
+    }
+    if (mode === 'validate' && p) {
+      const move = cal.check.step; const v = p.position; const lead = dominant(v); const [expectAxis, expectSign] = EXPECTED[move];
+      for (const axis of ['x', 'y', 'z']) {
+        const n = mm(v[axis]); const fraction = clamp(n / 150, -1, 1) * 50; const bar = $('axis-bar-' + axis);
+        bar.style.left = (fraction < 0 ? 50 + fraction : 50) + '%'; bar.style.width = Math.abs(fraction) + '%';
+        setText($('axis-val-' + axis), signed(n)); $('axis-' + axis).className = 'axis' + (lead[1].toLowerCase() === axis ? ' lead' : '');
+      }
+      const travel = Math.round(Math.hypot(v.x, v.y, v.z) * 1000);
+      const good = lead === (expectSign > 0 ? '+' : '-') + expectAxis.toUpperCase();
+      setText($('axes-note'), !usable ? 'Waiting for tracking.' : travel < MIN_MM ? 'Start from the flat spot.' : good ? 'Moving ' + AXIS_WORDS[lead] + ', ' + travel + ' mm.' : travel + ' mm ' + AXIS_WORDS[lead] + ' of the flat spot. Go back to it first.');
+      // The drawn phone follows the calibrated position, so a wrong frame shows up as the phone sliding the wrong way.
+      placePhone(clamp(v.x * 700, -60, 110), clamp(-v.y * 700, -100, 110), clamp(v.z * 700, -10, 110));
+    }
+  }
+
+  /* ---------- Bridge wiring ---------- */
+  const boot = () => {
+    const M = window.Marionette; if (!M || boot.done) return; boot.done = true;
+    renderMode();
+    M.on('connection', c => {
+      s.connection = c;
+      // Without the gateway nothing is held: drive and grip need a fresh press once it is back.
+      if (c.state !== 'connected') { releaseDrive(); clearTimeout(grip.timer); grip.timer = 0; }
+      renderStrip(); renderHeadline(); renderRows(); renderHolds();
+    });
+    M.on('tracking', t => { s.tracking = t; renderStrip(); renderHeadline(); if (s.sheet) renderSheetLive(); });
+    M.on('camera_frame', m => {
+      const view = cameraView(); if (!view || view.streams.indexOf(m.cameraId) < 0) return;
+      const pane = $('cam').querySelector('[data-stream="' + CSS.escape(m.cameraId) + '"]'); if (!pane) { renderCamera(); return; }
+      pane.querySelector('img').src = m.dataUrl; const fresh = Date.now() - (frameAt[m.cameraId] || 0) >= 2000; frameAt[m.cameraId] = Date.now(); if (fresh) renderCamera();
+    });
+    let posePending = false;
+    M.on('pose', p => { s.pose = p; if (posePending || !s.sheet) return; posePending = true; requestAnimationFrame(() => { posePending = false; renderSheetLive(); }); });
+    M.on('config', c => {
+      const before = s.config ? s.config.calibration : undefined; const wasStopped = stopOn(); s.config = c; const cal = c.calibration;
+      // Turning Stop on lets go of the drive controls, so resetting it never starts the base again by itself.
+      if (!wasStopped && stopOn()) releaseDrive();
+      for (const id of pressed.keys()) { const x = byId(id); if (x && x.held) pressed.set(id, true); }
+      // Remember where the phone was when forward was captured, to measure the right step across it.
+      if (before && before.step === 'forward' && cal.step === 'right' && s.pose) s.forwardAt = s.pose.position;
+      if (cal.status !== 'capturing') s.forwardAt = undefined;
+      if (before && before.status === 'capturing' && cal.status === 'captured' && s.sheet === 'capture' && cal.reference && (!before.reference || before.reference.epoch !== cal.reference.epoch)) s.sheet = 'captured';
+      else if (before && before.status === 'capturing' && cal.status !== 'capturing' && s.sheet === 'capture') s.sheet = undefined;
+      if (before && before.check && before.check.step && cal.check && cal.check.passed !== undefined) s.sheet = 'validated';
+      else if (before && before.check && before.check.step && !(cal.check && cal.check.step) && s.sheet === 'validate') s.sheet = undefined;
+      if (before && (before.step !== cal.step || (before.check && before.check.step) !== (cal.check && cal.check.step))) s.reply = undefined;
+      renderStrip(); renderArms(); renderHeadline(); renderRows(); renderSettings(); renderDock(); renderCamera(); renderViews(); renderSheet();
+    });
+    M.on('status', m => {
+      // Robot state from the consumer on Axol: shown in the headline and tags, never as a toast.
+      if (m.controlId === FEEDBACK) { onFeedback(m.values || {}); return; }
+      if (m.controlId === NOTICE) { if (m.message) toast(m.message); return; }
+      const c = s.config; const from = m.controlId && c && c.controls.find(x => x.id === m.controlId);
+      // Every gateway reply says whether it did what was asked; a refusal is shown where the operator is looking.
+      const refused = !!(m.values && m.values.accepted === false);
+      if (from && (from.action === ACTION.capture || from.action === ACTION.check)) { s.reply = refused ? { text: m.message, bad: true } : undefined; renderSheet(); return; }
+      if (from && (from.action === ACTION.start || from.action === ACTION.origin || from.action === ACTION.clear || from.action === ACTION.cancel)) { if (s.sheet === 'intro') { s.reply = { text: m.message, bad: refused }; renderSheet(); } else if (!s.sheet) toast(m.message); return; }
+      if (!m.message || m.message === 'Connected to Marionette gateway') return;
+      toast(m.message);
+    });
+  };
+  if (window.Marionette) boot(); else window.addEventListener('marionette-ready', boot, { once: true });
+})();
+</script>
+</body>
+</html>

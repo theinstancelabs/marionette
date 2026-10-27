@@ -78,7 +78,7 @@ Connect to `ws://<gateway>:8787/ws` and send:
 {"type":"hello","version":1,"role":"console"}
 ```
 
-Add `"cameras": false` if you don't want camera frames. A console only listens; any action it sends is refused. The authoritative types and validators live in `packages/protocol/src/index.ts`. Everything below is JSON.
+Add `"cameras": false` if you don't want camera frames. A console only listens, apart from `status` feedback to the phones (see Feedback to phones below). Any action it sends is refused. The authoritative types and validators live in `packages/protocol/src/index.ts`. Everything below is JSON.
 
 **Gateway config** (no `phone` field): sent on connect and whenever a phone joins or leaves.
 
@@ -200,13 +200,20 @@ Build a single node that owns all decisions:
    - Ramp `vx`, `vy` and `wz` through your acceleration limits, so letting go decelerates rather than stops dead.
    - If both phones push their sticks, pick a policy (first to push drives, or only the phone assigned to the base). Marionette won't pick.
 6. **Gripper.** `gripper.hold` closes the gripper while held, or toggles it on press; choose and say so on the screen.
-7. **Feedback.** The phones show tracking, Stop and holds by themselves. To show robot state on the phones (for example "arm at joint limit"), put it in the camera stream overlay for now. There is no consumer-to-phone message channel yet; add one to the gateway if needed.
+7. **Feedback to phones.** The phones show tracking, Stop and holds by themselves. To show robot state on a phone (for example "At reach limit"), send a `status` from your consumer's console connection:
+   ```json
+   {"type":"status","version":1,"sessionId":"robot","phoneId":"phone-1","controlId":"robot.feedback","message":"","values":{"state":"blocked","reason":"Calibrate this phone first"}}
+   ```
+   - With `phoneId`, the gateway relays it to that phone and any `/screen` mirror of it. Without `phoneId`, it goes to every phone and mirror. Other consoles never get it, and a `phoneId` the gateway doesn't know is dropped.
+   - `values` holds strings, numbers and booleans only. The gateway passes on `sessionId`, `controlId`, `message`, `values` and `phoneId`, and nothing else. It doesn't interpret any of them.
+   - The phone screen gets it with `Marionette.on('status', …)`. Use your own `controlId`s so the screen can tell your feedback from the gateway's replies. `consumers/axol/axol.html` uses `axol.feedback` for robot state (5 Hz) and `axol.notice` for a toast.
+   - This works with the current iPhone app. No rebuild is needed.
 
 ## Customizing the phone screen for your robot
 
 The phone screen is an HTML page served by the gateway, and the app has no native controls. To give the operator robot-specific controls:
 
-1. Copy `apps/backend/src/sample-controls.html` to `config/humanoid.html` and edit it. It uses the `window.Marionette` bridge, documented in the README.
+1. Copy `apps/backend/src/sample-controls.html` to `config/humanoid.html` and edit it. It uses the `window.Marionette` bridge, documented in the README. For a complete robot screen (arm, gripper, base, lift, cameras and robot feedback), see `consumers/axol/axol.html` and its README.
 2. Declare your controls in the page, so they get per-phone values and hold liveness:
    ```html
    <script type="application/json" id="marionette-config">
