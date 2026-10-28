@@ -88,7 +88,7 @@ from marionette import PairingError, fetch_pairing
 try:
     pairing = fetch_pairing("localhost:8787")      # blocking; in asyncio, await asyncio.to_thread(fetch_pairing, …)
 except PairingError as exc:
-    print(exc)                                     # a sentence for the operator; exc.status is 401, 404 or None
+    print(exc)                                     # a sentence for the operator; exc.status is 401, 404, another HTTP status, or None
 else:
     print(pairing.code, pairing.url)               # K7Q2-M9XD, marionette://pair?…
     svg = pairing.qr_svg                           # the QR code; on a web page, show it as an image
@@ -313,8 +313,10 @@ gateway as a child this way; without it the gateway ignores its stdin.
 ## Testing tools
 
 ```python
+from marionette import PhoneTracker, RobotLink
 from marionette.testing import Gateway, SimPhone, msg
 
+tracker = PhoneTracker()
 tracker.apply(msg.config(["phone-1"], "phone-1", msg.default_controls(), "captured"))
 tracker.apply(msg.input("phone-1", "teleop.deadman", True))
 tracker.apply(msg.let_go("phone-1", "base.drive", {"x": 0, "y": 0}))   # the gateway ending a drag
@@ -350,8 +352,8 @@ with Gateway() as gateway, SimPhone(gateway) as phone:
 as the way to check the whole system in simulation:
 
 ```sh
-marionette-gateway --no-mdns                    # or npm run dev:backend
-python examples/sim_robot.py                    # --gateway <address or pairing link> --token <code>
+sdk/python/.venv/bin/marionette-gateway --no-mdns                          # or npm run dev:backend
+sdk/python/.venv/bin/python sdk/python/examples/sim_robot.py   # --gateway <address or pairing link> --token <code>
 ```
 
 It connects as `sim-arm` ("Sim arm"), sends its own screen (`examples/sim_robot.html`, on the screen kit: a

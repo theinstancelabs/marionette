@@ -19,11 +19,11 @@ Put these two tags in the screen's `<head>`, before your own style and script:
 <script src="marionette-kit.js"></script>
 ```
 
-The gateway replaces both tags with the kit itself before it sends the screen, so the phone never fetches anything. Write them exactly like this. To look at a screen with a gateway that doesn't inline the kit yet, inline it yourself:
+The gateway replaces both tags with the kit itself before it sends the screen, so the phone never fetches anything. Write them exactly like this. To look at a screen in a desktop browser, point the gateway at it; it inlines the kit and sends the screen again whenever you save it:
 
 ```sh
-node packages/kit/scripts/inline.mjs my-screen.html > /tmp/my-screen.html
-MARIONETTE_HTML_FILE=/tmp/my-screen.html npm run dev:backend      # then open http://localhost:8787/screen
+MARIONETTE_HTML_FILE=my-screen.html npm run dev:backend           # then open http://localhost:8787/screen
+node packages/kit/scripts/inline.mjs my-screen.html > inlined.html   # the same inlined document, for anything else
 ```
 
 The kit works in iOS 16.4+ WKWebView and in desktop Chrome and Safari. It waits for the bridge (`marionette-ready`) by itself, so parts can be made as soon as your script runs. Your own CSS comes after the kit's, so it overrides anything in it. Kit parts use `mk-` class names and `data-state` attributes; the color tokens (`--paper`, `--ink`, `--ink2`, `--blue`, `--red`, `--green`, …) are plain CSS variables you can use too.
@@ -33,7 +33,7 @@ The kit works in iOS 16.4+ WKWebView and in desktop Chrome and Safari. It waits 
 ```js
 const K = window.MarionetteKit;
 K.on('config', config => render(config));   // like Marionette.on, but after the kit has taken the event in
-K.on('touch', () => renderHeadline());      // a hold or drag on this page started, ended or changed state
+K.on('touch', () => renderHeadline());      // a hold or drag on this page started, ended or was cut; the gateway's view of it comes as config
 K.latest('tracking');                       // the last tracking event, or undefined
 K.control('teleop.deadman');                // the first control with this action, in the latest config
 K.byId('grip');                             // a control by id
@@ -98,7 +98,7 @@ pad.addEventListener('pointerup', () => { pad.classList.remove('sliding'); grip.
 
 ### Letting go
 
-Every hold, slider, stick and drag lets go when the page loses focus or is hidden, when a sheet opens and when this phone's Stop turns on. Pass `letGoOnLeave: false` to a part to keep it out of that.
+Every hold, slider, stick and drag lets go when the page loses focus or is hidden, when a sheet opens and when this phone's Stop turns on (with `K.stop()` on the page: the Stop part does the letting go). Pass `letGoOnLeave: false` to a part to keep it out of that.
 
 A slider, stick or drag that is let go of mid-gesture sends its final value (for a stick, rest), and the rest of that gesture is ignored: it reads `dropped` until the finger lifts (for `drag()`, until `end()`), so a finger still sliding after Stop turns on, or behind a sheet, never starts it again. A slider then shows the gateway's value again.
 
@@ -122,7 +122,7 @@ stop.isOn();
 
 This is the floating round Stop button, above the page and every sheet. It is hidden when the layout has no `safety.estop` control. Pressing it turns a toggle Stop on (a plain Stop button just sends a press). Stop is this phone's own signal, which the consumer reads; Marionette itself stops nothing. While it is on, the button looks pressed in and the banner shows. An empty `banner` element gets the default banner ("Stop is on", "It stays on for this phone until you reset it.", **Reset**); a banner with your own content needs a `[data-stop-reset]` button. Pass `button` to use your own button, `onChange(on)` to follow it, and `letGo: false` to keep holds when Stop turns on.
 
-A sheet never makes a Stop button inert, wherever it is on the page, but an open sheet is drawn over the page. A button in the page's flow stays under it unless it is positioned with a `z-index` above the sheet's, which any ancestor with its own stacking context (a `transform`, an `opacity`, a `z-index`) undoes. So give your own Stop `position: fixed` and a `z-index` above the sheet's (`.mk-sheet` is 10, the kit's Stop 20), or put it in the sheet; otherwise use the kit's floating Stop. When a sheet opens (and again once it has slid in), the kit checks whether a tap in the middle of your button reaches it. If not, it shows its own floating Stop as well, wired to the same Stop, until every sheet is closed, and says so once in the console. `--mk-stop-right` moves the button (the default screen moves it into its desktop column).
+A sheet never makes a Stop button made with `K.stop()` inert (the kit's, or your own passed as `button`), nor anything with the `mk-stop` class, wherever it is on the page. Any other button, your own Stop included, is covered like the rest of the page. An open sheet is drawn over the page. A button in the page's flow stays under it unless it is positioned with a `z-index` above the sheet's, which any ancestor with its own stacking context (a `transform`, an `opacity`, a `z-index`) undoes. So give your own Stop `position: fixed` and a `z-index` above the sheet's (`.mk-sheet` is 10, the kit's Stop 20), or put it in the sheet; otherwise use the kit's floating Stop. When a sheet opens (and again once it has slid in), the kit checks whether a tap in the middle of your button reaches it. If not, it shows its own floating Stop as well, wired to the same Stop, until every sheet is closed, and says so once in the console. `--mk-stop-right` moves the button (the default screen moves it into its desktop column).
 
 ## Status strip
 
@@ -195,7 +195,7 @@ more.show([K.sheetTop('Close', 'More', '', () => more.hide()), body]);
 more.hide();
 ```
 
-A full-screen panel, at most 430 px wide. Only one sheet is open at a time. Opening one lets go of every hold and drag and makes the page behind it inert: everything in `<body>` (or the elements you pass as `covers`) except Stop buttons, sheets, toasts and the color line. Where one of those sits inside another element, that element stays as it is and its other children are covered instead, so a Stop button in your header and a sheet element anywhere on the page stay usable. `sheetTop(left, title, count, onLeft)` is the top bar, with its right side clear for Stop.
+A full-screen panel, at most 430 px wide (on a phone on its side, up to 860 px, in two columns). Only one sheet is open at a time. Opening one lets go of every hold and drag and makes the page behind it inert: everything in `<body>` (or the elements you pass as `covers`) except Stop buttons made with `K.stop()` (or with the `mk-stop` class), sheets, toasts and the color line. Where one of those sits inside another element, that element stays as it is and its other children are covered instead, so a Stop button in your header and a sheet element anywhere on the page stay usable. `sheetTop(left, title, count, onLeft)` is the top bar, with its right side clear for Stop.
 
 ## Calibration
 

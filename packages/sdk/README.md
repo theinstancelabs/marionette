@@ -1,6 +1,6 @@
 # @marionette/sdk
 
-Parts for TypeScript robots (Node) and consoles (Node or a browser) that use Marionette phones. It is a set of parts, not a framework: your robot runs its own control loop and calls these. It has the same parts and semantics as the Python SDK (`sdk/python`), minus video publishing and the gateway runner.
+Parts for TypeScript robots (Node) and consoles (Node or a browser) that use Marionette phones. It is a set of parts, not a framework: your robot runs its own control loop and calls these. It has the same parts and semantics as the Python SDK (`sdk/python`), minus video publishing and the gateway runner. A few shapes differ: `offsetMs` here is this computer's clock minus the gateway's, the opposite sign of Python's `offset_ms`, and `PressTracker.pressed()` is a boolean (in Python, a count).
 
 | Import | What | Runs in |
 |---|---|---|
@@ -8,7 +8,7 @@ Parts for TypeScript robots (Node) and consoles (Node or a browser) that use Mar
 | `@marionette/sdk/node` | the same, plus `watchScreen()` | Node |
 | `@marionette/sdk/testing` | `startGateway()`, `SimPhone`, `messages` | Node |
 
-It is a private workspace package (`npm install` at the repository root links it). In Node it uses the `ws` package; in a browser, the global `WebSocket`. Times are milliseconds throughout: wall-clock ms for stamps, and the tracker's clock (monotonic ms by default) for timeouts.
+It is a workspace package, not published to npm (`npm install` at the repository root links it). It is TypeScript source with no build step: run it with `tsx` (as `tools/*.mts` do) or through a bundler; plain `node` can't load it. In Node it uses the `ws` package; in a browser, the global `WebSocket`. Times are milliseconds throughout (wall-clock ms for stamps, and the tracker's clock, monotonic ms by default, for timeouts), except `pose.stamp`, the phone's own clock in seconds.
 
 ## GatewayClient
 
@@ -39,7 +39,7 @@ A robot or page can show its gateway's QR code, so a phone pairs by scanning it:
 ```ts
 import { PairingError, fetchPairing } from '@marionette/sdk';
 
-const pairing = await fetchPairing('localhost:8787');  // rejects with a PairingError: a sentence, and status 401, 404 or undefined
+const pairing = await fetchPairing('localhost:8787');  // rejects with a PairingError: a sentence, and status 401, 404, another HTTP status, or undefined when no host answered
 pairing.code;   // 'K7Q2-M9XD' (absent when pairing is off)
 pairing.qrSvg;  // the QR code of pairing.url, the pairing link; on a page, show it as an image
 ```
